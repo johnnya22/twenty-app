@@ -1134,3 +1134,14 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
   .simulator-score-row > span:last-child { width: 100%; }
   .simulator-score-row input { flex: 1; width: 100%; }
 }
+
+/* Git force controls */
+.sync-force-actions { display: inline-flex; align-items: center; gap: 6px; }
+.sync-icon-button { width: 36px; min-width: 36px; padding: 0; justify-content: center; }
+.sync-icon-button svg { width: 17px; height: 17px; }
+.force-sync-warning { text-align: left; }
+.force-sync-warning .metric-icon { margin-bottom: 14px; }
+@media (max-width: 620px) {
+  .sync-force-actions { margin-left: auto; }
+  .sync-icon-button { width: 40px; min-width: 40px; min-height: 40px; }
+}

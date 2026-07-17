@@ -226,6 +226,10 @@ export class SyncCoordinator extends DurableObject {
       const mutation = await request.json();
       return this.serial(() => this.applyMutation(mutation));
     }
+    if (request.method === "POST" && url.pathname.endsWith("/force-push")) {
+      const payload = await request.json();
+      return this.serial(() => this.forcePush(payload));
+    }
     return jsonResponse({ error: "Rota não encontrada." }, 404);
   }
 
@@ -241,6 +245,61 @@ export class SyncCoordinator extends DurableObject {
       ? current.state.meta.syncConflicts.slice(-20)
       : [];
     return jsonResponse({ exists: current.exists, state: current.state, sha: current.sha, conflicts });
+  }
+
+  async forcePush(payload) {
+    if (!payload || !payload.operationId || !payload.deviceId || !payload.state || typeof payload.state !== "object") {
+      return jsonResponse({ error: "Force push inválido." }, 400);
+    }
+    const cacheKey = "force-push:" + payload.operationId;
+    const cached = await this.ctx.storage.get(cacheKey);
+    if (cached) return jsonResponse(cached);
+
+    let attempt = 0;
+    while (attempt < 4) {
+      attempt += 1;
+      const current = await readGitHubState(this.env);
+      const remoteRaw = current.exists ? current.state : {};
+      const forced = cleanForMerge(payload.state);
+      const now = new Date().toISOString();
+      const previousConflicts = remoteRaw && remoteRaw.meta && Array.isArray(remoteRaw.meta.syncConflicts)
+        ? remoteRaw.meta.syncConflicts
+        : [];
+      forced.meta = Object.assign({}, forced.meta || {}, {
+        revision: Number(remoteRaw && remoteRaw.meta && remoteRaw.meta.revision || 0) + 1,
+        updatedAt: now,
+        source: "git-force-push",
+        sync: {
+          lastMutationId: payload.operationId,
+          lastDeviceId: payload.deviceId,
+          lastDeviceName: payload.deviceName || "Dispositivo",
+          lastCommitAt: now,
+          forced: "push"
+        },
+        syncConflicts: previousConflicts.slice(-50)
+      });
+      try {
+        const written = await writeGitHubState(
+          this.env,
+          forced,
+          current.sha,
+          `Twenty: force push · ${payload.deviceName || "dispositivo"}`
+        );
+        const finalPayload = {
+          ok: true,
+          forced: "push",
+          state: forced,
+          sha: written.sha,
+          commitSha: written.commitSha,
+          conflicts: []
+        };
+        await this.ctx.storage.put(cacheKey, finalPayload);
+        return jsonResponse(finalPayload);
+      } catch (error) {
+        if (error.status !== 409 || attempt >= 4) throw error;
+      }
+    }
+    return jsonResponse({ error: "Não foi possível concluir o force push após várias tentativas." }, 409);
   }
 
   async applyMutation(mutation) {
@@ -341,8 +400,15 @@ export default {
     if (!env.GITHUB_TOKEN || !env.GITHUB_OWNER || !env.GITHUB_REPO) {
       return withCors(jsonResponse({ error: "Worker ainda não configurado." }, 503), origin);
     }
-    const stub = env.SYNC_COORDINATOR.getByName("twenty-study-os");
-    const response = await stub.fetch(request);
-    return withCors(response, origin);
+    try {
+      const stub = env.SYNC_COORDINATOR.getByName("twenty-study-os");
+      const response = await stub.fetch(request);
+      return withCors(response, origin);
+    } catch (error) {
+      console.error("TWENTY_SYNC_ERROR", error);
+      const message = error instanceof Error ? error.message : String(error || "Erro interno desconhecido.");
+      const status = error && Number.isInteger(error.status) ? error.status : 500;
+      return withCors(jsonResponse({ error: message, type: "worker-sync-error" }, status), origin);
+    }
   }
 };

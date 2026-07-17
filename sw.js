@@ -1,14 +1,14 @@
 "use strict";
 
-var CACHE = "twenty-study-os-v12-mobile-git-onboarding";
+var CACHE = "twenty-study-os-v13-git-force-controls";
 var APP_SHELL = [
   "./",
   "./index.html",
-  "./styles.css?v=12-mobile-git-onboarding",
-  "./sync.js?v=12-mobile-git-onboarding",
-  "./db.js?v=12-mobile-git-onboarding",
-  "./app.js?v=12-mobile-git-onboarding",
-  "./lucide.min.js?v=12-mobile-git-onboarding",
+  "./styles.css?v=13-git-force-controls",
+  "./sync.js?v=13-git-force-controls",
+  "./db.js?v=13-git-force-controls",
+  "./app.js?v=13-git-force-controls",
+  "./lucide.min.js?v=13-git-force-controls",
   "./manifest.webmanifest",
   "./icon.svg",
   "./icon-192.png",

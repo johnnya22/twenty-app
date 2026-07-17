@@ -2072,7 +2072,8 @@
     var syncTitle = !syncInfo.configured ? "Por configurar" : syncInfo.state === "syncing" ? "A sincronizar…" : syncInfo.state === "synced" ? "Sincronizado" : syncInfo.state === "offline" ? "Sem Internet" : syncInfo.state === "error" ? "Erro de sincronização" : "Pronto";
     var syncBadgeClass = syncInfo.state === "error" || syncInfo.state === "offline" ? "badge-yellow" : syncInfo.state === "synced" ? "badge-mint" : "badge-violet";
     var syncDetail = !syncInfo.configured ? "Liga a app ao Worker que cria os commits no teu repositório privado." : syncInfo.pending ? syncInfo.pending + " alteração(ões) à espera de push." : syncInfo.lastError || "As alterações são fundidas entre dispositivos antes do commit.";
-    var syncCard = '<article class="card settings-card card-violet"><div class="card-title-row"><div><p class="card-label">Git como base de dados</p><h3>' + esc(syncTitle) + '</h3><p class="card-subtitle">' + esc(syncDetail) + '</p></div><span class="metric-icon"><i data-lucide="git-commit-horizontal"></i></span></div><div class="settings-row"><div><strong>' + (syncInfo.pending ? syncInfo.pending + " por enviar" : "PC + telemóvel") + '</strong><small>Fusão por campos · fila offline · histórico em commits.</small></div><span class="badge ' + syncBadgeClass + '">' + (syncInfo.conflicts ? syncInfo.conflicts + " conflito(s)" : "Protegido") + '</span></div><div class="list-actions"><button class="button button-small" type="button" data-action="configure-git-sync"><i data-lucide="settings-2"></i>Configurar</button><button class="button button-dark button-small" type="button" data-action="sync-now"><i data-lucide="refresh-cw"></i>Sincronizar agora</button>' + (syncInfo.configured ? '<button class="button button-small" type="button" data-action="disable-git-sync"><i data-lucide="pause"></i>Pausar</button>' : '') + '</div></article>';
+    var forceControls = syncInfo.configured ? '<span class="sync-force-actions" role="group" aria-label="Sincronização forçada"><button class="button button-small sync-icon-button" type="button" data-action="force-git-pull" aria-label="Forçar pull" title="Forçar pull"><i data-lucide="arrow-down-to-line"></i></button><button class="button button-dark button-small sync-icon-button" type="button" data-action="force-git-push" aria-label="Forçar push" title="Forçar push"><i data-lucide="arrow-up-to-line"></i></button></span>' : '';
+    var syncCard = '<article class="card settings-card card-violet"><div class="card-title-row"><div><p class="card-label">Git como base de dados</p><h3>' + esc(syncTitle) + '</h3><p class="card-subtitle">' + esc(syncDetail) + '</p></div><span class="metric-icon"><i data-lucide="git-commit-horizontal"></i></span></div><div class="settings-row"><div><strong>' + (syncInfo.pending ? syncInfo.pending + " por enviar" : "PC + telemóvel") + '</strong><small>Fusão por campos · fila offline · histórico em commits.</small></div><span class="badge ' + syncBadgeClass + '">' + (syncInfo.conflicts ? syncInfo.conflicts + " conflito(s)" : "Protegido") + '</span></div><div class="list-actions"><button class="button button-small" type="button" data-action="configure-git-sync"><i data-lucide="settings-2"></i>Configurar</button><button class="button button-dark button-small" type="button" data-action="sync-now"><i data-lucide="refresh-cw"></i>Sincronizar agora</button>' + forceControls + (syncInfo.configured ? '<button class="button button-small" type="button" data-action="disable-git-sync"><i data-lucide="pause"></i>Pausar</button>' : '') + '</div></article>';
     return '<div class="page-head"><div><h2>Definições</h2><p>Perfil, semestres, conteúdo e dados locais.</p></div><div class="page-actions"><button class="button" type="button" data-action="show-tutorial"><i data-lucide="map"></i>Visita guiada</button><button class="button button-dark" type="button" data-action="quick-add"><i data-lucide="plus"></i>Adicionar conteúdo</button></div></div><div class="settings-grid">' + syncCard + '<article class="card settings-card"><div class="card-title-row"><div><p class="card-label">Perfil académico</p><h3>' + esc(state.profile.name || "Estudante") + '</h3><p class="card-subtitle">' + esc(state.profile.degree || "Curso por configurar") + (state.profile.institution ? " · " + esc(state.profile.institution) : "") + '</p></div><span class="metric-icon"><i data-lucide="user-round"></i></span></div><div class="settings-row"><div><strong>Meta</strong><small>Objetivo utilizado nos indicadores de desempenho.</small></div><span class="badge badge-yellow">' + (Number(state.profile.targetGrade) || 20) + '/20</span></div><button class="button button-small" type="button" data-action="edit-profile"><i data-lucide="pencil"></i>Editar perfil</button></article><article class="card settings-card card-violet"><div class="card-title-row"><div><p class="card-label">Semestre ativo</p><h3>' + esc(semester ? semester.name : "Nenhum") + '</h3><p class="card-subtitle">' + esc(semester ? semester.academicYear : "Cria o próximo semestre") + '</p></div><span class="metric-icon"><i data-lucide="calendar-range"></i></span></div><div class="settings-row"><div><strong>' + activeCourses().length + ' cadeiras</strong><small>' + archived + ' semestre(s) no arquivo.</small></div><span class="badge badge-dark">' + activeCourses().reduce(function (sum, course) { return sum + (Number(course.ects) || 0); }, 0) + ' ECTS</span></div><div class="list-actions"><button class="button button-small" type="button" data-action="new-semester"><i data-lucide="calendar-plus"></i>Novo</button>' + (semester ? '<button class="button button-danger button-small" type="button" data-action="archive-semester"><i data-lucide="archive"></i>Arquivar semestre</button>' : "") + '</div></article><article class="card settings-card"><div class="card-title-row"><div><p class="card-label">Ficheiro JSON</p><h3>academic-data.json</h3><p class="card-subtitle">Editável fora da app; relido ao abrir ou regressar à janela.</p></div><span class="metric-icon"><i data-lucide="braces"></i></span></div><div class="settings-row"><div><strong>Última verificação</strong><small>' + esc(lastCheck) + ' · revisão local ' + (Number(state.meta.revision) || 0) + '</small></div><button class="switch ' + (state.settings.jsonSync ? "is-on" : "") + '" type="button" data-action="toggle-json-sync" aria-label="Ativar sincronização JSON"><span></span></button></div><div class="list-actions"><button class="button button-small" type="button" data-action="reload-json"><i data-lucide="refresh-cw"></i>Reler</button><button class="button button-small" type="button" data-action="export-json"><i data-lucide="download"></i>Exportar</button><button class="button button-small" type="button" data-action="import-json"><i data-lucide="upload"></i>Importar</button></div></article><article class="card settings-card card-yellow"><div class="card-title-row"><div><h3>Atividade simulada no campus</h3><p class="card-subtitle">Apresenta indicadores simulados de atividade no campus.</p></div><span class="metric-icon"><i data-lucide="users-round"></i></span></div><div class="settings-row"><div><strong>Contador simulado</strong><small>Mostra “pessoas a acompanhar” com etiqueta de simulação.</small></div><button class="switch ' + (state.settings.campusSimulation ? "is-on" : "") + '" type="button" data-action="toggle-campus"><span></span></button></div><span class="badge badge-dark">Local · privado · transparente</span></article><article class="card settings-card"><div class="card-title-row"><div><h3>Dados no dispositivo</h3><p class="card-subtitle">Os metadados ficam em IndexedDB; os PDFs enviados ficam separados do JSON.</p></div><span class="metric-icon"><i data-lucide="hard-drive"></i></span></div><div class="settings-row"><div><strong id="storageFileCount">A contar ficheiros…</strong><small>PDFs e documentos enviados na app.</small></div><span class="badge badge-mint">Local-first</span></div><button class="button button-small" type="button" data-action="export-json"><i data-lucide="shield-check"></i>Criar backup JSON</button></article><article class="card settings-card card-dark"><div class="card-title-row"><div><h3>Adicionar conteúdo</h3><p class="card-subtitle">Aulas, materiais, perguntas antigas, quizzes, notas e avaliações.</p></div><span class="metric-icon"><i data-lucide="wrench"></i></span></div><div class="quick-grid" style="grid-template-columns:repeat(3,1fr);margin-top:17px"><button type="button" data-action="create-lesson"><i data-lucide="presentation"></i>Aula</button><button type="button" data-action="add-material"><i data-lucide="file-up"></i>PDF</button><button type="button" data-action="add-question"><i data-lucide="message-circle-question"></i>Pergunta</button><button type="button" data-action="add-quiz"><i data-lucide="sparkles"></i>Quiz</button><button type="button" data-action="add-grade"><i data-lucide="chart-no-axes-combined"></i>Nota</button><button type="button" data-action="add-assessment"><i data-lucide="file-pen-line"></i>Avaliação</button></div></article><article class="card settings-card span-12"><div class="card-title-row"><div><p class="card-label">Segurança</p><h3>Recomeçar neste dispositivo</h3><p class="card-subtitle">Remove o estado local e os PDFs guardados. O ficheiro academic-data.json não é apagado.</p></div><button class="button button-danger" type="button" data-action="reset-app"><i data-lucide="trash-2"></i>Apagar dados locais</button></div></article></div>';
   }
 
@@ -3191,13 +3192,13 @@
       }
     ];
     var page = pages[onboarding.tutorialPage] || pages[0];
-    return onboardingProgress() + '<h1>' + page.title + '</h1><p>' + page.copy + '</p>' + page.visual + '<div class="onboarding-actions"><div style="display:flex;gap:10px;flex-wrap:wrap"><button class="button button-ghost" type="button" data-action="import-json"><i data-lucide="upload"></i>Já tenho um JSON</button><button class="button button-yellow" type="button" data-action="onboarding-connect-git"><i data-lucide="cloud"></i>Usar dados sincronizados</button></div><div><button class="button" type="button" data-action="tutorial-skip">Pular tutorial</button><button class="button button-dark" type="button" data-action="tutorial-next">' + page.button + '<i data-lucide="arrow-right"></i></button></div></div>';
+    return onboardingProgress() + '<h1>' + page.title + '</h1><p>' + page.copy + '</p>' + page.visual + '<div class="onboarding-actions"><div style="display:flex;gap:10px;flex-wrap:wrap"><button class="button button-ghost" type="button" data-action="import-json"><i data-lucide="upload"></i>Já tenho um JSON</button><button class="button button-yellow" type="button" data-action="onboarding-connect-git"><i data-lucide="arrow-down-to-line"></i>Usar dados sincronizados</button></div><div><button class="button" type="button" data-action="tutorial-skip">Pular tutorial</button><button class="button button-dark" type="button" data-action="tutorial-next">' + page.button + '<i data-lucide="arrow-right"></i></button></div></div>';
   }
 
   function renderOnboardingProfile() {
     var profile = onboarding.draft.profile;
     var semester = onboarding.draft.semester;
-    return onboardingProgress() + '<h1>' + (onboarding.mode === "new-semester" ? "Novo semestre" : "Configuração inicial") + '</h1><p>Define o perfil académico e o semestre ativo.</p><form id="onboardingForm" data-step="1"><div class="form-grid"><div class="field field-full"><label>O teu nome</label><input name="name" required placeholder="Ex.: Matilde" value="' + attr(profile.name) + '"></div><div class="field"><label>Instituição</label><input name="institution" placeholder="Faculdade / universidade" value="' + attr(profile.institution) + '"></div><div class="field"><label>Curso</label><input name="degree" placeholder="Ex.: Engenharia Informática" value="' + attr(profile.degree) + '"></div><div class="field"><label>Meta</label><input name="targetGrade" type="number" min="0" max="20" step="0.1" value="' + attr(profile.targetGrade) + '"></div><div class="field"><label>Nome do semestre</label><input name="semesterName" required value="' + attr(semester.name) + '"></div><div class="field"><label>Ano letivo</label><input name="academicYear" required placeholder="2025/26" value="' + attr(semester.academicYear) + '"></div><div class="field"><label>Início</label><input name="startDate" type="date" value="' + attr(semester.startDate) + '"></div><div class="field"><label>Fim</label><input name="endDate" type="date" value="' + attr(semester.endDate) + '"></div></div></form><div class="onboarding-actions"><button class="button" type="button" data-action="onboarding-back"><i data-lucide="arrow-left"></i>Voltar</button><div><button class="button button-dark" type="button" data-action="onboarding-next">Cadeiras<i data-lucide="arrow-right"></i></button></div></div>';
+    return onboardingProgress() + '<h1>' + (onboarding.mode === "new-semester" ? "Novo semestre" : "Configuração inicial") + '</h1><p>Define o perfil académico e o semestre ativo.</p><form id="onboardingForm" data-step="1"><div class="form-grid"><div class="field field-full"><label>O teu nome</label><input name="name" required placeholder="Ex.: Matilde" value="' + attr(profile.name) + '"></div><div class="field"><label>Instituição</label><input name="institution" placeholder="Faculdade / universidade" value="' + attr(profile.institution) + '"></div><div class="field"><label>Curso</label><input name="degree" placeholder="Ex.: Engenharia Informática" value="' + attr(profile.degree) + '"></div><div class="field"><label>Meta</label><input name="targetGrade" type="number" min="0" max="20" step="0.1" value="' + attr(profile.targetGrade) + '"></div><div class="field"><label>Nome do semestre</label><input name="semesterName" required value="' + attr(semester.name) + '"></div><div class="field"><label>Ano letivo</label><input name="academicYear" required placeholder="2025/26" value="' + attr(semester.academicYear) + '"></div><div class="field"><label>Início</label><input name="startDate" type="date" value="' + attr(semester.startDate) + '"></div><div class="field"><label>Fim</label><input name="endDate" type="date" value="' + attr(semester.endDate) + '"></div></div></form><div class="onboarding-actions"><div style="display:flex;gap:8px;flex-wrap:wrap"><button class="button" type="button" data-action="onboarding-back"><i data-lucide="arrow-left"></i>Voltar</button><button class="button button-yellow" type="button" data-action="onboarding-connect-git"><i data-lucide="arrow-down-to-line"></i>Usar dados sincronizados</button></div><div><button class="button button-dark" type="button" data-action="onboarding-next">Cadeiras<i data-lucide="arrow-right"></i></button></div></div>';
   }
 
   function renderOnboardingCourses() {
@@ -3783,19 +3784,15 @@
     if (!key) { toast("Falta a chave privada de sincronização.", "warning"); return; }
     try {
       await Sync.configure(endpoint, key);
-      toast("A procurar os teus dados sincronizados…");
-      var remoteState = await Sync.bootstrap(defaultState(), defaultState());
-      if (!remoteState) {
-        var syncStatus = Sync.getStatus();
-        throw new Error(syncStatus.lastError || "Ainda não existem dados sincronizados neste Git.");
-      }
+      toast("A descarregar a versão mais recente do Git…");
+      var remoteState = await Sync.forcePull({ dispatch: false });
       state = normalizeState(remoteState);
       await DB.saveState(state, { skipSync: true });
       await Sync.adoptRemoteState(state);
       onboarding = null;
       closeModal();
       setRoute("home");
-      toast("Twenty ligada. Os dados deste dispositivo já estão sincronizados.");
+      toast("Force pull concluído. Este dispositivo já usa os dados do Git.");
     } catch (error) {
       renderOnboarding();
       toast("Não foi possível carregar os dados do Git: " + error.message, "error");
@@ -3834,6 +3831,56 @@
     } catch (error) {
       render();
       toast("A sincronização ficou na fila: " + error.message, "warning");
+    }
+  }
+
+  function openForceGitConfirmation(direction) {
+    if (!Sync || !Sync.getStatus().configured) { configureGitSync(); return; }
+    var isPull = direction === "pull";
+    var title = isPull ? "Forçar pull?" : "Forçar push?";
+    var icon = isPull ? "arrow-down-to-line" : "arrow-up-to-line";
+    var cardClass = isPull ? "card-violet" : "card-pink";
+    var copy = isPull
+      ? "Os dados deste dispositivo serão substituídos pela versão atual do Git. As alterações locais ainda não enviadas serão descartadas."
+      : "A versão atual do Git será substituída pelos dados deste dispositivo. Alterações mais recentes feitas noutro dispositivo podem ser perdidas.";
+    var action = isPull ? "confirm-force-git-pull" : "confirm-force-git-push";
+    openModal(title, '<article class="card ' + cardClass + ' force-sync-warning"><span class="metric-icon"><i data-lucide="' + icon + '"></i></span><h3>' + (isPull ? "O Git fica com prioridade" : "Este dispositivo fica com prioridade") + '</h3><p class="card-subtitle">' + copy + '</p></article>', {
+      footer: '<footer class="modal-foot"><button class="button" type="button" data-action="close-modal">Cancelar</button><button class="button ' + (isPull ? "button-dark" : "button-danger") + '" type="button" data-action="' + action + '"><i data-lucide="' + icon + '"></i>' + (isPull ? "Forçar pull" : "Forçar push") + '</button></footer>'
+    });
+  }
+
+  async function forceGitPull() {
+    if (!Sync || !Sync.getStatus().configured) { await configureGitSync(); return; }
+    closeModal();
+    try {
+      toast("A substituir os dados locais pela versão do Git…");
+      var remoteState = await Sync.forcePull({ dispatch: false });
+      state = normalizeState(remoteState);
+      await DB.saveState(state, { skipSync: true });
+      await Sync.adoptRemoteState(state);
+      onboarding = null;
+      render();
+      toast("Force pull concluído. Os dados locais foram atualizados.");
+    } catch (error) {
+      render();
+      toast("Não foi possível forçar o pull: " + error.message, "error");
+    }
+  }
+
+  async function forceGitPush() {
+    if (!Sync || !Sync.getStatus().configured) { await configureGitSync(); return; }
+    closeModal();
+    try {
+      toast("A substituir a versão do Git pelos dados deste dispositivo…");
+      var confirmedState = await Sync.forcePush(state, { dispatch: false });
+      state = normalizeState(confirmedState);
+      await DB.saveState(state, { skipSync: true });
+      await Sync.adoptRemoteState(state);
+      render();
+      toast("Force push concluído. Foi criado um novo commit no Git.");
+    } catch (error) {
+      render();
+      toast("Não foi possível forçar o push: " + error.message, "error");
     }
   }
 
@@ -4044,6 +4091,14 @@
       await configureGitSync();
     } else if (action === "sync-now") {
       await syncGitNow();
+    } else if (action === "force-git-pull") {
+      openForceGitConfirmation("pull");
+    } else if (action === "force-git-push") {
+      openForceGitConfirmation("push");
+    } else if (action === "confirm-force-git-pull") {
+      await forceGitPull();
+    } else if (action === "confirm-force-git-push") {
+      await forceGitPush();
     } else if (action === "disable-git-sync") {
       if (Sync) Sync.disable();
       render();
@@ -4225,7 +4280,7 @@
       }, 60000);
       if (!state.profile.onboardingComplete || !state.currentSemesterId || !activeCourses().length) startOnboarding(state.semesters.length ? "new-semester" : "first");
       if ("serviceWorker" in navigator && location.protocol !== "file:") {
-        navigator.serviceWorker.register("sw.js?v=12-mobile-git-onboarding", { updateViaCache: "none" }).catch(function () {});
+        navigator.serviceWorker.register("sw.js?v=13-git-force-controls", { updateViaCache: "none" }).catch(function () {});
       }
     } catch (error) {
       console.error(error);

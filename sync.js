@@ -363,6 +363,80 @@
     return flush();
   }
 
+  async function forcePull(options) {
+    options = options || {};
+    var config = getConfig();
+    if (!config.enabled) throw new Error("Configura primeiro o Worker e a chave de sincronização.");
+    updateStatus("syncing", { lastError: "" });
+    try {
+      var payload = await api("/state", { method: "GET" });
+      if (!payload.exists || !payload.state) throw new Error("Ainda não existem dados sincronizados neste Git.");
+      await clearQueue();
+      await setMeta("lastRemote", payload.state);
+      await setMeta("shadow", payload.state);
+      await setMeta("lastSha", payload.sha || "");
+      var conflictList = Array.isArray(payload.conflicts) ? payload.conflicts : [];
+      updateStatus("synced", {
+        lastSyncAt: new Date().toISOString(),
+        lastError: "",
+        conflicts: conflictList.length,
+        pending: 0
+      });
+      if (options.dispatch !== false) {
+        window.dispatchEvent(new CustomEvent("twenty:remote-state", {
+          detail: { state: clone(payload.state), conflicts: conflictList, sha: payload.sha || "", forced: "pull" }
+        }));
+      }
+      return clone(payload.state);
+    } catch (error) {
+      await refreshPending();
+      updateStatus(navigator.onLine ? "error" : "offline", { lastError: error.message || "Falha no force pull." });
+      throw error;
+    }
+  }
+
+  async function forcePush(localState, options) {
+    options = options || {};
+    var config = getConfig();
+    if (!config.enabled) throw new Error("Configura primeiro o Worker e a chave de sincronização.");
+    if (!localState || typeof localState !== "object") throw new Error("Não existem dados locais válidos para enviar.");
+    updateStatus("syncing", { lastError: "" });
+    try {
+      var payload = await api("/force-push", {
+        method: "POST",
+        body: JSON.stringify({
+          operationId: uid("forcepush"),
+          deviceId: deviceId(),
+          deviceName: deviceName(),
+          createdAt: new Date().toISOString(),
+          state: clone(localState)
+        })
+      });
+      if (!payload.state) throw new Error("O Worker não devolveu o estado confirmado.");
+      await clearQueue();
+      await setMeta("lastRemote", payload.state);
+      await setMeta("shadow", payload.state);
+      await setMeta("lastSha", payload.sha || "");
+      var conflictList = Array.isArray(payload.conflicts) ? payload.conflicts : [];
+      updateStatus("synced", {
+        lastSyncAt: new Date().toISOString(),
+        lastError: "",
+        conflicts: conflictList.length,
+        pending: 0
+      });
+      if (options.dispatch !== false) {
+        window.dispatchEvent(new CustomEvent("twenty:remote-state", {
+          detail: { state: clone(payload.state), conflicts: conflictList, sha: payload.sha || "", forced: "push" }
+        }));
+      }
+      return clone(payload.state);
+    } catch (error) {
+      await refreshPending();
+      updateStatus(navigator.onLine ? "error" : "offline", { lastError: error.message || "Falha no force push." });
+      throw error;
+    }
+  }
+
   async function configure(endpoint, key) {
     var config = saveConfig({ endpoint: endpoint, key: key, enabled: true });
     if (!config.endpoint || !config.key) throw new Error("Falta o endereço do Worker ou a chave.");
@@ -401,6 +475,8 @@
     bootstrap: bootstrap,
     queueState: queueState,
     syncNow: syncNow,
+    forcePull: forcePull,
+    forcePush: forcePush,
     flush: flush,
     adoptRemoteState: adoptRemoteState,
     resetLocal: resetLocal
