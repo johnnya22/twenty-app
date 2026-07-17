@@ -3191,7 +3191,7 @@
       }
     ];
     var page = pages[onboarding.tutorialPage] || pages[0];
-    return onboardingProgress() + '<h1>' + page.title + '</h1><p>' + page.copy + '</p>' + page.visual + '<div class="onboarding-actions"><button class="button button-ghost" type="button" data-action="import-json"><i data-lucide="upload"></i>Já tenho um JSON</button><div><button class="button" type="button" data-action="tutorial-skip">Pular tutorial</button><button class="button button-dark" type="button" data-action="tutorial-next">' + page.button + '<i data-lucide="arrow-right"></i></button></div></div>';
+    return onboardingProgress() + '<h1>' + page.title + '</h1><p>' + page.copy + '</p>' + page.visual + '<div class="onboarding-actions"><div style="display:flex;gap:10px;flex-wrap:wrap"><button class="button button-ghost" type="button" data-action="import-json"><i data-lucide="upload"></i>Já tenho um JSON</button><button class="button button-yellow" type="button" data-action="onboarding-connect-git"><i data-lucide="cloud"></i>Usar dados sincronizados</button></div><div><button class="button" type="button" data-action="tutorial-skip">Pular tutorial</button><button class="button button-dark" type="button" data-action="tutorial-next">' + page.button + '<i data-lucide="arrow-right"></i></button></div></div>';
   }
 
   function renderOnboardingProfile() {
@@ -3770,6 +3770,38 @@
   }
 
 
+  async function connectGitFromOnboarding() {
+    if (!Sync) { toast("O módulo de sincronização não foi carregado.", "error"); return; }
+    var current = Sync.getConfig();
+    var endpoint = window.prompt("Endereço do Cloudflare Worker", current.endpoint || "https://twenty-git-sync.TEU-SUBDOMINIO.workers.dev");
+    if (endpoint == null) return;
+    endpoint = endpoint.trim();
+    if (!/^https:\/\//i.test(endpoint)) { toast("O endereço do Worker tem de começar por https://", "warning"); return; }
+    var key = window.prompt("Chave privada de sincronização", current.key || "");
+    if (key == null) return;
+    key = key.trim();
+    if (!key) { toast("Falta a chave privada de sincronização.", "warning"); return; }
+    try {
+      await Sync.configure(endpoint, key);
+      toast("A procurar os teus dados sincronizados…");
+      var remoteState = await Sync.bootstrap(defaultState(), defaultState());
+      if (!remoteState) {
+        var syncStatus = Sync.getStatus();
+        throw new Error(syncStatus.lastError || "Ainda não existem dados sincronizados neste Git.");
+      }
+      state = normalizeState(remoteState);
+      await DB.saveState(state, { skipSync: true });
+      await Sync.adoptRemoteState(state);
+      onboarding = null;
+      closeModal();
+      setRoute("home");
+      toast("Twenty ligada. Os dados deste dispositivo já estão sincronizados.");
+    } catch (error) {
+      renderOnboarding();
+      toast("Não foi possível carregar os dados do Git: " + error.message, "error");
+    }
+  }
+
   async function configureGitSync() {
     if (!Sync) { toast("O módulo de sincronização não foi carregado.", "error"); return; }
     var current = Sync.getConfig();
@@ -4072,6 +4104,8 @@
       if (onboarding.tutorialPage < 2) onboarding.tutorialPage += 1;
       else onboarding.step = 1;
       renderOnboarding();
+    } else if (action === "onboarding-connect-git") {
+      await connectGitFromOnboarding();
     } else if (action === "tutorial-skip") {
       onboarding.tutorialSkipped = true;
       onboarding.step = 1;
@@ -4191,7 +4225,7 @@
       }, 60000);
       if (!state.profile.onboardingComplete || !state.currentSemesterId || !activeCourses().length) startOnboarding(state.semesters.length ? "new-semester" : "first");
       if ("serviceWorker" in navigator && location.protocol !== "file:") {
-        navigator.serviceWorker.register("sw.js?v=11-git-sync", { updateViaCache: "none" }).catch(function () {});
+        navigator.serviceWorker.register("sw.js?v=12-mobile-git-onboarding", { updateViaCache: "none" }).catch(function () {});
       }
     } catch (error) {
       console.error(error);
