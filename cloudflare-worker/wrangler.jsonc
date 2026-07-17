@@ -1,0 +1,29 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "twenty-git-sync",
+  "main": "src/index.js",
+  "compatibility_date": "2026-07-17",
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "SYNC_COORDINATOR",
+        "class_name": "SyncCoordinator"
+      }
+    ]
+  },
+  "migrations": [
+    {
+      "tag": "v1",
+      "new_sqlite_classes": [
+        "SyncCoordinator"
+      ]
+    }
+  ],
+  "vars": {
+    "GITHUB_OWNER": "johnnya22",
+    "GITHUB_REPO": "twenty-study",
+    "GITHUB_BRANCH": "main",
+    "STATE_PATH": "data/twenty-state.json",
+    "ALLOWED_ORIGINS": "https://twenty.co"
+  }
+}

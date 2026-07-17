@@ -1,0 +1,23 @@
+{
+  "id": "twenty-study-os",
+  "name": "Twenty · Study OS",
+  "short_name": "Twenty",
+  "description": "Sistema académico local-first para aulas, materiais, avaliações, notas e ECTS.",
+  "lang": "pt-PT",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#f2f4f8",
+  "theme_color": "#8476f3",
+  "categories": ["education", "productivity"],
+  "icons": [
+    { "src": "icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any maskable" },
+    { "src": "icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable" }
+  ],
+  "shortcuts": [
+    { "name": "Hoje", "short_name": "Hoje", "url": "./#home", "icons": [{ "src": "icon-192.png", "sizes": "192x192" }] },
+    { "name": "Estudar", "short_name": "Estudar", "url": "./#study", "icons": [{ "src": "icon-192.png", "sizes": "192x192" }] },
+    { "name": "Agenda", "short_name": "Agenda", "url": "./#planner", "icons": [{ "src": "icon-192.png", "sizes": "192x192" }] }
+  ]
+}

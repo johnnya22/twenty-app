@@ -1,0 +1,48 @@
+{
+  "schemaVersion": 4,
+  "meta": {
+    "revision": 0,
+    "updatedAt": "",
+    "syncMode": "merge",
+    "isTemplate": true,
+    "notes": "Template vazio. Podes editar este ficheiro; usa IDs estáveis e mantém syncMode como merge."
+  },
+  "profile": {
+    "name": "",
+    "institution": "",
+    "degree": "",
+    "targetGrade": 20,
+    "onboardingComplete": false,
+    "tutorialSeen": false
+  },
+  "settings": {
+    "campusSimulation": true,
+    "jsonSync": true,
+    "reduceMotion": false,
+    "plannerView": "schedule",
+    "calendarView": "month",
+    "studyPlanDate": "",
+    "weeklyStudyHours": 16,
+    "studyDayStart": "09:00",
+    "studyDayEnd": "19:00",
+    "studySessionMinutes": 50,
+    "studyBreakMinutes": 10,
+    "studyLunchStart": "13:00",
+    "studyLunchMinutes": 60
+  },
+  "currentSemesterId": null,
+  "semesters": [],
+  "courses": [],
+  "schedule": [],
+  "assessments": [],
+  "events": [],
+  "tasks": [],
+  "lessons": [],
+  "materials": [],
+  "pastExams": [],
+  "questions": [],
+  "quizzes": [],
+  "grades": [],
+  "studyBlocks": [],
+  "weeklyReviews": []
+}

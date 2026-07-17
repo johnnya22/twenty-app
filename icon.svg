@@ -1,0 +1,22 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="Twenty Study OS">
+  <defs>
+    <linearGradient id="bg" x1="42" y1="28" x2="466" y2="490" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#9D96FF"/>
+      <stop offset="0.58" stop-color="#8179EF"/>
+      <stop offset="1" stop-color="#FF83AC"/>
+    </linearGradient>
+    <filter id="shadow" x="-20%" y="-20%" width="140%" height="150%">
+      <feDropShadow dx="0" dy="18" stdDeviation="13" flood-color="#302B75" flood-opacity="0.28"/>
+    </filter>
+  </defs>
+  <rect width="512" height="512" rx="126" fill="url(#bg)"/>
+  <circle cx="401" cy="105" r="62" fill="#FFBD49"/>
+  <path d="M72 393c67-101 162-124 294-70 31 13 56 33 74 59v130H72V393Z" fill="#2F8075" opacity="0.92"/>
+  <g filter="url(#shadow)">
+    <rect x="102" y="118" width="308" height="278" rx="72" fill="#FBFBE8"/>
+    <rect x="121" y="137" width="270" height="240" rx="57" fill="#F5EF6E"/>
+    <text x="256" y="315" text-anchor="middle" fill="#202229" font-family="Arial Rounded MT Bold,Arial,sans-serif" font-size="174" font-weight="900" letter-spacing="-20">20</text>
+  </g>
+  <path d="M114 86c5 23 18 36 41 41-23 5-36 18-41 41-5-23-18-36-41-41 23-5 36-18 41-41Z" fill="#FFFFFF"/>
+  <path d="M422 214c3 14 11 22 25 25-14 3-22 11-25 25-3-14-11-22-25-25 14-3 22-11 25-25Z" fill="#FFFFFF" opacity="0.8"/>
+</svg>

@@ -1,0 +1,95 @@
+<!DOCTYPE html>
+<html lang="pt-PT">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#8677f4">
+  <meta name="description" content="Twenty — o teu sistema académico local-first para organizar aulas, avaliações e chegar aos 20 valores.">
+  <meta name="color-scheme" content="light">
+  <title>Twenty · Study OS</title>
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" href="icon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="icon-192.png">
+  <link rel="stylesheet" href="styles.css?v=11-git-sync">
+</head>
+<body>
+  <div class="ambient ambient-one" aria-hidden="true"></div>
+  <div class="ambient ambient-two" aria-hidden="true"></div>
+
+  <div id="app" class="app-shell" aria-busy="true">
+    <aside class="sidebar" aria-label="Navegação principal">
+      <button class="brand" type="button" data-route="home" aria-label="Ir para o início">
+        <span class="brand-mark">20</span>
+        <span><strong>twenty</strong><small>study os</small></span>
+      </button>
+
+      <nav class="side-nav" id="sideNav" aria-label="Navegação no computador">
+        <button type="button" data-route="home"><i data-lucide="house"></i><span>Hoje</span></button>
+        <button type="button" data-route="courses"><i data-lucide="library-big"></i><span>Cadeiras</span></button>
+        <button type="button" data-route="planner" data-planner-view="calendar"><i data-lucide="calendar-days"></i><span>Calendário</span></button>
+        <button type="button" data-route="study"><i data-lucide="sparkles"></i><span>Estudar</span></button>
+        <button type="button" data-route="grades"><i data-lucide="chart-no-axes-combined"></i><span>Notas</span></button>
+        <button type="button" data-route="canteen"><i data-lucide="utensils"></i><span>Cantina</span></button>
+      </nav>
+
+      <div class="sidebar-spacer"></div>
+      <div id="semesterMini" class="semester-mini"></div>
+      <button class="side-settings" type="button" data-route="settings">
+        <i data-lucide="settings-2"></i><span>Admin &amp; dados</span>
+      </button>
+      <p class="local-note"><i data-lucide="shield-check"></i> Local-first · os teus dados ficam contigo</p>
+    </aside>
+
+    <section class="app-stage">
+      <header class="topbar">
+        <div>
+          <p id="eyebrow" class="eyebrow">Área académica</p>
+          <h1 id="pageTitle">Hoje</h1>
+        </div>
+        <div class="top-actions">
+          <label class="search-box" aria-label="Pesquisar">
+            <i data-lucide="search"></i>
+            <input id="globalSearch" type="search" placeholder="Aulas, PDFs, perguntas…" autocomplete="off">
+            <kbd>⌘ K</kbd>
+          </label>
+          <button class="icon-button" id="quickAddButton" type="button" aria-label="Adicionar">
+            <i data-lucide="plus"></i>
+          </button>
+          <button class="avatar-button" id="profileButton" type="button" aria-label="Abrir definições">
+            <span id="avatarInitials">20</span>
+            <span class="online-dot"></span>
+          </button>
+        </div>
+        <div id="searchResults" class="search-results" hidden></div>
+      </header>
+
+      <main id="view" class="view" tabindex="-1">
+        <section class="loading-card">
+          <span class="loading-orb"></span>
+          <h2>A preparar o teu semestre…</h2>
+          <p>A abrir os dados guardados neste dispositivo.</p>
+        </section>
+      </main>
+    </section>
+
+    <nav class="mobile-nav" id="mobileNav" aria-label="Navegação móvel">
+      <button type="button" data-route="home"><i data-lucide="house"></i><span>Hoje</span></button>
+      <button type="button" data-route="courses"><i data-lucide="library-big"></i><span>Cadeiras</span></button>
+      <button type="button" data-route="planner" data-planner-view="calendar"><i data-lucide="calendar-days"></i><span>Calendário</span></button>
+      <button type="button" data-route="study"><i data-lucide="sparkles"></i><span>Estudar</span></button>
+      <button type="button" data-route="grades"><i data-lucide="bar-chart-3"></i><span>Notas</span></button>
+      <button type="button" data-route="canteen"><i data-lucide="utensils"></i><span>Cantina</span></button>
+    </nav>
+  </div>
+
+  <div id="modalRoot"></div>
+  <div id="toastRegion" class="toast-region" aria-live="polite" aria-atomic="true"></div>
+  <input id="jsonImportInput" type="file" accept="application/json,.json" hidden>
+
+  <noscript>Ativa o JavaScript para usar a Twenty.</noscript>
+  <script src="lucide.min.js?v=11-git-sync"></script>
+  <script src="sync.js?v=11-git-sync"></script>
+  <script src="db.js?v=11-git-sync"></script>
+  <script src="app.js?v=11-git-sync"></script>
+</body>
+</html>

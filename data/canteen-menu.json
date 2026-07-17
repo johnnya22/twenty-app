@@ -1,0 +1,95 @@
+{
+  "schemaVersion": 1,
+  "fetchedAt": "2026-07-17T08:32:13.000Z",
+  "source": "snapshot",
+  "infoSource": "snapshot",
+  "pageUrl": "https://sas.unl.pt/alimentacao/cantina-da-faculdade-de-ciencias-e-tecnologia-fct/",
+  "apiUrl": "https://sas.unl.pt/wp-json/wp/v2/pages/326?_fields=acf,link",
+  "info": {
+    "pageUrl": "https://sas.unl.pt/alimentacao/",
+    "apiUrl": "https://sas.unl.pt/wp-json/wp/v2/pages/309?_fields=acf,link,modified",
+    "sourceModifiedAt": "2026-03-02T11:23:22",
+    "socialMeal": {
+      "amount": "3,10 €",
+      "audience": "Alunos de licenciatura, mestrado e doutoramento",
+      "effectiveFrom": "2 de março de 2026",
+      "includes": "um prato, sopa, pão, uma bebida e uma sobremesa"
+    },
+    "closures": {
+      "summer": "Férias de verão: encerramento no último dia útil do mês de julho e reabertura no 2.º dia útil do mês de setembro.",
+      "seasonal": "As cantinas encerram ainda por curtos períodos nas férias de Natal, Carnaval e Páscoa; as datas são comunicadas por aviso.",
+      "alternatives": "Algumas cantinas de outras universidades públicas permanecem abertas nesses períodos e aceitam alunos da NOVA."
+    }
+  },
+  "days": [
+    {
+      "date": "2026-07-16",
+      "label": "Quinta-feira, 16 de Julho de 2026",
+      "meals": [
+        {
+          "name": "Almoço",
+          "items": [
+            { "type": "Sopa", "description": "Brócolos", "allergens": [], "kcal": 139, "calorieBand": "low" },
+            { "type": "Prato", "description": "Strogonoff de porco com arroz branco", "allergens": ["1", "7", "12"], "kcal": 1015, "calorieBand": "high" },
+            { "type": "Prato", "description": "Calamares no forno com salada camponesa", "allergens": ["1", "4", "14"], "kcal": 1020, "calorieBand": "high" },
+            { "type": "Veg.", "description": "Hamburguer vegetariano com arroz de legumes", "allergens": ["1", "3", "6", "7", "9"], "kcal": 739, "calorieBand": "low" }
+          ]
+        },
+        {
+          "name": "Jantar",
+          "items": [
+            { "type": "Sopa", "description": "Brócolos", "allergens": [], "kcal": 139, "calorieBand": "low" },
+            { "type": "Prato", "description": "Strogonoff de porco com arroz branco", "allergens": ["1", "7", "12"], "kcal": 1015, "calorieBand": "high" },
+            { "type": "Prato", "description": "Calamares no forno com salada camponesa", "allergens": ["1", "4", "14"], "kcal": 1020, "calorieBand": "high" },
+            { "type": "Veg.", "description": "Hamburguer vegetariano com arroz de legumes", "allergens": ["1", "3", "6", "7", "9"], "kcal": 739, "calorieBand": "low" }
+          ]
+        }
+      ]
+    },
+    {
+      "date": "2026-07-17",
+      "label": "Sexta-feira, 17 de Julho de 2026",
+      "meals": [
+        {
+          "name": "Almoço",
+          "items": [
+            { "type": "Sopa", "description": "Sopa de curgete com cenoura ralada", "allergens": [], "kcal": 132, "calorieBand": "low" },
+            { "type": "Prato", "description": "Carne de porco guisada com ervilhas e puré de batata", "allergens": ["7"], "kcal": 1070, "calorieBand": "high" },
+            { "type": "Prato", "description": "Macarronada de cavala de conserva, cenoura, milho, ervilhas", "allergens": ["1", "4"], "kcal": 709, "calorieBand": "low" },
+            { "type": "Veg.", "description": "Caril de grão", "allergens": [], "kcal": 945, "calorieBand": "medium" }
+          ]
+        },
+        {
+          "name": "Jantar",
+          "items": [
+            { "type": "Sopa", "description": "Sopa de curgete com cenoura ralada", "allergens": [], "kcal": 132, "calorieBand": "low" },
+            { "type": "Prato", "description": "Carne de porco guisada com ervilhas e puré de batata", "allergens": ["7"], "kcal": 1070, "calorieBand": "high" },
+            { "type": "Prato", "description": "Macarronada de cavala de conserva, cenoura, milho, ervilhas", "allergens": ["1", "4"], "kcal": 709, "calorieBand": "low" },
+            { "type": "Veg.", "description": "Caril de grão", "allergens": [], "kcal": 945, "calorieBand": "medium" }
+          ]
+        }
+      ]
+    }
+  ],
+  "hours": [
+    "Refeitório: Almoço das 11:30 h às 14:30 h; Jantar das 18:30 h às 20:30 h",
+    "Encerrada ao fim de semana"
+  ],
+  "allergens": {
+    "1": "Cereais c/ Glúten",
+    "2": "Crustáceos",
+    "3": "Ovo",
+    "4": "Peixe",
+    "5": "Amendoim",
+    "6": "Soja",
+    "7": "Leite",
+    "8": "Frutos de Casca Rija",
+    "9": "Aipo",
+    "10": "Mostarda",
+    "11": "Sésamo",
+    "12": "Sulfitos",
+    "13": "Tremoço",
+    "14": "Moluscos"
+  },
+  "allergenNotice": "Dada a possibilidade de qualquer um dos componentes da refeição poderem conter resíduos de qualquer um dos alergénios e haver variantes nos ingredientes utilizados na confeição, consulte o responsável da unidade para mais informações."
+}

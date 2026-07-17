@@ -1,0 +1,108 @@
+{
+  "schemaVersion": 4,
+  "meta": {
+    "revision": 1,
+    "updatedAt": "2026-07-16T10:00:00.000Z",
+    "syncMode": "merge",
+    "isTemplate": false,
+    "notes": "Dados exclusivamente demonstrativos. Importa este ficheiro para explorar a app."
+  },
+  "profile": {
+    "name": "Estudante Demo",
+    "institution": "Universidade Exemplo",
+    "degree": "Curso Exemplo",
+    "targetGrade": 20,
+    "onboardingComplete": true,
+    "tutorialSeen": true
+  },
+  "settings": {
+    "campusSimulation": true,
+    "jsonSync": true,
+    "reduceMotion": false,
+    "plannerView": "schedule",
+    "calendarView": "month",
+    "studyPlanDate": "2026-07-18",
+    "weeklyStudyHours": 16,
+    "studyDayStart": "09:00",
+    "studyDayEnd": "19:00",
+    "studySessionMinutes": 50,
+    "studyBreakMinutes": 10,
+    "studyLunchStart": "13:00",
+    "studyLunchMinutes": 60
+  },
+  "currentSemesterId": "sem_demo_2025_26",
+  "semesters": [
+    {
+      "id": "sem_demo_2025_26",
+      "name": "Semestre de demonstração",
+      "academicYear": "2025/26",
+      "startDate": "2026-02-01",
+      "endDate": "2026-07-31",
+      "archived": false
+    }
+  ],
+  "courses": [
+    {
+      "id": "course_demo_poo",
+      "semesterId": "sem_demo_2025_26",
+      "name": "Cadeira de demonstração",
+      "code": "DEMO",
+      "ects": 6,
+      "color": "#a99df7",
+      "lessonTypes": ["T", "TP", "P"],
+      "evaluation": {
+        "examReplacesTests": true,
+        "replacementPolicy": "if-higher",
+        "components": [
+          { "id": "component_demo_tests", "label": "Testes", "count": 2, "weight": 60, "kind": "test", "replaceable": true, "minimum": 9.5, "defenseEnabled": false },
+          { "id": "component_demo_project", "label": "Projeto", "count": 1, "weight": 40, "kind": "project", "replaceable": false, "minimum": 10, "defenseEnabled": true, "defenseType": "oral", "defenseThreshold": 14, "maxWithoutDefense": 14 },
+          { "id": "component_demo_exam", "label": "Exame", "count": 1, "weight": 0, "kind": "exam", "replaceable": false, "minimum": null, "defenseEnabled": false }
+        ]
+      }
+    }
+  ],
+  "schedule": [
+    { "id": "schedule_demo_1", "semesterId": "sem_demo_2025_26", "courseId": "course_demo_poo", "weekday": 1, "start": "09:00", "end": "10:30", "type": "T", "room": "A1" },
+    { "id": "schedule_demo_2", "semesterId": "sem_demo_2025_26", "courseId": "course_demo_poo", "weekday": 3, "start": "14:00", "end": "16:00", "type": "TP", "room": "Lab 2" }
+  ],
+  "assessments": [
+    { "id": "assessment_demo", "semesterId": "sem_demo_2025_26", "courseId": "course_demo_poo", "componentId": "component_demo_tests", "type": "Teste", "title": "Teste de demonstração", "date": "2026-07-24", "time": "10:00", "weight": 30, "lessonIds": ["lesson_demo_1"], "requiresTestSheet": true, "openBook": true, "hasDefense": false, "replacementAssessmentIds": [], "replacementPolicy": "if-higher" },
+    { "id": "assessment_demo_test_past", "semesterId": "sem_demo_2025_26", "courseId": "course_demo_poo", "componentId": "component_demo_tests", "type": "Teste", "title": "Teste 1 · demonstração", "date": "2026-06-01", "time": "10:00", "weight": 30, "lessonIds": [], "replacesTests": false },
+    { "id": "assessment_demo_exam", "semesterId": "sem_demo_2025_26", "courseId": "course_demo_poo", "componentId": "component_demo_exam", "type": "Exame", "title": "Exame de demonstração", "date": "2026-07-10", "time": "10:00", "weight": 0, "lessonIds": ["lesson_demo_1"], "replacementAssessmentIds": ["assessment_demo_test_past"], "replacementPolicy": "if-higher" },
+    { "id": "assessment_demo_project", "semesterId": "sem_demo_2025_26", "courseId": "course_demo_poo", "componentId": "component_demo_project", "type": "Projeto", "title": "Projeto de demonstração", "date": "2026-06-20", "time": "18:00", "weight": 40, "lessonIds": ["lesson_demo_1"], "replacesTests": false }
+  ],
+  "events": [
+    { "id": "event_demo", "semesterId": "sem_demo_2025_26", "title": "Evento académico de demonstração", "date": "2026-07-20", "time": "15:00", "location": "Campus", "images": [{ "id": "image_demo_event", "role": "event", "source": "path", "url": "icon.svg", "name": "Cartaz de demonstração" }] }
+  ],
+  "tasks": [
+    { "id": "task_demo", "semesterId": "sem_demo_2025_26", "courseId": "course_demo_poo", "lessonId": "lesson_demo_1", "title": "Rever aula de demonstração", "type": "review", "dueDate": "2026-07-17", "dueTime": "18:00", "priority": "normal", "done": false }
+  ],
+  "lessons": [
+    { "id": "lesson_demo_1", "semesterId": "sem_demo_2025_26", "courseId": "course_demo_poo", "scheduleId": "schedule_demo_2", "title": "TP01 · Aula de demonstração", "date": "2026-07-15", "start": "14:00", "end": "16:00", "type": "TP", "room": "Lab 2", "topics": "Conceito A, conceito B e exercício 1", "notes": "Dados apenas para explorar a interface.", "mastered": false },
+    { "id": "lesson_demo_2", "semesterId": "sem_demo_2025_26", "courseId": "course_demo_poo", "scheduleId": "schedule_demo_1", "title": "T07 · Padrões e boas práticas", "date": "2026-07-20", "start": "09:00", "end": "10:30", "type": "T", "room": "A1", "topics": "Responsabilidades, coesão e padrões introdutórios", "notes": "", "mastered": false }
+  ],
+  "materials": [
+    { "id": "material_demo_old", "semesterId": "sem_demo_2025_26", "courseId": "course_demo_poo", "lessonId": "lesson_demo_1", "title": "Guia de materiais · ano anterior", "academicYear": "2024/25", "kind": "notes", "source": "url", "url": "assets/slides/README.md", "fileName": "README.md" }
+  ],
+  "pastExams": [
+    { "id": "past_exam_demo", "semesterId": "sem_demo_2025_26", "courseId": "course_demo_poo", "title": "Teste 1 · demonstração", "academicYear": "2024/25", "date": "2025-01-15", "source": "Arquivo de demonstração", "notes": "Conteúdo exclusivamente demonstrativo." }
+  ],
+  "questions": [
+    { "id": "question_demo", "semesterId": "sem_demo_2025_26", "courseId": "course_demo_poo", "pastExamId": "past_exam_demo", "lessonIds": ["lesson_demo_1"], "academicYear": "2024/25", "number": "1.1", "sourceType": "past-test", "assessmentLabel": "Teste anterior · Demo", "prompt": "Esta é uma pergunta de demonstração. Que resposta escolherias?", "answer": "A resposta configurada pelo administrador.", "explanation": "Substitui este conteúdo pela pergunta real do teu teste anterior.", "points": 2, "tags": ["demo"], "images": [{ "id": "image_demo_question", "role": "question", "source": "path", "url": "icon.svg", "name": "Figura de demonstração" }] }
+  ],
+  "quizzes": [
+    { "id": "quiz_demo", "semesterId": "sem_demo_2025_26", "courseId": "course_demo_poo", "lessonId": "lesson_demo_1", "title": "Quiz de demonstração", "questions": [{ "id": "quizq_demo", "mode": "multiple-choice", "prompt": "Qual destas opções identifica dados demonstrativos?", "options": ["Demo", "Dados reais", "Nenhuma"], "answerIndex": 0, "explanation": "Todo este ficheiro está explicitamente marcado como demonstração.", "images": [] }], "lastScore": null }
+  ],
+  "grades": [
+    { "id": "grade_demo_test", "semesterId": "sem_demo_2025_26", "courseId": "course_demo_poo", "assessmentId": "assessment_demo_test_past", "componentId": "component_demo_tests", "score": 17.5, "date": "2026-06-01", "notes": "Nota de demonstração" },
+    { "id": "grade_demo_exam", "semesterId": "sem_demo_2025_26", "courseId": "course_demo_poo", "assessmentId": "assessment_demo_exam", "componentId": "component_demo_exam", "score": 18, "date": "2026-07-10", "notes": "Substitui o Teste 1 quando melhorar" },
+    { "id": "grade_demo_project", "semesterId": "sem_demo_2025_26", "courseId": "course_demo_poo", "assessmentId": "assessment_demo_project", "componentId": "component_demo_project", "score": 19, "date": "2026-06-20", "notes": "Nota de demonstração" }
+  ],
+  "studyBlocks": [
+    { "id": "study_demo_1", "semesterId": "sem_demo_2025_26", "date": "2026-07-18", "title": "Rever TP01 · Aula de demonstração", "start": "09:00", "end": "09:50", "kind": "study", "courseId": "course_demo_poo", "sourceType": "lesson", "sourceId": "lesson_demo_1", "completed": false, "notes": "" },
+    { "id": "study_demo_break", "semesterId": "sem_demo_2025_26", "date": "2026-07-18", "title": "Pausa", "start": "09:50", "end": "10:00", "kind": "break", "courseId": null, "sourceType": "routine", "sourceId": null, "completed": false, "notes": "" }
+  ],
+  "weeklyReviews": [
+    { "id": "review_demo", "semesterId": "sem_demo_2025_26", "weekStart": "2026-07-13", "priorities": ["Concluir o quiz da aula", "Preparar o teste"], "doubts": ["Rever o conceito B com o professor"], "notes": "Revisão exclusivamente demonstrativa.", "completedAt": "2026-07-17T18:00:00.000Z" }
+  ]
+}

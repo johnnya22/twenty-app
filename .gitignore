@@ -1,0 +1,10 @@
+.DS_Store
+.backup-*
+node_modules/
+TWENTY-SYNC-CREDENCIAIS.txt
+cloudflare-worker/node_modules/
+cloudflare-worker/.dev.vars
+cloudflare-worker/.wrangler/
+*.log
+data/twenty-state.json
+data/academic-data.local.json
