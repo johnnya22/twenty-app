@@ -1,14 +1,14 @@
 "use strict";
 
-var CACHE = "twenty-study-os-v13-git-force-controls";
+var CACHE = "twenty-study-os-v14-git-sync-loading";
 var APP_SHELL = [
   "./",
   "./index.html",
-  "./styles.css?v=13-git-force-controls",
-  "./sync.js?v=13-git-force-controls",
-  "./db.js?v=13-git-force-controls",
-  "./app.js?v=13-git-force-controls",
-  "./lucide.min.js?v=13-git-force-controls",
+  "./styles.css?v=14-git-sync-loading",
+  "./sync.js?v=14-git-sync-loading",
+  "./db.js?v=14-git-sync-loading",
+  "./app.js?v=14-git-sync-loading",
+  "./lucide.min.js?v=14-git-sync-loading",
   "./manifest.webmanifest",
   "./icon.svg",
   "./icon-192.png",
@@ -59,6 +59,8 @@ self.addEventListener("fetch", function (event) {
     event.respondWith(networkFirst(request));
   } else if (request.mode === "navigate") {
     event.respondWith(networkFirst(request).then(function (response) { return response || caches.match("./index.html"); }));
+  } else if (/\.(?:js|css|html)$/.test(url.pathname)) {
+    event.respondWith(networkFirst(request));
   } else {
     event.respondWith(cacheFirst(request));
   }

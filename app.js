@@ -10,6 +10,12 @@
   var searchInput = document.getElementById("globalSearch");
   var searchResults = document.getElementById("searchResults");
   var importInput = document.getElementById("jsonImportInput");
+  var syncActivity = document.getElementById("syncActivity");
+  var syncActivityTitle = document.getElementById("syncActivityTitle");
+  var syncActivityDetail = document.getElementById("syncActivityDetail");
+  var syncProgressBar = document.getElementById("syncProgressBar");
+  var manualSyncActivity = false;
+  var syncActivityHideTimer = null;
   var state = null;
   var route = { name: "home", id: null, tab: "overview" };
   var onboarding = null;
@@ -60,6 +66,98 @@
   function asArray(value) { return Array.isArray(value) ? value : []; }
 
   function clamp(value, min, max) { return Math.min(max, Math.max(min, Number(value) || 0)); }
+
+  function showSyncActivity(options) {
+    options = options || {};
+    if (!syncActivity) return;
+    clearTimeout(syncActivityHideTimer);
+    syncActivity.hidden = false;
+    syncActivity.classList.toggle("is-blocking", !!options.blocking);
+    syncActivityTitle.textContent = options.title || "A sincronizar dados…";
+    syncActivityDetail.textContent = options.detail || "Aguarda enquanto a Twenty confirma a versão mais recente.";
+    var track = syncProgressBar && syncProgressBar.parentElement;
+    var hasProgress = options.progress !== null && options.progress !== undefined && Number.isFinite(Number(options.progress));
+    if (track) track.classList.toggle("is-indeterminate", !hasProgress);
+    if (syncProgressBar) syncProgressBar.style.width = hasProgress ? clamp(options.progress, 2, 100) + "%" : "38%";
+    if (app) app.setAttribute("aria-busy", "true");
+  }
+
+  function setManualSyncActivity(title, detail, progress, blocking) {
+    manualSyncActivity = true;
+    showSyncActivity({ title: title, detail: detail, progress: progress, blocking: blocking !== false });
+  }
+
+  function finishManualSyncActivity(success) {
+    if (!syncActivity) { manualSyncActivity = false; return; }
+    if (success) {
+      showSyncActivity({ title: "Sincronização concluída", detail: "Os dados já estão atualizados neste dispositivo.", progress: 100, blocking: syncActivity.classList.contains("is-blocking") });
+    }
+    clearTimeout(syncActivityHideTimer);
+    syncActivityHideTimer = setTimeout(function () {
+      manualSyncActivity = false;
+      syncActivity.hidden = true;
+      syncActivity.classList.remove("is-blocking");
+      if (app) app.setAttribute("aria-busy", "false");
+    }, success ? 520 : 120);
+  }
+
+  function syncDisplayInfo(info) {
+    info = info || { state: "disabled", configured: false, pending: 0, conflicts: 0, lastError: "" };
+    return {
+      title: !info.configured ? "Por configurar" : info.state === "syncing" ? "A sincronizar…" : info.state === "synced" ? "Sincronizado" : info.state === "offline" ? "Sem Internet" : info.state === "error" ? "Erro de sincronização" : "Pronto",
+      detail: !info.configured ? "Liga a app ao Worker que cria os commits no teu repositório privado." : info.pending ? info.pending + " alteração(ões) à espera de push." : info.lastError || "As alterações são fundidas entre dispositivos antes do commit.",
+      badgeClass: info.state === "error" || info.state === "offline" ? "badge-yellow" : info.state === "synced" ? "badge-mint" : "badge-violet"
+    };
+  }
+
+  function updateGitSyncCard(info) {
+    var card = document.getElementById("gitSyncCard");
+    if (!card) return;
+    info = info || (Sync ? Sync.getStatus() : null) || {};
+    var display = syncDisplayInfo(info);
+    var title = document.getElementById("gitSyncTitle");
+    var detail = document.getElementById("gitSyncDetail");
+    var summary = document.getElementById("gitSyncSummary");
+    var badge = document.getElementById("gitSyncBadge");
+    var inline = document.getElementById("gitSyncInlineProgress");
+    if (title) title.textContent = display.title;
+    if (detail) detail.textContent = display.detail;
+    if (summary) summary.textContent = info.pending ? info.pending + " por enviar" : "PC + telemóvel";
+    if (badge) {
+      badge.className = "badge " + display.badgeClass;
+      badge.textContent = info.conflicts ? info.conflicts + " conflito(s)" : "Protegido";
+    }
+    card.setAttribute("aria-busy", info.state === "syncing" ? "true" : "false");
+    if (inline) {
+      inline.classList.toggle("is-active", info.state === "syncing");
+      inline.classList.toggle("is-indeterminate", info.state === "syncing");
+    }
+    card.querySelectorAll('[data-action="force-git-pull"], [data-action="force-git-push"]').forEach(function (button) {
+      button.disabled = !info.configured || info.state === "syncing";
+    });
+  }
+
+  function updateSyncActivityFromStatus(info) {
+    updateGitSyncCard(info);
+    if (manualSyncActivity) return;
+    if (info && info.state === "syncing") {
+      showSyncActivity({
+        title: "A sincronizar dados…",
+        detail: info.pending ? "A enviar " + info.pending + " alteração(ões) e a confirmar o Git." : "A confirmar a versão mais recente no Git.",
+        progress: null,
+        blocking: false
+      });
+      return;
+    }
+    clearTimeout(syncActivityHideTimer);
+    syncActivityHideTimer = setTimeout(function () {
+      if (!manualSyncActivity && syncActivity) {
+        syncActivity.hidden = true;
+        syncActivity.classList.remove("is-blocking");
+        if (app) app.setAttribute("aria-busy", "false");
+      }
+    }, 260);
+  }
 
   function round(value, digits) {
     var p = Math.pow(10, digits == null ? 1 : digits);
@@ -2069,11 +2167,11 @@
     var archived = state.semesters.filter(function (item) { return item.archived; }).length;
     var lastCheck = state.meta.externalCheckedAt ? new Intl.DateTimeFormat("pt-PT", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" }).format(new Date(state.meta.externalCheckedAt)) : "Nunca";
     var syncInfo = Sync ? Sync.getStatus() : { state: "disabled", configured: false, pending: 0, conflicts: 0, lastError: "" };
-    var syncTitle = !syncInfo.configured ? "Por configurar" : syncInfo.state === "syncing" ? "A sincronizar…" : syncInfo.state === "synced" ? "Sincronizado" : syncInfo.state === "offline" ? "Sem Internet" : syncInfo.state === "error" ? "Erro de sincronização" : "Pronto";
-    var syncBadgeClass = syncInfo.state === "error" || syncInfo.state === "offline" ? "badge-yellow" : syncInfo.state === "synced" ? "badge-mint" : "badge-violet";
-    var syncDetail = !syncInfo.configured ? "Liga a app ao Worker que cria os commits no teu repositório privado." : syncInfo.pending ? syncInfo.pending + " alteração(ões) à espera de push." : syncInfo.lastError || "As alterações são fundidas entre dispositivos antes do commit.";
-    var forceControls = syncInfo.configured ? '<span class="sync-force-actions" role="group" aria-label="Sincronização forçada"><button class="button button-small sync-icon-button" type="button" data-action="force-git-pull" aria-label="Forçar pull" title="Forçar pull"><i data-lucide="arrow-down-to-line"></i></button><button class="button button-dark button-small sync-icon-button" type="button" data-action="force-git-push" aria-label="Forçar push" title="Forçar push"><i data-lucide="arrow-up-to-line"></i></button></span>' : '';
-    var syncCard = '<article class="card settings-card card-violet"><div class="card-title-row"><div><p class="card-label">Git como base de dados</p><h3>' + esc(syncTitle) + '</h3><p class="card-subtitle">' + esc(syncDetail) + '</p></div><span class="metric-icon"><i data-lucide="git-commit-horizontal"></i></span></div><div class="settings-row"><div><strong>' + (syncInfo.pending ? syncInfo.pending + " por enviar" : "PC + telemóvel") + '</strong><small>Fusão por campos · fila offline · histórico em commits.</small></div><span class="badge ' + syncBadgeClass + '">' + (syncInfo.conflicts ? syncInfo.conflicts + " conflito(s)" : "Protegido") + '</span></div><div class="list-actions"><button class="button button-small" type="button" data-action="configure-git-sync"><i data-lucide="settings-2"></i>Configurar</button><button class="button button-dark button-small" type="button" data-action="sync-now"><i data-lucide="refresh-cw"></i>Sincronizar agora</button>' + forceControls + (syncInfo.configured ? '<button class="button button-small" type="button" data-action="disable-git-sync"><i data-lucide="pause"></i>Pausar</button>' : '') + '</div></article>';
+    var syncDisplay = syncDisplayInfo(syncInfo);
+    var forceDisabled = syncInfo.configured && syncInfo.state !== "syncing" ? "" : " disabled";
+    var forceControls = '<span class="sync-force-actions" role="group" aria-label="Substituição manual de dados"><button class="button button-small sync-icon-button" type="button" data-action="force-git-pull" aria-label="Forçar pull: substituir este dispositivo pelos dados do Git" title="Forçar pull"' + forceDisabled + '><i data-lucide="arrow-down-to-line"></i></button><button class="button button-dark button-small sync-icon-button" type="button" data-action="force-git-push" aria-label="Forçar push: substituir o Git pelos dados deste dispositivo" title="Forçar push"' + forceDisabled + '><i data-lucide="arrow-up-to-line"></i></button></span>';
+    var syncProgress = '<div id="gitSyncInlineProgress" class="sync-inline-progress ' + (syncInfo.state === "syncing" ? "is-active is-indeterminate" : "") + '"><span></span></div>';
+    var syncCard = '<article id="gitSyncCard" class="card settings-card card-violet" aria-busy="' + (syncInfo.state === "syncing" ? "true" : "false") + '"><div class="card-title-row"><div><p class="card-label">Git como base de dados</p><h3 id="gitSyncTitle">' + esc(syncDisplay.title) + '</h3><p id="gitSyncDetail" class="card-subtitle">' + esc(syncDisplay.detail) + '</p></div><span class="metric-icon"><i data-lucide="git-commit-horizontal"></i></span></div><div class="settings-row"><div><strong id="gitSyncSummary">' + (syncInfo.pending ? syncInfo.pending + " por enviar" : "PC + telemóvel") + '</strong><small>Fusão por campos · fila offline · histórico em commits.</small></div><span id="gitSyncBadge" class="badge ' + syncDisplay.badgeClass + '">' + (syncInfo.conflicts ? syncInfo.conflicts + " conflito(s)" : "Protegido") + '</span></div>' + syncProgress + '<div class="list-actions"><button class="button button-small" type="button" data-action="configure-git-sync"><i data-lucide="settings-2"></i>Configurar</button><button class="button button-dark button-small" type="button" data-action="sync-now"><i data-lucide="refresh-cw"></i>Sincronizar agora</button>' + forceControls + (syncInfo.configured ? '<button class="button button-small" type="button" data-action="disable-git-sync"><i data-lucide="pause"></i>Pausar</button>' : '') + '</div></article>';
     return '<div class="page-head"><div><h2>Definições</h2><p>Perfil, semestres, conteúdo e dados locais.</p></div><div class="page-actions"><button class="button" type="button" data-action="show-tutorial"><i data-lucide="map"></i>Visita guiada</button><button class="button button-dark" type="button" data-action="quick-add"><i data-lucide="plus"></i>Adicionar conteúdo</button></div></div><div class="settings-grid">' + syncCard + '<article class="card settings-card"><div class="card-title-row"><div><p class="card-label">Perfil académico</p><h3>' + esc(state.profile.name || "Estudante") + '</h3><p class="card-subtitle">' + esc(state.profile.degree || "Curso por configurar") + (state.profile.institution ? " · " + esc(state.profile.institution) : "") + '</p></div><span class="metric-icon"><i data-lucide="user-round"></i></span></div><div class="settings-row"><div><strong>Meta</strong><small>Objetivo utilizado nos indicadores de desempenho.</small></div><span class="badge badge-yellow">' + (Number(state.profile.targetGrade) || 20) + '/20</span></div><button class="button button-small" type="button" data-action="edit-profile"><i data-lucide="pencil"></i>Editar perfil</button></article><article class="card settings-card card-violet"><div class="card-title-row"><div><p class="card-label">Semestre ativo</p><h3>' + esc(semester ? semester.name : "Nenhum") + '</h3><p class="card-subtitle">' + esc(semester ? semester.academicYear : "Cria o próximo semestre") + '</p></div><span class="metric-icon"><i data-lucide="calendar-range"></i></span></div><div class="settings-row"><div><strong>' + activeCourses().length + ' cadeiras</strong><small>' + archived + ' semestre(s) no arquivo.</small></div><span class="badge badge-dark">' + activeCourses().reduce(function (sum, course) { return sum + (Number(course.ects) || 0); }, 0) + ' ECTS</span></div><div class="list-actions"><button class="button button-small" type="button" data-action="new-semester"><i data-lucide="calendar-plus"></i>Novo</button>' + (semester ? '<button class="button button-danger button-small" type="button" data-action="archive-semester"><i data-lucide="archive"></i>Arquivar semestre</button>' : "") + '</div></article><article class="card settings-card"><div class="card-title-row"><div><p class="card-label">Ficheiro JSON</p><h3>academic-data.json</h3><p class="card-subtitle">Editável fora da app; relido ao abrir ou regressar à janela.</p></div><span class="metric-icon"><i data-lucide="braces"></i></span></div><div class="settings-row"><div><strong>Última verificação</strong><small>' + esc(lastCheck) + ' · revisão local ' + (Number(state.meta.revision) || 0) + '</small></div><button class="switch ' + (state.settings.jsonSync ? "is-on" : "") + '" type="button" data-action="toggle-json-sync" aria-label="Ativar sincronização JSON"><span></span></button></div><div class="list-actions"><button class="button button-small" type="button" data-action="reload-json"><i data-lucide="refresh-cw"></i>Reler</button><button class="button button-small" type="button" data-action="export-json"><i data-lucide="download"></i>Exportar</button><button class="button button-small" type="button" data-action="import-json"><i data-lucide="upload"></i>Importar</button></div></article><article class="card settings-card card-yellow"><div class="card-title-row"><div><h3>Atividade simulada no campus</h3><p class="card-subtitle">Apresenta indicadores simulados de atividade no campus.</p></div><span class="metric-icon"><i data-lucide="users-round"></i></span></div><div class="settings-row"><div><strong>Contador simulado</strong><small>Mostra “pessoas a acompanhar” com etiqueta de simulação.</small></div><button class="switch ' + (state.settings.campusSimulation ? "is-on" : "") + '" type="button" data-action="toggle-campus"><span></span></button></div><span class="badge badge-dark">Local · privado · transparente</span></article><article class="card settings-card"><div class="card-title-row"><div><h3>Dados no dispositivo</h3><p class="card-subtitle">Os metadados ficam em IndexedDB; os PDFs enviados ficam separados do JSON.</p></div><span class="metric-icon"><i data-lucide="hard-drive"></i></span></div><div class="settings-row"><div><strong id="storageFileCount">A contar ficheiros…</strong><small>PDFs e documentos enviados na app.</small></div><span class="badge badge-mint">Local-first</span></div><button class="button button-small" type="button" data-action="export-json"><i data-lucide="shield-check"></i>Criar backup JSON</button></article><article class="card settings-card card-dark"><div class="card-title-row"><div><h3>Adicionar conteúdo</h3><p class="card-subtitle">Aulas, materiais, perguntas antigas, quizzes, notas e avaliações.</p></div><span class="metric-icon"><i data-lucide="wrench"></i></span></div><div class="quick-grid" style="grid-template-columns:repeat(3,1fr);margin-top:17px"><button type="button" data-action="create-lesson"><i data-lucide="presentation"></i>Aula</button><button type="button" data-action="add-material"><i data-lucide="file-up"></i>PDF</button><button type="button" data-action="add-question"><i data-lucide="message-circle-question"></i>Pergunta</button><button type="button" data-action="add-quiz"><i data-lucide="sparkles"></i>Quiz</button><button type="button" data-action="add-grade"><i data-lucide="chart-no-axes-combined"></i>Nota</button><button type="button" data-action="add-assessment"><i data-lucide="file-pen-line"></i>Avaliação</button></div></article><article class="card settings-card span-12"><div class="card-title-row"><div><p class="card-label">Segurança</p><h3>Recomeçar neste dispositivo</h3><p class="card-subtitle">Remove o estado local e os PDFs guardados. O ficheiro academic-data.json não é apagado.</p></div><button class="button button-danger" type="button" data-action="reset-app"><i data-lucide="trash-2"></i>Apagar dados locais</button></div></article></div>';
   }
 
@@ -3782,18 +3880,22 @@
     if (key == null) return;
     key = key.trim();
     if (!key) { toast("Falta a chave privada de sincronização.", "warning"); return; }
+    setManualSyncActivity("A ligar ao Git…", "A validar a chave e a procurar os teus dados sincronizados.", 12, true);
     try {
       await Sync.configure(endpoint, key);
-      toast("A descarregar a versão mais recente do Git…");
+      setManualSyncActivity("A descarregar os dados…", "O Git tem prioridade neste primeiro arranque.", 42, true);
       var remoteState = await Sync.forcePull({ dispatch: false });
+      setManualSyncActivity("A aplicar neste dispositivo…", "A preparar as cadeiras, tarefas e definições.", 78, true);
       state = normalizeState(remoteState);
       await DB.saveState(state, { skipSync: true });
       await Sync.adoptRemoteState(state);
       onboarding = null;
       closeModal();
       setRoute("home");
+      finishManualSyncActivity(true);
       toast("Force pull concluído. Este dispositivo já usa os dados do Git.");
     } catch (error) {
+      finishManualSyncActivity(false);
       renderOnboarding();
       toast("Não foi possível carregar os dados do Git: " + error.message, "error");
     }
@@ -3810,26 +3912,32 @@
     if (key == null) return;
     key = key.trim();
     if (!key) { toast("Falta a chave privada de sincronização.", "warning"); return; }
+    setManualSyncActivity("A configurar a sincronização…", "A testar o Worker e a confirmar o repositório privado.", 18, true);
     try {
       await Sync.configure(endpoint, key);
-      toast("Ligação guardada. A testar e a criar o primeiro commit…");
+      setManualSyncActivity("A criar ou atualizar o Git…", "A sincronizar os dados deste dispositivo com segurança.", 52, true);
       await Sync.syncNow(state, defaultState());
-      render();
+      updateGitSyncCard(Sync.getStatus());
+      finishManualSyncActivity(true);
       toast("Git sincronizado com sucesso.");
     } catch (error) {
-      render();
+      updateGitSyncCard(Sync.getStatus());
+      finishManualSyncActivity(false);
       toast("Não foi possível ligar ao Git: " + error.message, "error");
     }
   }
 
   async function syncGitNow() {
     if (!Sync || !Sync.getStatus().configured) { await configureGitSync(); return; }
+    setManualSyncActivity("A sincronizar dados…", "A enviar alterações e a confirmar a versão final no Git.", null, false);
     try {
       await Sync.syncNow(state, defaultState());
-      render();
+      updateGitSyncCard(Sync.getStatus());
+      finishManualSyncActivity(true);
       toast("Alterações enviadas e dados atualizados.");
     } catch (error) {
-      render();
+      updateGitSyncCard(Sync.getStatus());
+      finishManualSyncActivity(false);
       toast("A sincronização ficou na fila: " + error.message, "warning");
     }
   }
@@ -3852,17 +3960,20 @@
   async function forceGitPull() {
     if (!Sync || !Sync.getStatus().configured) { await configureGitSync(); return; }
     closeModal();
+    setManualSyncActivity("A fazer force pull…", "A descarregar a versão do Git. Não feches a aplicação.", 18, true);
     try {
-      toast("A substituir os dados locais pela versão do Git…");
       var remoteState = await Sync.forcePull({ dispatch: false });
+      setManualSyncActivity("A aplicar os dados…", "A versão do Git está a substituir os dados deste dispositivo.", 72, true);
       state = normalizeState(remoteState);
       await DB.saveState(state, { skipSync: true });
       await Sync.adoptRemoteState(state);
       onboarding = null;
       render();
+      finishManualSyncActivity(true);
       toast("Force pull concluído. Os dados locais foram atualizados.");
     } catch (error) {
-      render();
+      finishManualSyncActivity(false);
+      updateGitSyncCard(Sync.getStatus());
       toast("Não foi possível forçar o pull: " + error.message, "error");
     }
   }
@@ -3870,16 +3981,19 @@
   async function forceGitPush() {
     if (!Sync || !Sync.getStatus().configured) { await configureGitSync(); return; }
     closeModal();
+    setManualSyncActivity("A fazer force push…", "A preparar os dados deste dispositivo para substituir a versão do Git.", 18, true);
     try {
-      toast("A substituir a versão do Git pelos dados deste dispositivo…");
       var confirmedState = await Sync.forcePush(state, { dispatch: false });
+      setManualSyncActivity("A confirmar o commit…", "O GitHub já recebeu os dados; falta confirmar a versão final.", 78, true);
       state = normalizeState(confirmedState);
       await DB.saveState(state, { skipSync: true });
       await Sync.adoptRemoteState(state);
       render();
+      finishManualSyncActivity(true);
       toast("Force push concluído. Foi criado um novo commit no Git.");
     } catch (error) {
-      render();
+      finishManualSyncActivity(false);
+      updateGitSyncCard(Sync.getStatus());
       toast("Não foi possível forçar o push: " + error.message, "error");
     }
   }
@@ -4280,7 +4394,7 @@
       }, 60000);
       if (!state.profile.onboardingComplete || !state.currentSemesterId || !activeCourses().length) startOnboarding(state.semesters.length ? "new-semester" : "first");
       if ("serviceWorker" in navigator && location.protocol !== "file:") {
-        navigator.serviceWorker.register("sw.js?v=13-git-force-controls", { updateViaCache: "none" }).catch(function () {});
+        navigator.serviceWorker.register("sw.js?v=14-git-sync-loading", { updateViaCache: "none" }).catch(function () {});
       }
     } catch (error) {
       console.error(error);
@@ -4485,7 +4599,7 @@
     });
   });
   window.addEventListener("twenty:sync-status", function () {
-    if (route && route.name === "settings" && state && !onboarding) render();
+    updateSyncActivityFromStatus(Sync ? Sync.getStatus() : null);
   });
   document.addEventListener("visibilitychange", function () {
     if (!document.hidden && Sync && state && Sync.getStatus().configured) Sync.syncNow(state, defaultState()).catch(function () {});
