@@ -3,6 +3,7 @@
 
   var DB = window.TwentyDB;
   var Sync = window.TwentySync;
+  var AI = window.TwentyAI;
   var app = document.getElementById("app");
   var view = document.getElementById("view");
   var modalRoot = document.getElementById("modalRoot");
@@ -10,6 +11,7 @@
   var searchInput = document.getElementById("globalSearch");
   var searchResults = document.getElementById("searchResults");
   var importInput = document.getElementById("jsonImportInput");
+  var pptxInput = document.getElementById("pptxImportInput");
   var syncActivity = document.getElementById("syncActivity");
   var syncActivityTitle = document.getElementById("syncActivityTitle");
   var syncActivityDetail = document.getElementById("syncActivityDetail");
@@ -27,6 +29,10 @@
   var guidedTour = null;
   var activeImageObjectUrls = [];
   var draggedStudyPayload = null;
+  var aiDraft = null;
+  var aiBusy = false;
+  var aiTransferRequest = null;
+  var aiProgress = { active: false, progress: null, title: "", detail: "" };
   var CANTEEN_API_URL = "https://sas.unl.pt/wp-json/wp/v2/pages/326?_fields=acf,link";
   var CANTEEN_INFO_API_URL = "https://sas.unl.pt/wp-json/wp/v2/pages/309?_fields=acf,link,modified";
   var CANTEEN_PAGE_URL = "https://sas.unl.pt/alimentacao/cantina-da-faculdade-de-ciencias-e-tecnologia-fct/";
@@ -42,7 +48,7 @@
   var COLORS = ["#a99df7", "#ff92ae", "#ffad72", "#79cdb8", "#80bee8", "#f3e873", "#cab6ea", "#87d7df"];
   var WEEKDAYS = ["Domingo", "Segunda", "Terça", "Quarta", "Quinta", "Sexta", "Sábado"];
   var SHORT_WEEKDAYS = ["Dom", "Seg", "Ter", "Qua", "Qui", "Sex", "Sáb"];
-  var ENTITY_ARRAYS = ["semesters", "courses", "schedule", "assessments", "events", "tasks", "lessons", "materials", "pastExams", "questions", "quizzes", "grades", "studyBlocks", "weeklyReviews"];
+  var ENTITY_ARRAYS = ["semesters", "courses", "schedule", "assessments", "events", "tasks", "lessons", "materials", "pastExams", "questions", "quizzes", "grades", "studyBlocks", "weeklyReviews", "aiProjects"];
 
   function uid(prefix) {
     return (prefix || "id") + "_" + Date.now().toString(36) + "_" + Math.random().toString(36).slice(2, 8);
@@ -102,11 +108,14 @@
   }
 
   function syncDisplayInfo(info) {
-    info = info || { state: "disabled", configured: false, pending: 0, conflicts: 0, lastError: "" };
+    info = info || { state: "disabled", configured: false, pending: 0, conflicts: 0, lastError: "", localVersion: 0, remoteVersion: 0, outdated: false };
+    var localVersion = Number(info.localVersion) || 0;
+    var remoteVersion = Number(info.remoteVersion) || 0;
+    var versionCopy = remoteVersion ? "Versão Git v" + remoteVersion + (localVersion && localVersion !== remoteVersion ? " · dispositivo v" + localVersion : "") : "A aguardar a primeira versão Git.";
     return {
-      title: !info.configured ? "Por configurar" : info.state === "syncing" ? "A sincronizar…" : info.state === "synced" ? "Sincronizado" : info.state === "offline" ? "Sem Internet" : info.state === "error" ? "Erro de sincronização" : "Pronto",
-      detail: !info.configured ? "Liga a app ao Worker que cria os commits no teu repositório privado." : info.pending ? info.pending + " alteração(ões) à espera de push." : info.lastError || "As alterações são fundidas entre dispositivos antes do commit.",
-      badgeClass: info.state === "error" || info.state === "offline" ? "badge-yellow" : info.state === "synced" ? "badge-mint" : "badge-violet"
+      title: !info.configured ? "Por configurar" : info.outdated ? "A atualizar em segundo plano…" : info.state === "checking" ? "A verificar a versão…" : info.state === "syncing" ? "A sincronizar…" : info.state === "synced" ? "Sincronizado" : info.state === "offline" ? "Sem Internet" : info.state === "error" ? "Erro de sincronização" : "Pronto",
+      detail: !info.configured ? "Liga a app ao Worker que cria os commits no teu repositório privado." : info.pending ? info.pending + " alteração(ões) à espera de push." : info.lastError || versionCopy,
+      badgeClass: info.state === "error" || info.state === "offline" ? "badge-yellow" : info.outdated ? "badge-yellow" : info.state === "synced" ? "badge-mint" : "badge-violet"
     };
   }
 
@@ -122,10 +131,14 @@
     var inline = document.getElementById("gitSyncInlineProgress");
     if (title) title.textContent = display.title;
     if (detail) detail.textContent = display.detail;
-    if (summary) summary.textContent = info.pending ? info.pending + " por enviar" : "PC + telemóvel";
+    if (summary) {
+      var localVersion = Number(info.localVersion) || 0;
+      var remoteVersion = Number(info.remoteVersion) || 0;
+      summary.textContent = info.pending ? info.pending + " por enviar" : remoteVersion ? (info.outdated || (localVersion && localVersion !== remoteVersion) ? "v" + localVersion + " → v" + remoteVersion : "Versão Git v" + remoteVersion) : "PC + telemóvel";
+    }
     if (badge) {
       badge.className = "badge " + display.badgeClass;
-      badge.textContent = info.conflicts ? info.conflicts + " conflito(s)" : "Protegido";
+      badge.textContent = info.conflicts ? info.conflicts + " conflito(s)" : info.outdated ? "Desatualizado" : info.remoteVersion ? "Atualizado" : "Protegido";
     }
     card.setAttribute("aria-busy", info.state === "syncing" ? "true" : "false");
     if (inline) {
@@ -140,23 +153,13 @@
   function updateSyncActivityFromStatus(info) {
     updateGitSyncCard(info);
     if (manualSyncActivity) return;
-    if (info && info.state === "syncing") {
-      showSyncActivity({
-        title: "A sincronizar dados…",
-        detail: info.pending ? "A enviar " + info.pending + " alteração(ões) e a confirmar o Git." : "A confirmar a versão mais recente no Git.",
-        progress: null,
-        blocking: false
-      });
-      return;
-    }
+    // A sincronização automática é silenciosa: só o cartão do Git muda de estado.
     clearTimeout(syncActivityHideTimer);
-    syncActivityHideTimer = setTimeout(function () {
-      if (!manualSyncActivity && syncActivity) {
-        syncActivity.hidden = true;
-        syncActivity.classList.remove("is-blocking");
-        if (app) app.setAttribute("aria-busy", "false");
-      }
-    }, 260);
+    if (syncActivity) {
+      syncActivity.hidden = true;
+      syncActivity.classList.remove("is-blocking");
+    }
+    if (app) app.setAttribute("aria-busy", "false");
   }
 
   function round(value, digits) {
@@ -230,7 +233,7 @@
 
   function defaultState() {
     return {
-      schemaVersion: 4,
+      schemaVersion: 5,
       meta: {
         revision: 0,
         updatedAt: "",
@@ -260,7 +263,11 @@
         studySessionMinutes: 50,
         studyBreakMinutes: 10,
         studyLunchStart: "13:00",
-        studyLunchMinutes: 60
+        studyLunchMinutes: 60,
+        aiModelMode: "auto",
+        aiOutput: "all",
+        aiQuestionCount: 10,
+        aiDifficulty: "auto"
       },
       currentSemesterId: null,
       semesters: [],
@@ -276,14 +283,15 @@
       quizzes: [],
       grades: [],
       studyBlocks: [],
-      weeklyReviews: []
+      weeklyReviews: [],
+      aiProjects: []
     };
   }
 
   function normalizeState(input) {
     var base = defaultState();
     var source = input && typeof input === "object" ? input : {};
-    base.schemaVersion = Math.max(4, Number(source.schemaVersion) || 0);
+    base.schemaVersion = Math.max(5, Number(source.schemaVersion) || 0);
     base.meta = Object.assign(base.meta, source.meta || {});
     base.profile = Object.assign(base.profile, source.profile || {});
     base.settings = Object.assign(base.settings, source.settings || {});
@@ -294,6 +302,10 @@
     base.settings.studySessionMinutes = clamp(base.settings.studySessionMinutes || 50, 20, 180);
     base.settings.studyBreakMinutes = clamp(base.settings.studyBreakMinutes || 10, 0, 60);
     base.settings.studyLunchMinutes = clamp(base.settings.studyLunchMinutes || 60, 0, 180);
+    if (["auto", "fast", "quality"].indexOf(base.settings.aiModelMode) < 0) base.settings.aiModelMode = "auto";
+    if (["all", "notes", "summary", "quiz", "flashcards"].indexOf(base.settings.aiOutput) < 0) base.settings.aiOutput = "all";
+    base.settings.aiQuestionCount = clamp(base.settings.aiQuestionCount || 10, 5, 30);
+    if (["auto", "easy", "medium", "hard"].indexOf(base.settings.aiDifficulty) < 0) base.settings.aiDifficulty = "auto";
     base.currentSemesterId = source.currentSemesterId || null;
     ENTITY_ARRAYS.forEach(function (key) {
       base[key] = asArray(source[key]).filter(function (item) { return item && typeof item === "object"; });
@@ -343,6 +355,16 @@
     });
     base.grades = base.grades.map(function (grade) {
       return Object.assign({ defenseStatus: "not-applicable", defenseType: "", defenseFinalScore: null }, grade);
+    });
+    base.aiProjects = base.aiProjects.map(function (project) {
+      return Object.assign({
+        id: uid("aiproject"), semesterId: base.currentSemesterId, courseId: null, quizId: null,
+        title: "Projeto de IA", fileName: "", fileSize: 0, slideCount: 0, slides: [], summary: "",
+        notes: null, flashcards: [], quizQuestions: [], output: "all", difficulty: "auto",
+        questionCount: 10, modelMode: "fast", modelId: "", createdAt: "", warning: ""
+      }, project, {
+        slides: asArray(project.slides), flashcards: asArray(project.flashcards), quizQuestions: asArray(project.quizQuestions)
+      });
     });
     return base;
   }
@@ -1143,7 +1165,7 @@
     } else if (next && next.course) {
       liveHtml = '<article class="card card-dark span-7"><div class="card-title-row"><div><p class="card-label">Próxima aula</p><h3>' + esc(next.lesson ? next.lesson.title : next.course.name) + '</h3><p class="card-subtitle">' + esc(next.course.name) + ' · ' + (next.dateISO === todayISO() ? "Hoje" : WEEKDAYS[next.date.getDay()]) + ' · ' + esc(next.schedule.start) + '–' + esc(next.schedule.end) + (next.schedule.room ? " · " + esc(next.schedule.room) : "") + '</p></div><span class="badge badge-yellow">' + esc(next.schedule.type || "Aula") + '</span></div><div class="live-meta"><span><i data-lucide="clock-3"></i>' + relativeDate(next.dateISO) + '</span><span><i data-lucide="map-pin"></i>' + esc(next.schedule.room || "Sala por definir") + '</span><span><i data-lucide="' + (next.lesson ? "check" : "file-plus-2") + '"></i>' + (next.lesson ? "Aula preparada" : "Por preparar") + '</span></div><div class="live-actions">' + (next.lesson ? '<button class="button button-yellow" type="button" data-route="lesson" data-id="' + attr(next.lesson.id) + '"><i data-lucide="arrow-right"></i>Abrir aula</button><button class="button" type="button" data-action="edit-lesson" data-id="' + attr(next.lesson.id) + '"><i data-lucide="pencil"></i>Editar aula</button>' : '<button class="button button-yellow" type="button" data-action="create-lesson" data-course="' + attr(next.course.id) + '" data-schedule="' + attr(next.schedule.id) + '" data-date="' + attr(next.dateISO) + '" data-start="' + attr(next.schedule.start) + '" data-end="' + attr(next.schedule.end) + '" data-room="' + attr(next.schedule.room || "") + '" data-type="' + attr(next.schedule.type || "T") + '"><i data-lucide="file-plus-2"></i>Preparar aula</button>') + '</div></article>';
     } else {
-      liveHtml = '<article class="card card-dark span-7">' + emptyState("calendar-clock", "Nenhuma aula em curso", "Configura o horário para identificar automaticamente as aulas em curso.", "add-schedule", "Adicionar horário") + "</article>";
+      liveHtml = '<article class="card card-dark span-7">' + emptyState("clock-3", "Nenhuma aula em curso", "Configura o horário para identificar automaticamente as aulas em curso.", "add-schedule", "Adicionar horário") + "</article>";
     }
 
     var taskHtml = pendingTasks.length ? pendingTasks.slice(0, 4).map(renderTaskRow).join("") : emptyState("check-check", "Sem tarefas pendentes", "Não existem tarefas por concluir.", "add-task", "Nova tarefa");
@@ -1465,7 +1487,7 @@
   }
 
   function plannerModeControl(active) {
-    return '<div class="planner-mode-control" role="group" aria-label="Vista da agenda"><button type="button" class="' + (active === "schedule" ? "is-active" : "") + '" data-action="planner-mode" data-mode="schedule"><i data-lucide="calendar-clock"></i>Horário</button><button type="button" class="' + (active === "calendar" ? "is-active" : "") + '" data-action="planner-mode" data-mode="calendar"><i data-lucide="calendar-days"></i>Calendário</button><button type="button" class="' + (active === "study-day" ? "is-active" : "") + '" data-action="planner-mode" data-mode="study-day"><i data-lucide="blocks"></i>Dia de estudo</button></div>';
+    return '<div class="planner-mode-control" role="group" aria-label="Vista da agenda"><button type="button" class="' + (active === "schedule" ? "is-active" : "") + '" data-action="planner-mode" data-mode="schedule"><i data-lucide="clock-3"></i>Horário</button><button type="button" class="' + (active === "calendar" ? "is-active" : "") + '" data-action="planner-mode" data-mode="calendar"><i data-lucide="calendar-days"></i>Calendário</button><button type="button" class="' + (active === "study-day" ? "is-active" : "") + '" data-action="planner-mode" data-mode="study-day"><i data-lucide="blocks"></i>Dia de estudo</button></div>';
   }
 
   function plannerSupportingCards() {
@@ -1799,7 +1821,7 @@
     var primary = mode === "calendar" ? renderCalendarView() : mode === "study-day" ? renderStudyDay() : renderScheduleView();
     var title = mode === "calendar" ? "Calendário do semestre" : mode === "study-day" ? "Planeamento diário" : "Horário semanal";
     var copy = mode === "calendar" ? "Aulas, avaliações, eventos, tarefas e blocos de estudo." : mode === "study-day" ? "Arrasta itens para uma hora ou usa Agendar no telemóvel." : "Os períodos do horário determinam a aula em curso.";
-    var actions = mode === "study-day" ? '<button class="button" type="button" data-action="study-planner-settings"><i data-lucide="sliders-horizontal"></i>Configurar</button><button class="button" type="button" data-action="copy-study-day"><i data-lucide="copy"></i>Copiar rotina</button><button class="button" type="button" data-action="add-study-block"><i data-lucide="plus"></i>Bloco</button><button class="button button-dark" type="button" data-action="auto-fill-study-day"><i data-lucide="wand-sparkles"></i>Preencher dia</button>' : '<button class="button" type="button" data-action="add-schedule"><i data-lucide="calendar-plus"></i>Bloco do horário</button><button class="button button-dark" type="button" data-action="create-lesson"><i data-lucide="plus"></i>Preparar aula</button>';
+    var actions = mode === "study-day" ? '<button class="button" type="button" data-action="study-planner-settings"><i data-lucide="sliders-horizontal"></i>Configurar</button><button class="button" type="button" data-action="copy-study-day"><i data-lucide="copy"></i>Copiar rotina</button><button class="button" type="button" data-action="add-study-block"><i data-lucide="plus"></i>Bloco</button><button class="button button-dark" type="button" data-action="auto-fill-study-day"><i data-lucide="sparkles"></i>Preencher dia</button>' : '<button class="button" type="button" data-action="add-schedule"><i data-lucide="calendar-plus"></i>Bloco do horário</button><button class="button button-dark" type="button" data-action="create-lesson"><i data-lucide="plus"></i>Preparar aula</button>';
     return '<div class="page-head"><div><h2>' + title + '</h2><p>' + copy + '</p></div><div class="page-actions">' + plannerModeControl(mode) + actions + '</div></div>' + primary + (mode === "study-day" ? "" : plannerSupportingCards());
   }
 
@@ -1853,7 +1875,337 @@
     return '<div class="page-head"><div><button class="button button-ghost button-small" type="button" data-route="study"><i data-lucide="arrow-left"></i>Estudar</button><h2 style="margin-top:11px">Revisão da semana</h2><p>' + esc(formatDate(weekStart)) + '–' + esc(formatDate(weekEnd)) + '</p></div><div class="page-actions"><span class="badge ' + (review && review.completedAt ? "badge-mint" : "badge-violet") + '">' + (review && review.completedAt ? "Concluída" : "Por concluir") + '</span><button class="button button-dark" type="button" data-action="weekly-review"><i data-lucide="clipboard-check"></i>' + (review ? "Atualizar revisão" : "Fazer revisão") + '</button></div></div><div class="bento-grid"><article class="card card-pink span-3 metric-card"><div class="metric-top"><p class="card-label">Tarefas atrasadas</p><span class="metric-icon"><i data-lucide="triangle-alert"></i></span></div><div><p class="metric-value">' + overdue.length + '</p><p class="metric-caption">por concluir</p></div></article><article class="card card-yellow span-3 metric-card"><div class="metric-top"><p class="card-label">Aulas por rever</p><span class="metric-icon"><i data-lucide="rotate-ccw"></i></span></div><div><p class="metric-value">' + unreviewed.length + '</p><p class="metric-caption">quiz de aula pendente</p></div></article><article class="card card-mint span-3 metric-card"><div class="metric-top"><p class="card-label">Quizzes concluídos</p><span class="metric-icon"><i data-lucide="badge-check"></i></span></div><div><p class="metric-value">' + quizCompleted.length + '</p><p class="metric-caption">esta semana</p></div></article><article class="card card-violet span-3 metric-card"><div class="metric-top"><p class="card-label">Estudo planeado</p><span class="metric-icon"><i data-lucide="timer"></i></span></div><div><p class="metric-value">' + round(plannedMinutes / 60, 1) + '</p><p class="metric-caption">horas em blocos</p></div></article><article class="card span-6"><div class="card-title-row"><div><h3>Prioridades</h3></div></div>' + priorityHtml + '</article><article class="card span-6"><div class="card-title-row"><div><h3>Dúvidas a esclarecer</h3></div></div><div class="review-doubts">' + doubtHtml + '</div></article><article class="card span-12"><div class="card-title-row"><div><h3>Próximas duas semanas</h3></div><span class="badge badge-orange">' + upcoming.length + ' avaliações</span></div><div class="list-stack">' + (upcoming.length ? upcoming.map(function (assessment) { var course = courseById(assessment.courseId); return '<div class="list-row"><span class="list-icon orange"><i data-lucide="' + assessmentIcon(assessment.type) + '"></i></span><span class="list-content"><strong>' + esc(assessment.title) + '</strong><small>' + esc(course ? course.name : "Cadeira") + ' · ' + relativeDate(assessment.date) + '</small></span><button class="row-button" type="button" data-action="assessment-scope" data-id="' + attr(assessment.id) + '"><i data-lucide="arrow-right"></i></button></div>'; }).join("") : '<p class="card-subtitle">Não existem avaliações marcadas nos próximos 14 dias.</p>') + '</div></article>' + renderStudyHourEstimate() + '</div>';
   }
 
+
+  function aiProjectById(id) {
+    return state.aiProjects.find(function (project) { return project.id === id; }) || null;
+  }
+
+  function aiOutputLabel(value) {
+    if (value === "notes") return "Apontamentos";
+    if (value === "summary") return "Resumo rápido";
+    if (value === "quiz") return "Quiz";
+    if (value === "flashcards") return "Flashcards";
+    return "Tudo";
+  }
+
+  function aiDifficultyLabel(value) {
+    if (value === "easy") return "Fácil";
+    if (value === "medium") return "Média";
+    if (value === "hard") return "Difícil";
+    return "Automática";
+  }
+
+  function setAIProgress(title, detail, progress) {
+    aiProgress = { active: true, title: title || "A preparar a IA…", detail: detail || "Aguarda um momento.", progress: progress == null ? null : clamp(progress, 0, 100) };
+    updateAIProgressDOM();
+  }
+
+  function clearAIProgress() {
+    aiProgress = { active: false, progress: null, title: "", detail: "" };
+    updateAIProgressDOM();
+  }
+
+  function updateAIProgressDOM() {
+    var card = document.getElementById("aiProgressCard");
+    if (!card) return;
+    card.hidden = !aiProgress.active;
+    var title = document.getElementById("aiProgressTitle");
+    var detail = document.getElementById("aiProgressDetail");
+    var bar = document.getElementById("aiProgressBar");
+    var track = bar && bar.parentElement;
+    if (title) title.textContent = aiProgress.title || "A preparar a IA…";
+    if (detail) detail.textContent = aiProgress.detail || "Aguarda um momento.";
+    if (track) track.classList.toggle("is-indeterminate", aiProgress.progress == null);
+    if (bar) bar.style.width = aiProgress.progress == null ? "38%" : clamp(aiProgress.progress, 2, 100) + "%";
+  }
+
+  function aiSourceButtons(project, slides) {
+    var unique = Array.from(new Set(asArray(slides).map(Number).filter(Number.isFinite))).slice(0, 12);
+    if (!unique.length) return "";
+    return '<div class="ai-source-list">' + unique.map(function (number) {
+      return '<button class="ai-source-chip" type="button" data-action="ai-open-slide" data-project="' + attr(project.id) + '" data-slide="' + number + '"><i data-lucide="presentation"></i>Slide ' + number + '</button>';
+    }).join("") + '</div>';
+  }
+
+  function renderAIProgress() {
+    return '<article id="aiProgressCard" class="card card-dark span-12 ai-progress-card" ' + (aiProgress.active ? '' : 'hidden') + '><div class="ai-progress-head"><span class="ai-model-spinner" aria-hidden="true"></span><div><p class="card-label">Twenty AI · sincronização</p><h3 id="aiProgressTitle">' + esc(aiProgress.title || "A preparar a IA…") + '</h3><p id="aiProgressDetail" class="card-subtitle">' + esc(aiProgress.detail || "Aguarda um momento.") + '</p></div><button class="icon-button ai-cancel-button" type="button" data-action="ai-cancel" aria-label="Cancelar geração"><i data-lucide="x"></i></button></div><div class="ai-progress-track ' + (aiProgress.progress == null ? 'is-indeterminate' : '') + '"><span id="aiProgressBar" style="width:' + (aiProgress.progress == null ? '38' : clamp(aiProgress.progress, 2, 100)) + '%"></span></div><small>Não feches este separador durante o upload, download ou geração.</small></article>';
+  }
+
+  function renderAIProjectCard(project) {
+    var course = courseById(project.courseId);
+    var outputCount = asArray(project.quizQuestions).length + asArray(project.flashcards).length + asArray(project.notes && project.notes.sections).length;
+    var hasOutput = outputCount > 0 || !!project.summary;
+    var hasFile = !!(project.remoteFile && project.remoteFile.path);
+    var badge = hasOutput ? (project.modelMode === "quality" ? "IA qualidade" : "IA pronta") : hasFile ? "PPT sincronizado" : "Só neste dispositivo";
+    var badgeClass = hasOutput ? "badge-violet" : hasFile ? "badge-mint" : "badge-yellow";
+    var icon = hasOutput ? "brain" : "presentation";
+    var actions = '<button class="button button-dark button-small" type="button" data-action="ai-open-project" data-id="' + attr(project.id) + '"><i data-lucide="arrow-up-right"></i>Abrir</button>';
+    if (hasFile) actions += '<button class="button button-small" type="button" data-action="ai-download-pptx" data-id="' + attr(project.id) + '"><i data-lucide="download"></i>PPT</button>';
+    if (!hasOutput) actions += '<button class="button button-small" type="button" data-action="ai-use-project" data-id="' + attr(project.id) + '"><i data-lucide="sparkles"></i>Gerar</button>';
+    else if (project.quizId) actions += '<button class="button button-small" type="button" data-action="ai-start-quiz" data-id="' + attr(project.id) + '"><i data-lucide="play"></i>Quiz</button>';
+    return '<article class="card ai-project-card span-4"><div class="card-title-row"><div><span class="badge ' + badgeClass + '">' + esc(badge) + '</span><h3 style="margin-top:12px">' + esc(project.title || project.fileName || "Slides") + '</h3><p class="card-subtitle">' + esc(course ? course.code || course.name : "Sem cadeira") + ' · ' + Number(project.slideCount || 0) + ' slides</p></div><span class="metric-icon"><i data-lucide="' + icon + '"></i></span></div><div class="ai-project-stats"><span><i data-lucide="cloud-check"></i>' + (hasFile ? "Guardado no Git" : "Local") + '</span><span><i data-lucide="hard-drive"></i>' + esc(formatBytes(project.fileSize || project.remoteFile && project.remoteFile.size || 0)) + '</span></div><div class="list-actions">' + actions + '</div></article>';
+  }
+
+  function renderStudyAI() {
+    setHeader("IA de estudo", "Estudar");
+    var supported = !!(AI && AI.supportsWebGPU && AI.supportsWebGPU());
+    var recommendation = AI && AI.selectedModel ? AI.selectedModel("auto") : { mode: "fast", label: "Modelo rápido", size: "" };
+    var projects = semesterItems("aiProjects").slice().sort(function (a, b) { return String(b.createdAt || "").localeCompare(String(a.createdAt || "")); });
+    var courseValue = aiDraft && aiDraft.courseId || "";
+    var modelValue = state.settings.aiModelMode || "auto";
+    var outputValue = state.settings.aiOutput || "all";
+    var difficultyValue = state.settings.aiDifficulty || "auto";
+    var questionValue = Number(state.settings.aiQuestionCount) || 10;
+    var draftHtml = aiDraft ? '<div class="ai-file-ready"><span class="ai-file-icon"><i data-lucide="presentation"></i></span><div><strong>' + esc(aiDraft.fileName) + '</strong><small>' + Number(aiDraft.slideCount || 0) + ' slides · ' + formatBytes(aiDraft.fileSize || 0) + ' · ' + (aiDraft.remoteFile && aiDraft.remoteFile.path ? 'sincronizado no Git' : 'só neste dispositivo') + '</small></div><button class="icon-button" type="button" data-action="ai-clear-draft" aria-label="Fechar PowerPoint selecionado"><i data-lucide="x"></i></button></div>' : '<button class="ai-upload-zone" type="button" data-action="ai-pick-pptx"><span class="ai-upload-icon"><i data-lucide="upload-cloud"></i></span><strong>Escolher e sincronizar PowerPoint</strong><small>.pptx · até 25 MB · upload com progresso para o repositório privado</small></button>';
+    var modelWarning = supported ? '<span class="badge badge-mint"><i data-lucide="cpu"></i>WebGPU disponível</span>' : '<span class="badge badge-yellow"><i data-lucide="triangle-alert"></i>WebGPU indisponível</span>';
+    var supportCopy = supported ? 'O modelo corre no browser e fica guardado neste dispositivo depois do primeiro download.' : 'Abre esta página no Chrome atualizado. Sem WebGPU, a geração local não consegue arrancar neste dispositivo.';
+    var projectHtml = projects.length ? projects.map(renderAIProjectCard).join("") : '<div class="span-12">' + emptyState("brain", "Ainda não tens projetos de IA", "Envia um PowerPoint para o Git e cria apontamentos, quizzes e flashcards sem API.", "ai-pick-pptx", "Escolher PowerPoint") + '</div>';
+
+    return '<div class="page-head"><div><button class="button button-ghost button-small" type="button" data-route="study"><i data-lucide="arrow-left"></i>Estudar</button><h2 style="margin-top:11px">Transforma slides em estudo.</h2><p>Apontamentos, resumo, quiz e flashcards gerados localmente no browser.</p></div><div class="page-actions">' + modelWarning + '<button class="button" type="button" data-action="ai-pick-pptx"><i data-lucide="file-plus-2"></i>Importar .pptx</button></div></div><div class="bento-grid ai-page"><article class="card card-violet span-12 ai-hero"><div><p class="card-label">Twenty AI · offline depois do download</p><h2>Dos slides para o modo estudo.</h2><p>' + esc(supportCopy) + '</p></div><div class="ai-hero-model"><span>Recomendado neste dispositivo</span><strong>' + esc(recommendation.label) + '</strong><small>' + esc(recommendation.size || "") + '</small></div></article>' + renderAIProgress() + '<article class="card span-7 ai-generator-card"><div class="card-title-row"><div><p class="card-label">1 · Importar</p><h3>PowerPoint</h3><p class="card-subtitle">A Twenty extrai o texto e envia o .pptx para a pasta data/files do repositório privado.</p></div><span class="metric-icon"><i data-lucide="presentation"></i></span></div>' + draftHtml + '<form id="aiGeneratorForm" class="form-grid ai-generator-form"><div class="field"><label>Cadeira</label><select name="courseId"><option value="">Sem cadeira específica</option>' + courseOptions(courseValue) + '</select></div><div class="field"><label>Modelo</label><select name="modelMode"><option value="auto" ' + (modelValue === "auto" ? 'selected' : '') + '>Automático · recomendado</option><option value="fast" ' + (modelValue === "fast" ? 'selected' : '') + '>Rápido · Qwen 0.5B</option><option value="quality" ' + (modelValue === "quality" ? 'selected' : '') + '>Qualidade · Qwen 1.5B</option></select></div><div class="field"><label>O que criar</label><select name="output"><option value="all" ' + (outputValue === "all" ? 'selected' : '') + '>Tudo</option><option value="notes" ' + (outputValue === "notes" ? 'selected' : '') + '>Apontamentos completos</option><option value="summary" ' + (outputValue === "summary" ? 'selected' : '') + '>Resumo rápido</option><option value="quiz" ' + (outputValue === "quiz" ? 'selected' : '') + '>Quiz</option><option value="flashcards" ' + (outputValue === "flashcards" ? 'selected' : '') + '>Flashcards</option></select></div><div class="field"><label>Dificuldade</label><select name="difficulty"><option value="auto" ' + (difficultyValue === "auto" ? 'selected' : '') + '>Automática</option><option value="easy" ' + (difficultyValue === "easy" ? 'selected' : '') + '>Fácil</option><option value="medium" ' + (difficultyValue === "medium" ? 'selected' : '') + '>Média</option><option value="hard" ' + (difficultyValue === "hard" ? 'selected' : '') + '>Difícil</option></select></div><div class="field field-full"><label>Número de perguntas / flashcards</label><div class="ai-range-row"><input name="questionCount" type="range" min="5" max="30" step="5" value="' + questionValue + '" data-role="ai-question-range"><output id="aiQuestionCountOutput">' + questionValue + '</output></div></div></form><button class="button button-dark ai-generate-button" type="button" data-action="ai-generate" ' + (!aiDraft || aiBusy || !supported ? 'disabled' : '') + '><i data-lucide="sparkles"></i>' + (aiBusy ? 'A gerar…' : 'Gerar material de estudo') + '</button><p class="form-note"><strong>Primeira utilização:</strong> o modelo pode ocupar centenas de MB. Depois fica em cache neste dispositivo. Slides compostos apenas por imagens ainda não têm OCR.</p></article><article class="card span-5 ai-device-card"><div class="card-title-row"><div><p class="card-label">Como funciona</p><h3>Privado por defeito</h3></div><span class="metric-icon"><i data-lucide="shield-check"></i></span></div><div class="ai-steps"><div><span>1</span><p><strong>Extrai texto</strong><small>JSZip abre o .pptx no browser.</small></p></div><div><span>2</span><p><strong>Gera localmente</strong><small>WebLLM usa a GPU com WebGPU.</small></p></div><div><span>3</span><p><strong>Guarda na Twenty</strong><small>PowerPoint, apontamentos e quiz sincronizam com o Git; o modelo continua local.</small></p></div></div><div class="form-note"><strong>Modelo recomendado:</strong> ' + esc(recommendation.label) + ' (' + esc(recommendation.size || "tamanho variável") + '). Podes escolher manualmente antes de gerar.</div></article><section class="span-12 section-block"><div class="section-heading"><div><h3>Apresentações sincronizadas</h3><p>Os PowerPoints aparecem em todos os teus dispositivos; os resultados da IA ficam associados ao mesmo ficheiro.</p></div><span class="badge badge-violet">' + projects.length + '</span></div><div class="bento-grid">' + projectHtml + '</div></section></div>';
+  }
+
+  async function handleAIPptxFile(file) {
+    if (!file || !AI) return;
+    if (!Sync || !Sync.getStatus().configured) {
+      toast("Configura primeiro o Git em Admin & dados para sincronizar o PowerPoint.", "warning");
+      if (pptxInput) pptxInput.value = "";
+      return;
+    }
+    if (!navigator.onLine) {
+      toast("Precisas de Internet para enviar o PowerPoint para o repositório privado.", "warning");
+      if (pptxInput) pptxInput.value = "";
+      return;
+    }
+    aiBusy = true;
+    aiDraft = null;
+    var projectId = uid("aiproject");
+    setAIProgress("A abrir o PowerPoint…", "A preparar o leitor de slides.", 2);
+    if (route.name !== "study" || route.tab !== "ai") setRoute("study", null, "ai");
+    else render();
+    try {
+      var extracted = await AI.extractPptx(file, function (report) {
+        var progress = report.progress == null ? null : Math.min(30, Number(report.progress));
+        setAIProgress("A extrair os slides…", report.text || "A ler o PowerPoint.", progress);
+      });
+      setAIProgress("A enviar o PowerPoint…", "A iniciar o upload seguro para o repositório privado.", 34);
+      var remoteFile = await Sync.uploadFile(file, {
+        id: projectId,
+        name: file.name,
+        onProgress: function (report) {
+          var progress = report.progress == null ? null : 34 + Math.round(report.progress * 0.52);
+          var detail = report.total ? formatBytes(report.loaded) + " de " + formatBytes(report.total) + " enviados" : "A enviar o ficheiro…";
+          setAIProgress("A enviar o PowerPoint…", detail, progress);
+        },
+        onUploadComplete: function () {
+          setAIProgress("A confirmar no GitHub…", "O upload terminou. A aguardar a criação do commit do ficheiro.", 88);
+        },
+        onReady: function (request) { aiTransferRequest = request; }
+      });
+      aiTransferRequest = null;
+      var project = {
+        id: projectId,
+        semesterId: state.currentSemesterId,
+        courseId: null,
+        quizId: null,
+        title: String(extracted.fileName || file.name).replace(/\.pptx$/i, ""),
+        fileName: extracted.fileName || file.name,
+        fileSize: extracted.fileSize || file.size,
+        slideCount: extracted.slideCount,
+        slides: extracted.slides,
+        remoteFile: remoteFile,
+        summary: "",
+        notes: null,
+        flashcards: [],
+        quizQuestions: [],
+        output: "pending",
+        difficulty: "auto",
+        questionCount: 10,
+        modelMode: "",
+        modelId: "",
+        status: "uploaded",
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString()
+      };
+      state.aiProjects.unshift(project);
+      aiDraft = project;
+      setAIProgress("A guardar na Twenty…", "A sincronizar os metadados e o texto dos slides para os outros dispositivos.", 94);
+      await save(true);
+      try { await Sync.syncNow(state, defaultState()); } catch (syncError) { console.warn("PPT metadata sync queued:", syncError); }
+      aiDraft = aiProjectById(projectId) || project;
+      aiBusy = false;
+      setAIProgress("PowerPoint sincronizado", "O ficheiro já pode aparecer nos teus outros dispositivos.", 100);
+      setTimeout(function () { clearAIProgress(); render(); }, 520);
+      render();
+      toast(extracted.slideCount + " slides enviados e sincronizados.");
+    } catch (error) {
+      aiBusy = false;
+      clearAIProgress();
+      render();
+      toast(error.message || "Não foi possível enviar o PowerPoint.", "error");
+    } finally {
+      aiTransferRequest = null;
+      if (pptxInput) pptxInput.value = "";
+    }
+  }
+
+  async function generateAIProject() {
+    if (!AI || !aiDraft || aiBusy) return;
+    var form = document.getElementById("aiGeneratorForm");
+    if (!form) return;
+    var sourceProject = aiProjectById(aiDraft.id) || aiDraft;
+    var courseId = form.elements.courseId.value || null;
+    var options = {
+      modelMode: form.elements.modelMode.value || "auto",
+      output: form.elements.output.value || "all",
+      difficulty: form.elements.difficulty.value || "auto",
+      questionCount: Number(form.elements.questionCount.value) || 10
+    };
+    state.settings.aiModelMode = options.modelMode;
+    state.settings.aiOutput = options.output;
+    state.settings.aiDifficulty = options.difficulty;
+    state.settings.aiQuestionCount = options.questionCount;
+    aiBusy = true;
+    setAIProgress("A preparar a IA local…", "Na primeira utilização, o modelo é descarregado para este dispositivo.", 31);
+    render();
+    try {
+      var project = await AI.generateStudyPack(sourceProject, options, function (report) {
+        var title = report.kind === "model" ? "A preparar o modelo…" : report.kind === "warning" ? "Modo de compatibilidade" : report.kind === "done" ? "A terminar…" : "A criar o teu material…";
+        setAIProgress(title, report.text || "A processar os slides.", report.progress);
+      });
+      project.id = sourceProject.id;
+      project.semesterId = state.currentSemesterId;
+      project.courseId = courseId;
+      project.remoteFile = sourceProject.remoteFile || null;
+      project.createdAt = sourceProject.createdAt || project.createdAt;
+      project.updatedAt = new Date().toISOString();
+      project.status = "ready";
+      if (sourceProject.quizId) state.quizzes = state.quizzes.filter(function (quiz) { return quiz.id !== sourceProject.quizId; });
+      if (asArray(project.quizQuestions).length) {
+        var quiz = { id: uid("quiz"), semesterId: state.currentSemesterId, courseId: courseId, lessonId: null, title: "IA · " + (project.title || project.fileName || "Slides"), questions: project.quizQuestions, generatedByAI: true, aiProjectId: project.id, createdAt: new Date().toISOString(), lastScore: null };
+        state.quizzes.push(quiz);
+        project.quizId = quiz.id;
+      }
+      var index = state.aiProjects.findIndex(function (item) { return item.id === project.id; });
+      if (index >= 0) state.aiProjects[index] = project;
+      else state.aiProjects.unshift(project);
+      setAIProgress("A sincronizar o resultado…", "A enviar apontamentos, flashcards e quiz para o Git.", 96);
+      await save(true);
+      try {
+        await Sync.syncNow(state, defaultState());
+        setAIProgress("Material sincronizado", "O PowerPoint e o quiz já estão disponíveis nos outros dispositivos.", 100);
+      } catch (syncError) {
+        console.warn("AI project sync queued:", syncError);
+        setAIProgress("Material guardado", "Ficou na fila e será enviado automaticamente quando a ligação estabilizar.", 100);
+      }
+      aiDraft = null;
+      aiBusy = false;
+      setTimeout(function () { clearAIProgress(); render(); }, 520);
+      render();
+      toast("Material criado e sincronizado na Twenty.");
+      openAIProject(project.id);
+    } catch (error) {
+      aiBusy = false;
+      clearAIProgress();
+      render();
+      if (String(error.message || "").toLowerCase().indexOf("cancel") < 0) toast(error.message || "A IA local não conseguiu terminar.", "error");
+    }
+  }
+
+  function openAIProject(id) {
+    var project = aiProjectById(id);
+    if (!project) return;
+    var course = courseById(project.courseId);
+    var notes = project.notes || null;
+    var hasFile = !!(project.remoteFile && project.remoteFile.path);
+    var notesHtml = notes ? '<section class="ai-result-section"><div class="section-heading"><div><p class="card-label">Apontamentos</p><h3>' + esc(notes.title || project.title) + '</h3></div></div>' + (notes.overview ? '<p class="ai-overview">' + nl2br(notes.overview) + '</p>' : '') + asArray(notes.sections).map(function (section) { return '<article class="ai-note-section"><h4>' + esc(section.heading) + '</h4><p>' + nl2br(section.content) + '</p>' + aiSourceButtons(project, section.sourceSlides) + '</article>'; }).join("") + (asArray(notes.keyTakeaways).length ? '<div class="ai-takeaways"><p class="card-label">O essencial</p><ul>' + notes.keyTakeaways.map(function (item) { return '<li>' + esc(item) + '</li>'; }).join("") + '</ul></div>' : '') + '</section>' : (project.summary ? '<section class="ai-result-section"><p class="card-label">Resumo</p><p class="ai-overview">' + nl2br(project.summary) + '</p></section>' : '<section class="ai-result-section ai-awaiting-generation"><span class="metric-icon"><i data-lucide="sparkles"></i></span><div><p class="card-label">Pronto para gerar</p><h3>O PowerPoint já está sincronizado</h3><p class="card-subtitle">Podes gerar os apontamentos e o quiz neste dispositivo ou noutro com WebGPU.</p></div><button class="button button-dark" type="button" data-action="ai-use-project" data-id="' + attr(project.id) + '"><i data-lucide="sparkles"></i>Gerar material</button></section>');
+    var fileHtml = '<section class="ai-result-section ai-file-sync-section"><span class="ai-file-icon"><i data-lucide="presentation"></i></span><div><p class="card-label">PowerPoint original</p><h3>' + esc(project.fileName || "Apresentação") + '</h3><p class="card-subtitle">' + formatBytes(project.fileSize || project.remoteFile && project.remoteFile.size || 0) + ' · ' + Number(project.slideCount || 0) + ' slides · ' + (hasFile ? 'guardado em data/files' : 'apenas local') + '</p></div>' + (hasFile ? '<button class="button" type="button" data-action="ai-download-pptx" data-id="' + attr(project.id) + '"><i data-lucide="download"></i>Descarregar</button>' : '') + '</section>';
+    var cardsHtml = asArray(project.flashcards).length ? '<section class="ai-result-section"><div class="section-heading"><div><p class="card-label">Flashcards</p><h3>' + project.flashcards.length + ' cartões</h3></div></div><div class="ai-flashcard-grid">' + project.flashcards.map(function (card, index) { return '<details class="ai-flashcard"><summary><span>' + (index + 1) + '</span>' + esc(card.front) + '</summary><div><p>' + nl2br(card.back) + '</p>' + aiSourceButtons(project, card.sourceSlides) + '</div></details>'; }).join("") + '</div></section>' : '';
+    var quizHtml = asArray(project.quizQuestions).length ? '<section class="ai-result-section ai-quiz-summary"><div><p class="card-label">Quiz</p><h3>' + project.quizQuestions.length + ' perguntas prontas</h3><p class="card-subtitle">Dificuldade ' + esc(aiDifficultyLabel(project.difficulty).toLowerCase()) + ' · resposta e explicação incluídas.</p></div><button class="button button-dark" type="button" data-action="ai-start-quiz" data-id="' + attr(project.id) + '"><i data-lucide="play"></i>Começar quiz</button></section>' : '';
+    var warning = project.warning ? '<div class="form-note"><strong>Compatibilidade:</strong> ' + esc(project.warning) + '</div>' : '';
+    var body = '<div class="ai-project-modal-head"><div><span class="badge ' + (hasFile ? 'badge-mint' : 'badge-yellow') + '">' + (hasFile ? 'PPT sincronizado' : 'PPT local') + '</span><h2>' + esc(project.title) + '</h2><p>' + esc(course ? course.name : "Sem cadeira") + ' · ' + Number(project.slideCount || 0) + ' slides' + (project.modelMode ? ' · ' + esc(project.modelMode === "quality" ? "modelo de qualidade" : "modelo rápido") : '') + '</p></div><span class="ai-file-icon"><i data-lucide="' + (notes || project.summary ? 'brain' : 'presentation') + '"></i></span></div>' + fileHtml + warning + notesHtml + cardsHtml + quizHtml;
+    var footer = '<footer class="modal-foot"><button class="button button-danger" type="button" data-action="ai-delete-project" data-id="' + attr(project.id) + '"><i data-lucide="trash-2"></i>Apagar</button><button class="button" type="button" data-action="close-modal">Fechar</button></footer>';
+    openModal("Projeto de IA", body, { className: "modal-wide ai-project-modal", footer: footer });
+  }
+
+  function useAIProject(id) {
+    var project = aiProjectById(id);
+    if (!project) return;
+    aiDraft = project;
+    closeModal();
+    setRoute("study", null, "ai");
+    render();
+    toast("PowerPoint selecionado. Escolhe o que queres gerar.");
+  }
+
+  async function downloadAIProjectFile(id) {
+    var project = aiProjectById(id);
+    if (!project || !project.remoteFile || !project.remoteFile.path || !Sync) { toast("Este PowerPoint não está disponível no servidor.", "warning"); return; }
+    closeModal();
+    setAIProgress("A descarregar o PowerPoint…", "A preparar o ficheiro guardado no repositório privado.", 4);
+    render();
+    try {
+      var blob = await Sync.downloadFile(project.remoteFile, { onProgress: function (report) { var progress = report.progress == null ? null : 5 + Math.round(report.progress * 0.9); var detail = report.total ? formatBytes(report.loaded) + " de " + formatBytes(report.total) + " descarregados" : "A receber o ficheiro…"; setAIProgress("A descarregar o PowerPoint…", detail, progress); }, onReady: function (request) { aiTransferRequest = request; } });
+      aiTransferRequest = null;
+      setAIProgress("PowerPoint pronto", "A abrir o download neste dispositivo.", 100);
+      var url = URL.createObjectURL(blob);
+      var link = document.createElement("a");
+      link.href = url;
+      link.download = project.fileName || project.remoteFile.name || "apresentacao.pptx";
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      setTimeout(function () { URL.revokeObjectURL(url); clearAIProgress(); render(); }, 800);
+    } catch (error) {
+      aiTransferRequest = null;
+      clearAIProgress();
+      render();
+      toast(error.message || "Não foi possível descarregar o PowerPoint.", "error");
+    }
+  }
+
+  function openAISlide(projectId, number) {
+    var project = aiProjectById(projectId);
+    if (!project) return;
+    var slide = asArray(project.slides).find(function (item) { return Number(item.number) === Number(number); });
+    if (!slide) { toast("O texto deste slide não está disponível.", "warning"); return; }
+    var body = '<div class="ai-slide-preview"><span class="badge badge-violet">Slide ' + Number(slide.number) + '</span><h3>' + esc(slide.title || "Slide " + slide.number) + '</h3><div class="form-note">' + (slide.text ? nl2br(slide.text) : "Este slide não tinha texto selecionável.") + '</div></div>';
+    var footer = '<footer class="modal-foot"><button class="button" type="button" data-action="ai-open-project" data-id="' + attr(project.id) + '"><i data-lucide="arrow-left"></i>Voltar ao projeto</button></footer>';
+    openModal("Fonte dos apontamentos", body, { footer: footer });
+  }
+
+  function confirmDeleteAIProject(id) {
+    var project = aiProjectById(id);
+    if (!project) return;
+    var fileCopy = project.remoteFile && project.remoteFile.path ? " O PowerPoint sincronizado também será apagado de data/files." : "";
+    openModal("Apagar projeto de IA?", '<p class="onboarding-copy" style="margin-top:0">Vais apagar os apontamentos, flashcards e o quiz de <strong>' + esc(project.title) + '</strong>.' + fileCopy + '</p>', { footer: '<footer class="modal-foot"><button class="button" type="button" data-action="ai-open-project" data-id="' + attr(project.id) + '">Cancelar</button><button class="button button-danger" type="button" data-action="confirm-ai-delete-project" data-id="' + attr(project.id) + '"><i data-lucide="trash-2"></i>Apagar</button></footer>' });
+  }
+
+  async function deleteAIProject(id) {
+    var project = aiProjectById(id);
+    if (!project) return;
+    closeModal();
+    setAIProgress("A apagar o projeto…", project.remoteFile && project.remoteFile.path ? "A remover o PowerPoint do repositório privado." : "A remover os dados da Twenty.", 18);
+    render();
+    try {
+      if (project.remoteFile && project.remoteFile.path && Sync) { await Sync.deleteFile(project.remoteFile); setAIProgress("A atualizar a data…", "A remover apontamentos e quiz do estado sincronizado.", 72); }
+      state.aiProjects = state.aiProjects.filter(function (item) { return item.id !== id; });
+      if (project.quizId) state.quizzes = state.quizzes.filter(function (quiz) { return quiz.id !== project.quizId; });
+      if (aiDraft && aiDraft.id === id) aiDraft = null;
+      await save(true);
+      if (Sync && Sync.getStatus().configured) { try { await Sync.syncNow(state, defaultState()); } catch (_) {} }
+      setAIProgress("Projeto apagado", "A alteração já foi guardada.", 100);
+      setTimeout(function () { clearAIProgress(); render(); }, 450);
+      render();
+      toast("Projeto de IA e PowerPoint apagados.");
+    } catch (error) {
+      clearAIProgress();
+      render();
+      toast(error.message || "Não foi possível apagar o projeto.", "error");
+    }
+  }
+
   function renderStudy() {
+    if (route.tab === "ai") return renderStudyAI();
     if (route.tab === "weekly") return renderWeeklyReview();
     setHeader("Estudar", "Quizzes e revisões");
     var quizzes = semesterItems("quizzes");
@@ -1883,7 +2235,7 @@
     var questionHtml = relatedQuestions.length ? relatedQuestions.slice(0, 6).map(function (item) { return renderQuestionCard(item, false); }).join("") : emptyState("message-circle-question", "Sem perguntas para esta matéria", "Adiciona perguntas antigas e associa-as às aulas que saem na avaliação.", "add-question", "Adicionar pergunta");
 
     var hero = featured ? '<article class="card card-violet span-12"><div class="card-title-row"><div><span class="badge badge-dark">Próxima avaliação · ' + relativeDate(featured.date) + '</span><h2 style="margin:18px 0 8px;font-size:clamp(1.8rem,4vw,3.5rem);letter-spacing:-.07em">' + esc(featured.title) + '</h2><p class="card-subtitle" style="color:rgba(24,25,31,.7)">' + esc(featuredCourse ? featuredCourse.name : "Avaliação") + ' · ' + scopedLessons.length + ' aulas na matéria · ' + relatedQuestions.length + ' perguntas anteriores</p></div><span class="hero-number" style="position:relative;right:auto;bottom:auto;font-size:7rem;color:rgba(255,255,255,.55)">20</span></div><div class="hero-actions"><button class="button button-dark" type="button" data-action="study-assessment" data-id="' + attr(featured.id) + '"><i data-lucide="play"></i>Estudar esta matéria</button><button class="button" type="button" data-action="assessment-scope" data-id="' + attr(featured.id) + '"><i data-lucide="list-tree"></i>Ver aulas incluídas</button></div></article>' : '<article class="card card-violet span-12"><div class="page-head"><div><h2>Sessão livre</h2><p>Sem avaliação marcada. Escolhe uma cadeira ou uma aula por rever.</p></div><button class="button button-dark" type="button" data-action="add-assessment">Marcar avaliação</button></div></article>';
-    return '<div class="page-head"><div><h2>Estudar com contexto.</h2><p>Matéria, slides, perguntas anteriores e quizzes no mesmo fluxo.</p></div><div class="page-actions"><button class="button" type="button" data-route="study" data-tab="weekly"><i data-lucide="clipboard-check"></i>Revisão semanal</button><button class="button" type="button" data-route="planner" data-planner-view="study-day"><i data-lucide="blocks"></i>Planear dia</button><button class="button" type="button" data-action="add-question"><i data-lucide="plus"></i>Pergunta antiga</button><button class="button button-dark" type="button" data-action="add-quiz"><i data-lucide="sparkles"></i>Novo quiz</button></div></div><div class="bento-grid">' + hero + '<article class="card span-5"><div class="card-title-row"><div><h3>Aulas por rever</h3></div><span class="badge badge-yellow">' + weakLessons.length + '</span></div><div class="list-stack">' + weakHtml + '</div></article><article class="card span-7"><div class="card-title-row"><div><p class="card-label">Perguntas de testes anteriores</p><h3>' + (featured ? "Ligadas à próxima avaliação" : "Banco geral") + '</h3></div><span class="badge badge-pink">' + relatedQuestions.length + '</span></div><div style="margin-top:14px">' + questionHtml + '</div></article>' + renderStudyHourEstimate() + '<section class="span-12 section-block"><div class="section-heading"><div><h3>Quizzes disponíveis</h3><p>Quizzes manuais e perguntas anteriores ligadas às aulas.</p></div></div><div class="bento-grid">' + quizCards + "</div></section></div>";
+    return '<div class="page-head"><div><h2>Estudar com contexto.</h2><p>Matéria, slides, perguntas anteriores e quizzes no mesmo fluxo.</p></div><div class="page-actions"><button class="button button-violet" type="button" data-route="study" data-tab="ai"><i data-lucide="brain"></i>IA de estudo</button><button class="button" type="button" data-route="study" data-tab="weekly"><i data-lucide="clipboard-check"></i>Revisão semanal</button><button class="button" type="button" data-route="planner" data-planner-view="study-day"><i data-lucide="blocks"></i>Planear dia</button><button class="button" type="button" data-action="add-question"><i data-lucide="plus"></i>Pergunta antiga</button><button class="button button-dark" type="button" data-action="add-quiz"><i data-lucide="sparkles"></i>Novo quiz</button></div></div><div class="bento-grid">' + hero + '<article class="card span-5"><div class="card-title-row"><div><h3>Aulas por rever</h3></div><span class="badge badge-yellow">' + weakLessons.length + '</span></div><div class="list-stack">' + weakHtml + '</div></article><article class="card span-7"><div class="card-title-row"><div><p class="card-label">Perguntas de testes anteriores</p><h3>' + (featured ? "Ligadas à próxima avaliação" : "Banco geral") + '</h3></div><span class="badge badge-pink">' + relatedQuestions.length + '</span></div><div style="margin-top:14px">' + questionHtml + '</div></article>' + renderStudyHourEstimate() + '<section class="span-12 section-block"><div class="section-heading"><div><h3>Quizzes disponíveis</h3><p>Quizzes manuais e perguntas anteriores ligadas às aulas.</p></div></div><div class="bento-grid">' + quizCards + "</div></section></div>";
   }
 
   function gradeSimulatorAssessmentFields(courseId) {
@@ -2166,12 +2518,16 @@
     var semester = currentSemester();
     var archived = state.semesters.filter(function (item) { return item.archived; }).length;
     var lastCheck = state.meta.externalCheckedAt ? new Intl.DateTimeFormat("pt-PT", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" }).format(new Date(state.meta.externalCheckedAt)) : "Nunca";
-    var syncInfo = Sync ? Sync.getStatus() : { state: "disabled", configured: false, pending: 0, conflicts: 0, lastError: "" };
+    var syncInfo = Sync ? Sync.getStatus() : { state: "disabled", configured: false, pending: 0, conflicts: 0, lastError: "", localVersion: 0, remoteVersion: 0, outdated: false };
     var syncDisplay = syncDisplayInfo(syncInfo);
+    var syncLocalVersion = Number(syncInfo.localVersion) || 0;
+    var syncRemoteVersion = Number(syncInfo.remoteVersion) || 0;
+    var syncVersionSummary = syncInfo.pending ? syncInfo.pending + " por enviar" : syncRemoteVersion ? (syncInfo.outdated || (syncLocalVersion && syncLocalVersion !== syncRemoteVersion) ? "v" + syncLocalVersion + " → v" + syncRemoteVersion : "Versão Git v" + syncRemoteVersion) : "PC + telemóvel";
+    var syncVersionBadge = syncInfo.conflicts ? syncInfo.conflicts + " conflito(s)" : syncInfo.outdated ? "Desatualizado" : syncRemoteVersion ? "Atualizado" : "Protegido";
     var forceDisabled = syncInfo.configured && syncInfo.state !== "syncing" ? "" : " disabled";
     var forceControls = '<span class="sync-force-actions" role="group" aria-label="Substituição manual de dados"><button class="button button-small sync-icon-button" type="button" data-action="force-git-pull" aria-label="Forçar pull: substituir este dispositivo pelos dados do Git" title="Forçar pull"' + forceDisabled + '><i data-lucide="arrow-down-to-line"></i></button><button class="button button-dark button-small sync-icon-button" type="button" data-action="force-git-push" aria-label="Forçar push: substituir o Git pelos dados deste dispositivo" title="Forçar push"' + forceDisabled + '><i data-lucide="arrow-up-to-line"></i></button></span>';
     var syncProgress = '<div id="gitSyncInlineProgress" class="sync-inline-progress ' + (syncInfo.state === "syncing" ? "is-active is-indeterminate" : "") + '"><span></span></div>';
-    var syncCard = '<article id="gitSyncCard" class="card settings-card card-violet" aria-busy="' + (syncInfo.state === "syncing" ? "true" : "false") + '"><div class="card-title-row"><div><p class="card-label">Git como base de dados</p><h3 id="gitSyncTitle">' + esc(syncDisplay.title) + '</h3><p id="gitSyncDetail" class="card-subtitle">' + esc(syncDisplay.detail) + '</p></div><span class="metric-icon"><i data-lucide="git-commit-horizontal"></i></span></div><div class="settings-row"><div><strong id="gitSyncSummary">' + (syncInfo.pending ? syncInfo.pending + " por enviar" : "PC + telemóvel") + '</strong><small>Fusão por campos · fila offline · histórico em commits.</small></div><span id="gitSyncBadge" class="badge ' + syncDisplay.badgeClass + '">' + (syncInfo.conflicts ? syncInfo.conflicts + " conflito(s)" : "Protegido") + '</span></div>' + syncProgress + '<div class="list-actions"><button class="button button-small" type="button" data-action="configure-git-sync"><i data-lucide="settings-2"></i>Configurar</button><button class="button button-dark button-small" type="button" data-action="sync-now"><i data-lucide="refresh-cw"></i>Sincronizar agora</button>' + forceControls + (syncInfo.configured ? '<button class="button button-small" type="button" data-action="disable-git-sync"><i data-lucide="pause"></i>Pausar</button>' : '') + '</div></article>';
+    var syncCard = '<article id="gitSyncCard" class="card settings-card card-violet" aria-busy="' + (syncInfo.state === "syncing" ? "true" : "false") + '"><div class="card-title-row"><div><p class="card-label">Git como base de dados</p><h3 id="gitSyncTitle">' + esc(syncDisplay.title) + '</h3><p id="gitSyncDetail" class="card-subtitle">' + esc(syncDisplay.detail) + '</p></div><span class="metric-icon"><i data-lucide="git-commit-horizontal"></i></span></div><div class="settings-row"><div><strong id="gitSyncSummary">' + esc(syncVersionSummary) + '</strong><small>Fusão por campos · fila offline · histórico em commits.</small></div><span id="gitSyncBadge" class="badge ' + syncDisplay.badgeClass + '">' + esc(syncVersionBadge) + '</span></div>' + syncProgress + '<div class="list-actions"><button class="button button-small" type="button" data-action="configure-git-sync"><i data-lucide="settings-2"></i>Configurar</button><button class="button button-dark button-small" type="button" data-action="sync-now"><i data-lucide="refresh-cw"></i>Sincronizar agora</button>' + forceControls + (syncInfo.configured ? '<button class="button button-small" type="button" data-action="disable-git-sync"><i data-lucide="pause"></i>Pausar</button>' : '') + '</div></article>';
     return '<div class="page-head"><div><h2>Definições</h2><p>Perfil, semestres, conteúdo e dados locais.</p></div><div class="page-actions"><button class="button" type="button" data-action="show-tutorial"><i data-lucide="map"></i>Visita guiada</button><button class="button button-dark" type="button" data-action="quick-add"><i data-lucide="plus"></i>Adicionar conteúdo</button></div></div><div class="settings-grid">' + syncCard + '<article class="card settings-card"><div class="card-title-row"><div><p class="card-label">Perfil académico</p><h3>' + esc(state.profile.name || "Estudante") + '</h3><p class="card-subtitle">' + esc(state.profile.degree || "Curso por configurar") + (state.profile.institution ? " · " + esc(state.profile.institution) : "") + '</p></div><span class="metric-icon"><i data-lucide="user-round"></i></span></div><div class="settings-row"><div><strong>Meta</strong><small>Objetivo utilizado nos indicadores de desempenho.</small></div><span class="badge badge-yellow">' + (Number(state.profile.targetGrade) || 20) + '/20</span></div><button class="button button-small" type="button" data-action="edit-profile"><i data-lucide="pencil"></i>Editar perfil</button></article><article class="card settings-card card-violet"><div class="card-title-row"><div><p class="card-label">Semestre ativo</p><h3>' + esc(semester ? semester.name : "Nenhum") + '</h3><p class="card-subtitle">' + esc(semester ? semester.academicYear : "Cria o próximo semestre") + '</p></div><span class="metric-icon"><i data-lucide="calendar-range"></i></span></div><div class="settings-row"><div><strong>' + activeCourses().length + ' cadeiras</strong><small>' + archived + ' semestre(s) no arquivo.</small></div><span class="badge badge-dark">' + activeCourses().reduce(function (sum, course) { return sum + (Number(course.ects) || 0); }, 0) + ' ECTS</span></div><div class="list-actions"><button class="button button-small" type="button" data-action="new-semester"><i data-lucide="calendar-plus"></i>Novo</button>' + (semester ? '<button class="button button-danger button-small" type="button" data-action="archive-semester"><i data-lucide="archive"></i>Arquivar semestre</button>' : "") + '</div></article><article class="card settings-card"><div class="card-title-row"><div><p class="card-label">Ficheiro JSON</p><h3>academic-data.json</h3><p class="card-subtitle">Editável fora da app; relido ao abrir ou regressar à janela.</p></div><span class="metric-icon"><i data-lucide="braces"></i></span></div><div class="settings-row"><div><strong>Última verificação</strong><small>' + esc(lastCheck) + ' · revisão local ' + (Number(state.meta.revision) || 0) + '</small></div><button class="switch ' + (state.settings.jsonSync ? "is-on" : "") + '" type="button" data-action="toggle-json-sync" aria-label="Ativar sincronização JSON"><span></span></button></div><div class="list-actions"><button class="button button-small" type="button" data-action="reload-json"><i data-lucide="refresh-cw"></i>Reler</button><button class="button button-small" type="button" data-action="export-json"><i data-lucide="download"></i>Exportar</button><button class="button button-small" type="button" data-action="import-json"><i data-lucide="upload"></i>Importar</button></div></article><article class="card settings-card card-yellow"><div class="card-title-row"><div><h3>Atividade simulada no campus</h3><p class="card-subtitle">Apresenta indicadores simulados de atividade no campus.</p></div><span class="metric-icon"><i data-lucide="users-round"></i></span></div><div class="settings-row"><div><strong>Contador simulado</strong><small>Mostra “pessoas a acompanhar” com etiqueta de simulação.</small></div><button class="switch ' + (state.settings.campusSimulation ? "is-on" : "") + '" type="button" data-action="toggle-campus"><span></span></button></div><span class="badge badge-dark">Local · privado · transparente</span></article><article class="card settings-card"><div class="card-title-row"><div><h3>Dados no dispositivo</h3><p class="card-subtitle">Os metadados ficam em IndexedDB; os PDFs enviados ficam separados do JSON.</p></div><span class="metric-icon"><i data-lucide="hard-drive"></i></span></div><div class="settings-row"><div><strong id="storageFileCount">A contar ficheiros…</strong><small>PDFs e documentos enviados na app.</small></div><span class="badge badge-mint">Local-first</span></div><button class="button button-small" type="button" data-action="export-json"><i data-lucide="shield-check"></i>Criar backup JSON</button></article><article class="card settings-card card-dark"><div class="card-title-row"><div><h3>Adicionar conteúdo</h3><p class="card-subtitle">Aulas, materiais, perguntas antigas, quizzes, notas e avaliações.</p></div><span class="metric-icon"><i data-lucide="wrench"></i></span></div><div class="quick-grid" style="grid-template-columns:repeat(3,1fr);margin-top:17px"><button type="button" data-action="create-lesson"><i data-lucide="presentation"></i>Aula</button><button type="button" data-action="add-material"><i data-lucide="file-up"></i>PDF</button><button type="button" data-action="add-question"><i data-lucide="message-circle-question"></i>Pergunta</button><button type="button" data-action="add-quiz"><i data-lucide="sparkles"></i>Quiz</button><button type="button" data-action="add-grade"><i data-lucide="chart-no-axes-combined"></i>Nota</button><button type="button" data-action="add-assessment"><i data-lucide="file-pen-line"></i>Avaliação</button></div></article><article class="card settings-card span-12"><div class="card-title-row"><div><p class="card-label">Segurança</p><h3>Recomeçar neste dispositivo</h3><p class="card-subtitle">Remove o estado local e os PDFs guardados. O ficheiro academic-data.json não é apagado.</p></div><button class="button button-danger" type="button" data-action="reset-app"><i data-lucide="trash-2"></i>Apagar dados locais</button></div></article></div>';
   }
 
@@ -4044,6 +4400,35 @@
     } else if (action === "create-lesson-from-live") {
       var liveEntry = state.schedule.find(function (item) { return item.id === button.dataset.id; });
       if (liveEntry) openEntityForm("lesson", { courseId: liveEntry.courseId, scheduleId: liveEntry.id, date: todayISO(), start: liveEntry.start, end: liveEntry.end, room: liveEntry.room, type: liveEntry.type, title: (liveEntry.type || "Aula") + " · " + formatDate(todayISO()) });
+    } else if (action === "ai-pick-pptx") {
+      if (pptxInput) pptxInput.click();
+    } else if (action === "ai-clear-draft") {
+      aiDraft = null;
+      render();
+    } else if (action === "ai-generate") {
+      await generateAIProject();
+    } else if (action === "ai-cancel") {
+      if (aiTransferRequest) { try { aiTransferRequest.abort(); } catch (_) {} aiTransferRequest = null; }
+      if (AI && AI.resetWorker) AI.resetWorker();
+      aiBusy = false;
+      clearAIProgress();
+      render();
+      toast("Geração cancelada.", "warning");
+    } else if (action === "ai-open-project") {
+      openAIProject(button.dataset.id);
+    } else if (action === "ai-use-project") {
+      useAIProject(button.dataset.id);
+    } else if (action === "ai-download-pptx") {
+      await downloadAIProjectFile(button.dataset.id);
+    } else if (action === "ai-open-slide") {
+      openAISlide(button.dataset.project, button.dataset.slide);
+    } else if (action === "ai-start-quiz") {
+      var aiProject = aiProjectById(button.dataset.id);
+      if (aiProject && aiProject.quizId) { closeModal(); startQuiz(aiProject.quizId); }
+    } else if (action === "ai-delete-project") {
+      confirmDeleteAIProject(button.dataset.id);
+    } else if (action === "confirm-ai-delete-project") {
+      await deleteAIProject(button.dataset.id);
     } else if (action === "add-material") {
       openEntityForm("material", { courseId: button.dataset.course || "", lessonId: button.dataset.lesson || "" });
     } else if (action === "add-task") {
@@ -4394,7 +4779,13 @@
       }, 60000);
       if (!state.profile.onboardingComplete || !state.currentSemesterId || !activeCourses().length) startOnboarding(state.semesters.length ? "new-semester" : "first");
       if ("serviceWorker" in navigator && location.protocol !== "file:") {
-        navigator.serviceWorker.register("sw.js?v=14-git-sync-loading", { updateViaCache: "none" }).catch(function () {});
+        navigator.serviceWorker.register("sw.js?v=16-ai-slides", { updateViaCache: "none" }).then(function () {
+          if (Sync && Sync.getStatus().configured) Sync.startAutoSync();
+        }).catch(function () {
+          if (Sync && Sync.getStatus().configured) Sync.startAutoSync();
+        });
+      } else if (Sync && Sync.getStatus().configured) {
+        Sync.startAutoSync();
       }
     } catch (error) {
       console.error(error);
@@ -4408,9 +4799,23 @@
 
   document.addEventListener("click", handleDocumentClick);
   document.addEventListener("change", function (event) {
+    if (event.target === pptxInput) {
+      handleAIPptxFile(event.target.files && event.target.files[0]);
+      return;
+    }
+    if (event.target.matches('[data-role="ai-question-range"]')) {
+      var output = document.getElementById("aiQuestionCountOutput");
+      if (output) output.textContent = event.target.value;
+      return;
+    }
     if (!event.target.matches('[data-role="study-plan-date"]')) return;
     state.settings.studyPlanDate = event.target.value || todayISO();
     save(true).then(render);
+  });
+  document.addEventListener("input", function (event) {
+    if (!event.target.matches('[data-role="ai-question-range"]')) return;
+    var output = document.getElementById("aiQuestionCountOutput");
+    if (output) output.textContent = event.target.value;
   });
   document.addEventListener("dragstart", function (event) {
     var source = event.target.closest("[data-study-source-type][data-study-source-id]");
@@ -4575,6 +4980,7 @@
   window.addEventListener("focus", function () {
     clearTimeout(externalCheckTimer);
     externalCheckTimer = setTimeout(function () {
+      if (Sync && Sync.getStatus().configured) return;
       if (!state || !state.settings.jsonSync || onboarding) return;
       loadExternalJSON({ silent: true }).then(async function (changed) {
         var tasksChanged = ensureBeOnlineTasks();
@@ -4595,14 +5001,18 @@
       if (!onboarding) render();
       if (event.detail.conflicts && event.detail.conflicts.length) {
         toast("Foram detetadas alterações simultâneas. Nenhum registo foi apagado sem aviso.", "warning");
+      } else if (event.detail.forced === "pull") {
+        toast("Dados atualizados a partir do Git.");
       }
+      // Atualizações automáticas não mostram popup nem toast.
     });
   });
+
   window.addEventListener("twenty:sync-status", function () {
     updateSyncActivityFromStatus(Sync ? Sync.getStatus() : null);
   });
   document.addEventListener("visibilitychange", function () {
-    if (!document.hidden && Sync && state && Sync.getStatus().configured) Sync.syncNow(state, defaultState()).catch(function () {});
+    if (!document.hidden && Sync && state && Sync.getStatus().configured) Sync.checkForUpdates({ force: true }).catch(function () {});
   });
 
   init();

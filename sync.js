@@ -5,15 +5,27 @@
   var DB_VERSION = 1;
   var CONFIG_KEY = "twenty-sync-config-v1";
   var DEVICE_KEY = "twenty-sync-device-v1";
+  var AUTO_CHECK_MS = 60000;
+  var MIN_CHECK_GAP_MS = 5000;
+  var PERIODIC_SYNC_MIN_MS = 15 * 60 * 1000;
   var dbPromise = null;
   var flushPromise = null;
+  var checkPromise = null;
   var flushTimer = null;
+  var autoTimer = null;
+  var watchGeneration = 0;
+  var lastCheckStartedAt = 0;
   var status = {
     state: "disabled",
     pending: 0,
     lastSyncAt: "",
+    lastCheckedAt: "",
     lastError: "",
-    conflicts: 0
+    conflicts: 0,
+    localVersion: 0,
+    remoteVersion: 0,
+    outdated: false,
+    backgroundEnabled: false
   };
 
   function clone(value) {
@@ -24,9 +36,19 @@
     try { return JSON.stringify(a) === JSON.stringify(b); } catch (_) { return false; }
   }
 
+  function versionOf(state) {
+    var meta = state && state.meta && typeof state.meta === "object" ? state.meta : {};
+    var value = Number(meta.gitRevision != null ? meta.gitRevision : meta.revision);
+    return Number.isFinite(value) && value > 0 ? value : 0;
+  }
+
   function uid(prefix) {
     if (window.crypto && typeof window.crypto.randomUUID === "function") return (prefix || "id") + "_" + window.crypto.randomUUID();
     return (prefix || "id") + "_" + Date.now().toString(36) + "_" + Math.random().toString(36).slice(2, 10);
+  }
+
+  function sleep(ms) {
+    return new Promise(function (resolve) { setTimeout(resolve, ms); });
   }
 
   function open() {
@@ -130,6 +152,7 @@
       enabled: config.enabled !== false
     };
     localStorage.setItem(CONFIG_KEY, JSON.stringify(clean));
+    setMeta("serviceWorkerConfig", clean).catch(function () {});
     updateStatus(clean.enabled && clean.endpoint && clean.key ? "idle" : "disabled", {});
     return clean;
   }
@@ -184,6 +207,103 @@
     return payload || {};
   }
 
+  function fileRequest(method, path, options) {
+    options = options || {};
+    var config = getConfig();
+    if (!config.enabled) return Promise.reject(new Error("A sincronização Git ainda não está configurada."));
+    if (!navigator.onLine) return Promise.reject(new Error("Sem Internet para sincronizar o PowerPoint."));
+    return new Promise(function (resolve, reject) {
+      var xhr = new XMLHttpRequest();
+      xhr.open(method, config.endpoint + path, true);
+      xhr.setRequestHeader("X-Twenty-Key", config.key);
+      xhr.setRequestHeader("X-Twenty-Device", deviceName());
+      if (options.responseType) xhr.responseType = options.responseType;
+      if (options.contentType) xhr.setRequestHeader("Content-Type", options.contentType);
+      if (xhr.upload && typeof options.onUploadProgress === "function") {
+        xhr.upload.onprogress = function (event) {
+          options.onUploadProgress({
+            loaded: Number(event.loaded) || 0,
+            total: event.lengthComputable ? Number(event.total) || 0 : 0,
+            progress: event.lengthComputable && event.total ? Math.round(event.loaded / event.total * 100) : null
+          });
+        };
+        xhr.upload.onload = function () {
+          if (typeof options.onUploadComplete === "function") options.onUploadComplete();
+        };
+      }
+      if (typeof options.onDownloadProgress === "function") {
+        xhr.onprogress = function (event) {
+          options.onDownloadProgress({
+            loaded: Number(event.loaded) || 0,
+            total: event.lengthComputable ? Number(event.total) || 0 : 0,
+            progress: event.lengthComputable && event.total ? Math.round(event.loaded / event.total * 100) : null
+          });
+        };
+      }
+      xhr.onerror = function () { reject(new Error("Não foi possível contactar o servidor de sincronização.")); };
+      xhr.onabort = function () { reject(new Error("Transferência cancelada.")); };
+      xhr.onload = function () {
+        var payload = null;
+        if (options.responseType === "blob") {
+          if (xhr.status >= 200 && xhr.status < 300) {
+            resolve({ blob: xhr.response, headers: xhr.getAllResponseHeaders(), status: xhr.status });
+            return;
+          }
+        } else {
+          try { payload = JSON.parse(xhr.responseText || "{}"); } catch (_) { payload = null; }
+          if (xhr.status >= 200 && xhr.status < 300) {
+            resolve(payload || {});
+            return;
+          }
+        }
+        var message = payload && payload.error ? payload.error : "Erro de transferência (" + xhr.status + ")";
+        var error = new Error(message);
+        error.status = xhr.status;
+        error.payload = payload;
+        reject(error);
+      };
+      xhr.send(options.body == null ? null : options.body);
+      if (typeof options.onReady === "function") options.onReady(xhr);
+    });
+  }
+
+  async function uploadFile(file, options) {
+    options = options || {};
+    if (!file) throw new Error("Escolhe um PowerPoint primeiro.");
+    var id = String(options.id || uid("pptx"));
+    var name = String(options.name || file.name || "apresentacao.pptx");
+    var path = "/files/upload?id=" + encodeURIComponent(id) + "&name=" + encodeURIComponent(name);
+    var payload = await fileRequest("POST", path, {
+      body: file,
+      contentType: file.type || "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+      onUploadProgress: options.onProgress,
+      onUploadComplete: options.onUploadComplete,
+      onReady: options.onReady
+    });
+    if (!payload.file) throw new Error("O servidor não confirmou o PowerPoint enviado.");
+    return payload.file;
+  }
+
+  async function downloadFile(file, options) {
+    options = options || {};
+    if (!file || !file.path) throw new Error("Este PowerPoint não tem ficheiro sincronizado.");
+    var path = "/files/download?path=" + encodeURIComponent(file.path) + "&name=" + encodeURIComponent(file.name || "apresentacao.pptx");
+    var result = await fileRequest("GET", path, {
+      responseType: "blob",
+      onDownloadProgress: options.onProgress,
+      onReady: options.onReady
+    });
+    return result.blob;
+  }
+
+  async function deleteFile(file) {
+    if (!file || !file.path) return { ok: true, deleted: false };
+    return api("/files/delete", {
+      method: "POST",
+      body: JSON.stringify({ path: file.path, deviceName: deviceName() })
+    });
+  }
+
   async function refreshPending() {
     var items = await listQueue();
     status.pending = items.length;
@@ -191,8 +311,23 @@
     return items.length;
   }
 
+  async function rememberRemote(payload) {
+    if (!payload || !payload.state) return;
+    var remoteVersion = Number(payload.version || versionOf(payload.state)) || 0;
+    await Promise.all([
+      setMeta("lastRemote", payload.state),
+      setMeta("shadow", payload.state),
+      setMeta("lastSha", payload.sha || ""),
+      setMeta("lastVersion", remoteVersion)
+    ]);
+    status.localVersion = remoteVersion;
+    status.remoteVersion = remoteVersion;
+    status.outdated = false;
+  }
+
   async function queueState(nextState) {
     var config = getConfig();
+    status.localVersion = versionOf(nextState);
     if (!config.enabled) return nextState;
     var base = await getMeta("shadow");
     if (!base) base = clone(nextState);
@@ -214,32 +349,64 @@
   function scheduleFlush() {
     clearTimeout(flushTimer);
     flushTimer = setTimeout(function () {
-      flush().catch(function () {});
+      flush({ background: true }).catch(function () {});
     }, 900);
   }
 
-  async function pullRemote(dispatch) {
+  async function pullRemote(dispatch, options) {
+    options = options || {};
     var payload = await api("/state", { method: "GET" });
     if (!payload.exists || !payload.state) return null;
     var pendingItems = await listQueue();
-    if (pendingItems.length) {
-      updateStatus("syncing", { pending: pendingItems.length });
+    if (pendingItems.length && !options.force) {
+      updateStatus("syncing", { pending: pendingItems.length, remoteVersion: Number(payload.version || versionOf(payload.state)) || 0 });
       scheduleFlush();
       return null;
     }
-    await setMeta("lastRemote", payload.state);
-    await setMeta("shadow", payload.state);
-    await setMeta("lastSha", payload.sha || "");
+
+    var lastSha = await getMeta("lastSha") || "";
+    var knownRemote = await getMeta("lastRemote");
+    var lastVersion = Number(await getMeta("lastVersion")) || status.localVersion || 0;
+    var incomingVersion = Number(payload.version || versionOf(payload.state)) || 0;
+    var changed = !!options.force || !knownRemote || incomingVersion > lastVersion || (!!payload.sha && payload.sha !== lastSha);
     var conflictList = Array.isArray(payload.conflicts) ? payload.conflicts : [];
+
+    status.remoteVersion = incomingVersion;
+    status.lastCheckedAt = new Date().toISOString();
+    if (!changed) {
+      updateStatus("synced", {
+        lastError: "",
+        conflicts: conflictList.length,
+        pending: 0,
+        localVersion: Math.max(status.localVersion || 0, incomingVersion),
+        remoteVersion: incomingVersion,
+        outdated: false,
+        lastCheckedAt: status.lastCheckedAt
+      });
+      return null;
+    }
+
+    await rememberRemote(payload);
     updateStatus("synced", {
       lastSyncAt: new Date().toISOString(),
+      lastCheckedAt: new Date().toISOString(),
       lastError: "",
       conflicts: conflictList.length,
-      pending: 0
+      pending: 0,
+      localVersion: incomingVersion,
+      remoteVersion: incomingVersion,
+      outdated: false
     });
     if (dispatch !== false) {
       window.dispatchEvent(new CustomEvent("twenty:remote-state", {
-        detail: { state: clone(payload.state), conflicts: conflictList, sha: payload.sha || "" }
+        detail: {
+          state: clone(payload.state),
+          conflicts: conflictList,
+          sha: payload.sha || "",
+          version: incomingVersion,
+          background: !!options.background,
+          forced: options.forced || ""
+        }
       }));
     }
     return payload.state;
@@ -258,7 +425,8 @@
     await setMeta("shadow", localState);
   }
 
-  async function flush() {
+  async function flush(options) {
+    options = options || {};
     if (flushPromise) return flushPromise;
     flushPromise = (async function () {
       var config = getConfig();
@@ -274,22 +442,47 @@
       updateStatus("syncing", { lastError: "" });
       try {
         var items = await listQueue();
+        var latestPayload = null;
         while (items.length) {
           for (var i = 0; i < items.length; i += 1) {
             var item = items[i];
             var payload = await api("/sync", { method: "POST", body: JSON.stringify(item) });
+            latestPayload = payload;
             await deleteQueue(item.id);
-            if (payload.state) {
-              await setMeta("lastRemote", payload.state);
-              await setMeta("lastSha", payload.sha || "");
-            }
+            if (payload.state) await rememberRemote(payload);
             status.conflicts = Array.isArray(payload.conflicts) ? payload.conflicts.length : 0;
             status.pending = Math.max(0, status.pending - 1);
+            status.remoteVersion = Number(payload.version || versionOf(payload.state)) || status.remoteVersion || 0;
+            status.localVersion = status.remoteVersion;
             window.dispatchEvent(new CustomEvent("twenty:sync-status", { detail: clone(status) }));
           }
           items = await listQueue();
         }
-        return await pullRemote(true);
+        if (latestPayload && latestPayload.state) {
+          var finalVersion = Number(latestPayload.version || versionOf(latestPayload.state)) || 0;
+          var finalConflicts = Array.isArray(latestPayload.conflicts) ? latestPayload.conflicts : [];
+          updateStatus("synced", {
+            lastSyncAt: new Date().toISOString(),
+            lastCheckedAt: new Date().toISOString(),
+            lastError: "",
+            conflicts: finalConflicts.length,
+            pending: 0,
+            localVersion: finalVersion,
+            remoteVersion: finalVersion,
+            outdated: false
+          });
+          window.dispatchEvent(new CustomEvent("twenty:remote-state", {
+            detail: {
+              state: clone(latestPayload.state),
+              conflicts: finalConflicts,
+              sha: latestPayload.sha || "",
+              version: finalVersion,
+              background: !!options.background
+            }
+          }));
+          return latestPayload.state;
+        }
+        return await pullRemote(true, { background: !!options.background });
       } catch (error) {
         await refreshPending();
         updateStatus(navigator.onLine ? "error" : "offline", { lastError: error.message || "Falha de sincronização." });
@@ -302,6 +495,8 @@
   async function bootstrap(localState, initialBase) {
     var config = getConfig();
     await open();
+    status.localVersion = versionOf(localState);
+    status.remoteVersion = Number(await getMeta("lastVersion")) || status.localVersion || 0;
     var shadow = await getMeta("shadow");
     if (!shadow) await setMeta("shadow", localState);
     await refreshPending();
@@ -309,6 +504,7 @@
       updateStatus("disabled", {});
       return null;
     }
+    setMeta("serviceWorkerConfig", config).catch(function () {});
     try {
       var queued = await listQueue();
       if (!queued.length) {
@@ -330,7 +526,7 @@
           }
         }
       }
-      return await flush();
+      return await flush({ background: true });
     } catch (error) {
       updateStatus(navigator.onLine ? "error" : "offline", { lastError: error.message || "Falha de sincronização." });
       return null;
@@ -340,6 +536,7 @@
   async function syncNow(localState, initialBase) {
     var config = getConfig();
     if (!config.enabled) throw new Error("Configura primeiro o Worker e a chave de sincronização.");
+    status.localVersion = versionOf(localState);
     var queued = await listQueue();
     if (!queued.length) {
       var remote = await api("/state", { method: "GET" });
@@ -360,7 +557,62 @@
         }
       }
     }
-    return flush();
+    return flush({ background: false });
+  }
+
+  async function checkForUpdates(options) {
+    options = options || {};
+    var config = getConfig();
+    if (!config.enabled || !navigator.onLine) return null;
+    if (flushPromise) return flushPromise;
+    if (checkPromise) return checkPromise;
+    var now = Date.now();
+    if (!options.force && now - lastCheckStartedAt < MIN_CHECK_GAP_MS) return null;
+    lastCheckStartedAt = now;
+
+    checkPromise = (async function () {
+      var queued = await listQueue();
+      if (queued.length) {
+        scheduleFlush();
+        return null;
+      }
+      updateStatus("checking", { lastError: "" });
+      try {
+        var remote = await api("/version", { method: "GET" });
+        var localVersion = status.localVersion || Number(await getMeta("lastVersion")) || 0;
+        var lastSha = await getMeta("lastSha") || "";
+        var remoteVersion = Number(remote.version) || 0;
+        var knownRemote = await getMeta("lastRemote");
+        var outdated = !!remote.exists && (!knownRemote || remoteVersion > localVersion || (!!remote.sha && !!lastSha && remote.sha !== lastSha));
+        status.remoteVersion = remoteVersion;
+        status.lastCheckedAt = new Date().toISOString();
+        status.outdated = outdated;
+        if (outdated) {
+          updateStatus("checking", {
+            localVersion: localVersion,
+            remoteVersion: remoteVersion,
+            outdated: true,
+            lastCheckedAt: status.lastCheckedAt
+          });
+          return await pullRemote(options.dispatch !== false, { background: true });
+        }
+        if (!lastSha && remote.sha) await setMeta("lastSha", remote.sha);
+        if (remoteVersion) await setMeta("lastVersion", remoteVersion);
+        updateStatus("synced", {
+          lastError: "",
+          localVersion: Math.max(localVersion, remoteVersion),
+          remoteVersion: remoteVersion,
+          outdated: false,
+          lastCheckedAt: status.lastCheckedAt
+        });
+        return null;
+      } catch (error) {
+        updateStatus(navigator.onLine ? "error" : "offline", { lastError: error.message || "Falha ao verificar atualizações." });
+        if (options.throwOnError) throw error;
+        return null;
+      }
+    })().finally(function () { checkPromise = null; });
+    return checkPromise;
   }
 
   async function forcePull(options) {
@@ -369,25 +621,8 @@
     if (!config.enabled) throw new Error("Configura primeiro o Worker e a chave de sincronização.");
     updateStatus("syncing", { lastError: "" });
     try {
-      var payload = await api("/state", { method: "GET" });
-      if (!payload.exists || !payload.state) throw new Error("Ainda não existem dados sincronizados neste Git.");
       await clearQueue();
-      await setMeta("lastRemote", payload.state);
-      await setMeta("shadow", payload.state);
-      await setMeta("lastSha", payload.sha || "");
-      var conflictList = Array.isArray(payload.conflicts) ? payload.conflicts : [];
-      updateStatus("synced", {
-        lastSyncAt: new Date().toISOString(),
-        lastError: "",
-        conflicts: conflictList.length,
-        pending: 0
-      });
-      if (options.dispatch !== false) {
-        window.dispatchEvent(new CustomEvent("twenty:remote-state", {
-          detail: { state: clone(payload.state), conflicts: conflictList, sha: payload.sha || "", forced: "pull" }
-        }));
-      }
-      return clone(payload.state);
+      return await pullRemote(options.dispatch !== false, { force: true, forced: "pull", background: false });
     } catch (error) {
       await refreshPending();
       updateStatus(navigator.onLine ? "error" : "offline", { lastError: error.message || "Falha no force pull." });
@@ -414,19 +649,21 @@
       });
       if (!payload.state) throw new Error("O Worker não devolveu o estado confirmado.");
       await clearQueue();
-      await setMeta("lastRemote", payload.state);
-      await setMeta("shadow", payload.state);
-      await setMeta("lastSha", payload.sha || "");
+      await rememberRemote(payload);
       var conflictList = Array.isArray(payload.conflicts) ? payload.conflicts : [];
       updateStatus("synced", {
         lastSyncAt: new Date().toISOString(),
+        lastCheckedAt: new Date().toISOString(),
         lastError: "",
         conflicts: conflictList.length,
-        pending: 0
+        pending: 0,
+        localVersion: Number(payload.version || versionOf(payload.state)) || 0,
+        remoteVersion: Number(payload.version || versionOf(payload.state)) || 0,
+        outdated: false
       });
       if (options.dispatch !== false) {
         window.dispatchEvent(new CustomEvent("twenty:remote-state", {
-          detail: { state: clone(payload.state), conflicts: conflictList, sha: payload.sha || "", forced: "push" }
+          detail: { state: clone(payload.state), conflicts: conflictList, sha: payload.sha || "", version: payload.version || versionOf(payload.state), forced: "push" }
         }));
       }
       return clone(payload.state);
@@ -437,10 +674,77 @@
     }
   }
 
+  async function watchForCommits(generation) {
+    while (generation === watchGeneration && getConfig().enabled) {
+      if (document.hidden || !navigator.onLine) {
+        await sleep(3000);
+        continue;
+      }
+      try {
+        var since = Math.max(status.localVersion || 0, Number(await getMeta("lastVersion")) || 0);
+        var event = await api("/watch?since=" + encodeURIComponent(since), { method: "GET" });
+        if (generation !== watchGeneration) return;
+        if (event && event.changed && Number(event.version || 0) > since) {
+          status.remoteVersion = Number(event.version) || status.remoteVersion || 0;
+          status.outdated = true;
+          updateStatus("checking", {
+            remoteVersion: status.remoteVersion,
+            outdated: true,
+            lastCheckedAt: new Date().toISOString()
+          });
+          await checkForUpdates({ force: true });
+        } else {
+          status.lastCheckedAt = new Date().toISOString();
+        }
+      } catch (_) {
+        await sleep(3000);
+      }
+    }
+  }
+
+  async function registerBackgroundSync() {
+    if (!("serviceWorker" in navigator)) return false;
+    try {
+      var registration = await navigator.serviceWorker.ready;
+      if (registration.periodicSync && typeof registration.periodicSync.register === "function") {
+        await registration.periodicSync.register("twenty-git-background-v1", { minInterval: PERIODIC_SYNC_MIN_MS });
+        updateStatus(status.state, { backgroundEnabled: true });
+        return true;
+      }
+      updateStatus(status.state, { backgroundEnabled: false });
+      return false;
+    } catch (_) {
+      updateStatus(status.state, { backgroundEnabled: false });
+      return false;
+    }
+  }
+
+  function startAutoSync() {
+    clearInterval(autoTimer);
+    watchGeneration += 1;
+    if (!getConfig().enabled) return;
+    var generation = watchGeneration;
+    checkForUpdates({ force: true }).catch(function () {});
+    watchForCommits(generation).catch(function () {});
+    autoTimer = setInterval(function () {
+      if (document.hidden) return;
+      // Verificação de segurança para commits feitos fora da app ou após reinício do Worker.
+      checkForUpdates().catch(function () {});
+    }, AUTO_CHECK_MS);
+    registerBackgroundSync().catch(function () {});
+  }
+
+  function stopAutoSync() {
+    clearInterval(autoTimer);
+    autoTimer = null;
+    watchGeneration += 1;
+  }
+
   async function configure(endpoint, key) {
     var config = saveConfig({ endpoint: endpoint, key: key, enabled: true });
     if (!config.endpoint || !config.key) throw new Error("Falta o endereço do Worker ou a chave.");
     updateStatus("idle", { lastError: "" });
+    startAutoSync();
     return config;
   }
 
@@ -448,12 +752,20 @@
     var config = getConfig();
     config.enabled = false;
     saveConfig(config);
+    stopAutoSync();
     updateStatus("disabled", {});
   }
 
   async function adoptRemoteState(remoteState) {
-    await setMeta("shadow", remoteState);
-    await setMeta("lastRemote", remoteState);
+    var remoteVersion = versionOf(remoteState);
+    await Promise.all([
+      setMeta("shadow", remoteState),
+      setMeta("lastRemote", remoteState),
+      setMeta("lastVersion", remoteVersion)
+    ]);
+    status.localVersion = remoteVersion;
+    status.remoteVersion = Math.max(status.remoteVersion || 0, remoteVersion);
+    status.outdated = false;
   }
 
   async function resetLocal() {
@@ -462,10 +774,29 @@
     await setMeta("shadow", null);
     await setMeta("lastRemote", null);
     await setMeta("lastSha", "");
-    updateStatus(getConfig().enabled ? "idle" : "disabled", { pending: 0, lastError: "", conflicts: 0 });
+    await setMeta("lastVersion", 0);
+    updateStatus(getConfig().enabled ? "idle" : "disabled", { pending: 0, lastError: "", conflicts: 0, localVersion: 0, remoteVersion: 0, outdated: false });
   }
 
-  window.addEventListener("online", function () { scheduleFlush(); });
+  window.addEventListener("online", function () {
+    scheduleFlush();
+    checkForUpdates({ force: true }).catch(function () {});
+  });
+  window.addEventListener("focus", function () {
+    if (getConfig().enabled) checkForUpdates({ force: true }).catch(function () {});
+  });
+  window.addEventListener("pageshow", function () {
+    if (getConfig().enabled) checkForUpdates({ force: true }).catch(function () {});
+  });
+  document.addEventListener("visibilitychange", function () {
+    if (!document.hidden && getConfig().enabled) checkForUpdates({ force: true }).catch(function () {});
+  });
+  if ("serviceWorker" in navigator) {
+    navigator.serviceWorker.addEventListener("message", function (event) {
+      if (!event.data || event.data.type !== "twenty:background-update-ready") return;
+      checkForUpdates({ force: true }).catch(function () {});
+    });
+  }
 
   window.TwentySync = {
     getConfig: getConfig,
@@ -475,8 +806,13 @@
     bootstrap: bootstrap,
     queueState: queueState,
     syncNow: syncNow,
+    checkForUpdates: checkForUpdates,
+    startAutoSync: startAutoSync,
     forcePull: forcePull,
     forcePush: forcePush,
+    uploadFile: uploadFile,
+    downloadFile: downloadFile,
+    deleteFile: deleteFile,
     flush: flush,
     adoptRemoteState: adoptRemoteState,
     resetLocal: resetLocal
