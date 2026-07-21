@@ -269,9 +269,9 @@
 
   async function uploadFile(file, options) {
     options = options || {};
-    if (!file) throw new Error("Escolhe um PowerPoint primeiro.");
-    var id = String(options.id || uid("pptx"));
-    var name = String(options.name || file.name || "apresentacao.pptx");
+    if (!file) throw new Error("Escolhe um ficheiro primeiro.");
+    var id = String(options.id || uid("file"));
+    var name = String(options.name || file.name || "ficheiro");
     var path = "/files/upload?id=" + encodeURIComponent(id) + "&name=" + encodeURIComponent(name);
     var payload = await fileRequest("POST", path, {
       body: file,
@@ -280,14 +280,14 @@
       onUploadComplete: options.onUploadComplete,
       onReady: options.onReady
     });
-    if (!payload.file) throw new Error("O servidor não confirmou o PowerPoint enviado.");
+    if (!payload.file) throw new Error("O servidor não confirmou o ficheiro enviado.");
     return payload.file;
   }
 
   async function downloadFile(file, options) {
     options = options || {};
-    if (!file || !file.path) throw new Error("Este PowerPoint não tem ficheiro sincronizado.");
-    var path = "/files/download?path=" + encodeURIComponent(file.path) + "&name=" + encodeURIComponent(file.name || "apresentacao.pptx");
+    if (!file || !file.path) throw new Error("Este material não tem ficheiro sincronizado.");
+    var path = "/files/download?path=" + encodeURIComponent(file.path) + "&name=" + encodeURIComponent(file.name || "ficheiro");
     var result = await fileRequest("GET", path, {
       responseType: "blob",
       onDownloadProgress: options.onProgress,

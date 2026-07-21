@@ -326,6 +326,15 @@
     base.semesters = base.semesters.map(function (semester) {
       return Object.assign({ id: uid("semester"), name: "Semestre", academicYear: academicYearFor(), startDate: "", endDate: "", archived: false }, semester);
     });
+    base.lessons = base.lessons.map(function (lesson) {
+      return Object.assign({ notes: "", aiNotes: [], mastered: false }, lesson, { aiNotes: asArray(lesson.aiNotes) });
+    });
+    base.materials = base.materials.map(function (material) {
+      return Object.assign({ remoteFile: null, slides: [], slideCount: 0, uploadStatus: "ready" }, material, {
+        slides: asArray(material.slides),
+        remoteFile: material.remoteFile && typeof material.remoteFile === "object" ? material.remoteFile : null
+      });
+    });
     base.tasks = base.tasks.map(function (task) {
       if (task.type === "lesson-quiz" && /^Quiz beOnLine · /.test(task.title || "")) task.title = String(task.title).replace(/^Quiz beOnLine · /, "Quiz da aula · ");
       return task;
@@ -1345,11 +1354,199 @@
     return '<span class="badge badge-pink">' + esc(material.academicYear) + "</span>";
   }
 
+  function isPptxMaterial(material) {
+    return !!material && (/powerpoint|presentation/i.test(material.mimeType || "") || /\.pptx$/i.test(material.fileName || ""));
+  }
+
+  function lessonMaterialsWithSlides(lessonId) {
+    return state.materials.filter(function (item) {
+      return item.lessonId === lessonId && isPptxMaterial(item) && asArray(item.slides).length;
+    });
+  }
+
+  function lessonHasAISource(lessonId) {
+    return lessonMaterialsWithSlides(lessonId).length > 0;
+  }
+
+  function renderAINote(note) {
+    if (!note) return "";
+    var notes = note.notes || note;
+    return '<article class="lesson-ai-note"><div class="lesson-ai-note-head"><div><span class="badge badge-violet"><i data-lucide="sparkles"></i>IA</span><h4>' + esc(notes.title || note.title || "Apontamentos gerados") + '</h4></div><small>' + formatDate((note.createdAt || "").slice(0, 10)) + '</small></div>' + (notes.overview ? '<p class="ai-overview">' + nl2br(notes.overview) + '</p>' : '') + asArray(notes.sections).map(function (section) { return '<details class="lesson-ai-section"><summary>' + esc(section.heading || "Tópico") + '</summary><p>' + nl2br(section.content || "") + '</p></details>'; }).join("") + (asArray(notes.keyTakeaways).length ? '<ul class="lesson-ai-takeaways">' + notes.keyTakeaways.map(function (item) { return '<li>' + esc(item) + '</li>'; }).join("") + '</ul>' : '') + '</article>';
+  }
+
+  function lessonAIAvailableLessons(courseId) {
+    return state.lessons.filter(function (item) {
+      return item.courseId === courseId && lessonHasAISource(item.id);
+    }).sort(function (a, b) { return String(a.date || "").localeCompare(String(b.date || "")); });
+  }
+
+  function openLessonAIModal(lessonId, output, materialId) {
+    var lesson = lessonById(lessonId);
+    if (!lesson || !AI) return;
+    var available = lessonAIAvailableLessons(lesson.courseId);
+    if (!available.length) {
+      toast("Carrega primeiro um PowerPoint numa aula desta cadeira.", "warning");
+      return;
+    }
+    output = output === "notes" ? "notes" : "quiz";
+    var selected = {};
+    selected[lesson.id] = true;
+    if (materialId) {
+      var target = state.materials.find(function (item) { return item.id === materialId; });
+      if (target && target.lessonId) selected[target.lessonId] = true;
+    }
+    var lessonRows = available.map(function (item) {
+      var count = lessonMaterialsWithSlides(item.id).reduce(function (sum, material) { return sum + asArray(material.slides).length; }, 0);
+      return '<label class="lesson-ai-choice"><input type="checkbox" name="lessonIds" value="' + attr(item.id) + '" ' + (selected[item.id] ? "checked" : "") + '><span><strong>' + esc(item.title) + '</strong><small>' + formatDate(item.date) + ' · ' + count + ' slides</small></span></label>';
+    }).join("");
+    var pastCount = state.questions.filter(function (question) { return asArray(question.lessonIds).some(function (id) { return available.some(function (lessonItem) { return lessonItem.id === id; }); }); }).length;
+    var body = '<form id="lessonAIForm" data-lesson="' + attr(lesson.id) + '" data-output="' + output + '"><div class="lesson-ai-modal-intro"><span class="metric-icon"><i data-lucide="' + (output === "quiz" ? "brain" : "notebook-pen") + '"></i></span><div><h3>' + (output === "quiz" ? "Gerar quiz a partir das aulas" : "Gerar apontamentos a partir das aulas") + '</h3><p>Escolhe exatamente que aulas entram como fonte. A geração é guardada nesta aula e sincronizada no Git.</p></div></div><div class="field"><label>Aulas usadas pela IA</label><div class="lesson-ai-choices">' + lessonRows + '</div></div><label class="lesson-ai-toggle"><input type="checkbox" name="includePast" ' + (pastCount ? "checked" : "") + '><span><strong>Incluir perguntas de anos anteriores</strong><small>' + pastCount + ' pergunta(s) disponíveis nas aulas escolhidas. No quiz, também entram como perguntas reais.</small></span></label><div class="form-grid"><div class="field"><label>Modelo</label><select name="modelMode"><option value="auto">Automático · estável</option><option value="fast">Rápido · 0.5B</option><option value="quality">Qualidade · 1.5B</option></select></div>' + (output === "quiz" ? '<div class="field"><label>Número de perguntas IA</label><select name="questionCount"><option>5</option><option selected>10</option><option>15</option><option>20</option></select></div><div class="field"><label>Dificuldade</label><select name="difficulty"><option value="auto">Automática</option><option value="easy">Fácil</option><option value="medium">Média</option><option value="hard">Difícil</option></select></div>' : '') + '</div><div class="form-note"><strong>Primeira geração:</strong> o modelo pode demorar a descarregar. Não precisas de manter esta janela aberta depois de terminar.</div></form>';
+    openModal(output === "quiz" ? "Criar quiz com IA" : "Criar apontamentos com IA", body, { className: "modal-wide lesson-ai-modal", footer: '<footer class="modal-foot"><button class="button" type="button" data-action="close-modal">Cancelar</button><button class="button button-dark" type="button" data-action="run-lesson-ai"><i data-lucide="sparkles"></i>Gerar e sincronizar</button></footer>' });
+  }
+
+  function buildLessonAISource(lessonIds, includePast) {
+    var slides = [];
+    var sourceMap = {};
+    var next = 1;
+    lessonIds.forEach(function (lessonId) {
+      var lesson = lessonById(lessonId);
+      lessonMaterialsWithSlides(lessonId).forEach(function (material) {
+        asArray(material.slides).forEach(function (slide) {
+          sourceMap[next] = { lessonId: lessonId, materialId: material.id, originalSlide: slide.number, lessonTitle: lesson && lesson.title || "Aula" };
+          slides.push({ number: next, title: (lesson ? lesson.title : "Aula") + " · slide " + slide.number + " · " + (slide.title || ""), text: slide.text || "" });
+          next += 1;
+        });
+      });
+    });
+    var past = state.questions.filter(function (question) {
+      return asArray(question.lessonIds).some(function (id) { return lessonIds.indexOf(id) >= 0; });
+    });
+    if (includePast) past.forEach(function (question) {
+      sourceMap[next] = { questionId: question.id, pastQuestion: true };
+      slides.push({ number: next, title: "Pergunta de " + (question.academicYear || "ano anterior"), text: "PERGUNTA: " + (question.prompt || "") + "\nRESPOSTA: " + (question.answer || "") + "\nEXPLICAÇÃO: " + (question.explanation || "") });
+      next += 1;
+    });
+    return { fileName: "Aulas selecionadas", fileSize: 0, slideCount: slides.length, slides: slides, sourceMap: sourceMap, pastQuestions: past };
+  }
+
+  async function runLessonAI() {
+    var form = document.getElementById("lessonAIForm");
+    if (!form || aiBusy || !AI) return;
+    var lesson = lessonById(form.dataset.lesson);
+    if (!lesson) return;
+    var selectedIds = Array.from(form.querySelectorAll('input[name="lessonIds"]:checked')).map(function (input) { return input.value; });
+    if (!selectedIds.length) { toast("Escolhe pelo menos uma aula.", "warning"); return; }
+    var output = form.dataset.output === "notes" ? "notes" : "quiz";
+    var includePast = !!(form.elements.includePast && form.elements.includePast.checked);
+    var source = buildLessonAISource(selectedIds, includePast);
+    if (!source.slides.length) { toast("As aulas escolhidas não têm texto de slides disponível.", "warning"); return; }
+    var options = {
+      output: output,
+      modelMode: form.elements.modelMode.value || "auto",
+      questionCount: form.elements.questionCount ? Number(form.elements.questionCount.value) || 10 : 10,
+      difficulty: form.elements.difficulty ? form.elements.difficulty.value || "auto" : "auto"
+    };
+    closeModal();
+    aiBusy = true;
+    setManualSyncActivity("A preparar a IA local…", "A organizar " + source.slideCount + " fontes das aulas escolhidas.", 4, true);
+    try {
+      var result = await AI.generateStudyPack(source, options, function (report) {
+        setManualSyncActivity(report.kind === "model" ? "A preparar o modelo…" : output === "quiz" ? "A criar o quiz…" : "A criar os apontamentos…", report.text || "A processar a matéria.", report.progress, true);
+      });
+      if (output === "quiz") {
+        var questions = asArray(result.quizQuestions);
+        if (includePast) {
+          var used = new Set(questions.map(function (item) { return String(item.prompt || "").trim().toLowerCase(); }));
+          source.pastQuestions.forEach(function (question) {
+            var key = String(question.prompt || "").trim().toLowerCase();
+            if (!used.has(key)) { questions.push(quizQuestionFromPast(question)); used.add(key); }
+          });
+        }
+        var quiz = { id: uid("quiz"), semesterId: lesson.semesterId, courseId: lesson.courseId, lessonId: lesson.id, lessonIds: selectedIds, title: "IA · " + lesson.title, questions: questions, generatedByAI: true, includesPastQuestions: includePast, createdAt: new Date().toISOString(), lastScore: null };
+        state.quizzes.push(quiz);
+      } else {
+        lesson.aiNotes = asArray(lesson.aiNotes);
+        lesson.aiNotes.unshift({ id: uid("ainote"), title: result.notes && result.notes.title || "Apontamentos · " + lesson.title, notes: result.notes, summary: result.summary || "", lessonIds: selectedIds, includesPastQuestions: includePast, modelId: result.modelId || "", createdAt: new Date().toISOString() });
+      }
+      setManualSyncActivity("A sincronizar no Git…", "A guardar o resultado para aparecer no PC e no telemóvel.", 96, true);
+      await save(true);
+      if (Sync && Sync.getStatus().configured) { try { await Sync.syncNow(state, defaultState()); } catch (_) {} }
+      finishManualSyncActivity(true);
+      aiBusy = false;
+      render();
+      toast(output === "quiz" ? "Quiz criado e sincronizado." : "Apontamentos criados e sincronizados.");
+    } catch (error) {
+      aiBusy = false;
+      finishManualSyncActivity(false);
+      toast(error.message || "A IA não conseguiu terminar.", "error");
+    }
+  }
+
+  async function uploadMaterialFile(file, context) {
+    context = context || {};
+    if (!file || !file.size) return null;
+    if (file.size > 25 * 1024 * 1024) throw new Error("O ficheiro tem mais de 25 MB.");
+    if (!Sync || !Sync.getStatus().configured) throw new Error("Configura primeiro o Git em Admin & dados para sincronizar o ficheiro.");
+    if (!navigator.onLine) throw new Error("Precisas de Internet para enviar o ficheiro. A aula ainda não foi alterada.");
+    var materialId = context.id || uid("material");
+    var blobId = await DB.putFile(file, { courseId: context.courseId, lessonId: context.lessonId });
+    var extracted = null;
+    if (/\.pptx$/i.test(file.name || "") && AI) {
+      setManualSyncActivity("A extrair os slides…", "A preparar o PowerPoint para a IA.", 4, true);
+      extracted = await AI.extractPptx(file, function (report) {
+        setManualSyncActivity("A extrair os slides…", report.text || "A ler o PowerPoint.", Math.min(30, Number(report.progress) || 4), true);
+      });
+    }
+    setManualSyncActivity("A enviar o material…", "A iniciar o upload para o repositório privado.", 32, true);
+    var remoteFile = await Sync.uploadFile(file, {
+      id: materialId,
+      name: file.name,
+      onProgress: function (report) {
+        var progress = report.progress == null ? null : 32 + Math.round(report.progress * 0.58);
+        var detail = report.total ? formatBytes(report.loaded) + " de " + formatBytes(report.total) + " enviados" : "A enviar o ficheiro…";
+        setManualSyncActivity("A enviar o material…", detail, progress, true);
+      },
+      onUploadComplete: function () { setManualSyncActivity("A confirmar no GitHub…", "A aguardar a confirmação do commit do ficheiro.", 92, true); },
+      onReady: function (request) { aiTransferRequest = request; }
+    });
+    aiTransferRequest = null;
+    return { id: materialId, blobId: blobId, remoteFile: remoteFile, slides: extracted ? extracted.slides : [], slideCount: extracted ? extracted.slideCount : 0 };
+  }
+
+  async function syncExistingMaterial(id) {
+    var material = state.materials.find(function (item) { return item.id === id; });
+    if (!material) return;
+    var record = material.blobId ? await DB.getFile(material.blobId) : null;
+    if (!record || !record.blob) {
+      toast("Abre a Twenty no dispositivo onde carregaste este ficheiro e sincroniza-o aí, ou volta a carregá-lo.", "warning");
+      return;
+    }
+    try {
+      var uploaded = await uploadMaterialFile(record.blob, { id: material.id, courseId: material.courseId, lessonId: material.lessonId });
+      material.source = "remote";
+      material.remoteFile = uploaded.remoteFile;
+      material.slides = uploaded.slides;
+      material.slideCount = uploaded.slideCount;
+      material.fileName = material.fileName || record.name;
+      material.mimeType = material.mimeType || record.type;
+      await save(true);
+      if (Sync && Sync.getStatus().configured) { try { await Sync.syncNow(state, defaultState()); } catch (_) {} }
+      finishManualSyncActivity(true);
+      render();
+      toast("Material sincronizado com o Git.");
+    } catch (error) {
+      finishManualSyncActivity(false);
+      toast(error.message || "Não foi possível sincronizar o material.", "error");
+    }
+  }
+
   function renderMaterialCard(material, course, archived) {
     var lesson = lessonById(material.lessonId);
     var kind = material.kind || "slides";
     var icon = kind === "slides" ? "presentation" : kind === "notes" ? "notebook-pen" : "file-text";
-    return '<article class="material-card"><div class="material-preview"><i data-lucide="' + icon + '"></i>' + materialYearBadge(material, course) + '</div><h4>' + esc(material.title) + '</h4><p>' + esc(lesson ? lesson.title : "Biblioteca da cadeira") + (material.fileName ? " · " + esc(material.fileName) : "") + '</p><div class="material-actions"><span class="badge badge-violet">' + esc(kind === "slides" ? "Slides" : kind === "notes" ? "Notas" : "PDF") + '</span><span class="list-actions"><button class="row-button" type="button" data-action="open-material" data-id="' + attr(material.id) + '" aria-label="Abrir material"><i data-lucide="eye"></i></button>' + (!archived ? '<button class="row-button" type="button" data-action="delete-entity" data-kind="materials" data-id="' + attr(material.id) + '" aria-label="Remover material"><i data-lucide="trash-2"></i></button>' : "") + "</span></div></article>";
+    var synced = !!(material.remoteFile && material.remoteFile.path);
+    var aiReady = isPptxMaterial(material) && asArray(material.slides).length && lesson;
+    return '<article class="material-card"><div class="material-preview"><i data-lucide="' + icon + '"></i>' + materialYearBadge(material, course) + '</div><h4>' + esc(material.title) + '</h4><p>' + esc(lesson ? lesson.title : "Biblioteca da cadeira") + (material.fileName ? " · " + esc(material.fileName) : "") + '</p><div class="material-actions"><span class="badge ' + (synced ? 'badge-mint' : 'badge-yellow') + '">' + (synced ? 'Sincronizado' : 'Local') + '</span><span class="list-actions">' + (aiReady && !archived ? '<button class="row-button row-button-ai" type="button" data-action="lesson-ai" data-output="quiz" data-lesson="' + attr(lesson.id) + '" data-material="' + attr(material.id) + '" aria-label="Criar quiz com IA"><i data-lucide="sparkles"></i></button>' : '') + (!synced && material.blobId && !archived ? '<button class="row-button" type="button" data-action="sync-material" data-id="' + attr(material.id) + '" aria-label="Sincronizar ficheiro com o Git"><i data-lucide="cloud-upload"></i></button>' : '') + '<button class="row-button" type="button" data-action="open-material" data-id="' + attr(material.id) + '" aria-label="Abrir material"><i data-lucide="eye"></i></button>' + (!archived ? '<button class="row-button" type="button" data-action="delete-entity" data-kind="materials" data-id="' + attr(material.id) + '" aria-label="Remover material"><i data-lucide="trash-2"></i></button>' : "") + '</span></div>' + (aiReady ? '<small class="material-ai-ready"><i data-lucide="brain"></i>' + asArray(material.slides).length + ' slides prontos para IA</small>' : '') + '</article>';
   }
 
   function renderCourseMaterials(course, archived) {
@@ -1456,7 +1653,7 @@
     var lesson = lessonById(id);
     if (!lesson) {
       setHeader("Aula", "Não encontrada");
-      return emptyState("circle-alert", "Aula não encontrada", "Pode ter sido removida ou alterada no JSON.", "go-courses", "Voltar");
+      return emptyState("circle-alert", "Aula não encontrada", "Pode ter sido removida ou alterada.", "go-courses", "Voltar");
     }
     var course = courseById(lesson.courseId);
     var semester = course ? semesterById(course.semesterId) : null;
@@ -1465,25 +1662,25 @@
     var materials = state.materials.filter(function (item) { return item.lessonId === lesson.id; });
     var questions = pastQuestionsForLesson(lesson.id);
     var quizzes = state.quizzes.filter(function (item) { return item.lessonId === lesson.id; });
+    var aiSources = lessonAIAvailableLessons(lesson.courseId);
+    var canGenerateAI = aiSources.length > 0;
     var onlineComplete = lessonIsBeOnline(lesson);
     var lessonEnded = lessonHasEnded(lesson);
     var currentMaterials = materials.filter(function (item) { return !semester || !item.academicYear || item.academicYear === semester.academicYear; });
     var oldMaterials = materials.filter(function (item) { return semester && item.academicYear && item.academicYear !== semester.academicYear; });
-    var materialsHtml = materials.length ? '<div class="material-grid">' + currentMaterials.concat(oldMaterials).map(function (item) { return renderMaterialCard(item, course || { semesterId: null }, archived); }).join("") + "</div>" : emptyState("file-up", "Ainda sem PDF", "Podes usar slides de anos anteriores enquanto o professor não disponibiliza os atuais.", "add-material", "Ligar PDF");
-    var questionsHtml = questions.length ? questions.map(function (item) { return renderQuestionCard(item, archived); }).join("") : emptyState("message-circle-question", "Sem perguntas anteriores", "Associa perguntas de testes antigos a esta aula para elas surgirem aqui.", "add-question", "Associar pergunta");
+    var materialsHtml = materials.length ? '<div class="material-grid">' + currentMaterials.concat(oldMaterials).map(function (item) { return renderMaterialCard(item, course || { semesterId: null }, archived); }).join("") + '</div>' : emptyState("file-up", "Ainda sem material", "Carrega os slides ou PDF desta aula. O ficheiro ficará sincronizado.", "add-material", "Carregar material");
+    var questionsHtml = questions.length ? questions.map(function (item) { return renderQuestionCard(item, archived); }).join("") : emptyState("message-circle-question", "Sem perguntas anteriores", "Associa perguntas de testes antigos a esta aula.", "add-question", "Associar pergunta");
     var quizHtml = quizzes.length ? quizzes.map(function (quiz) {
-      var origin = quiz.generatedFromPastQuestions ? "perguntas anteriores" : "manual";
-      return '<div class="list-row quiz-list-row"><span class="list-icon"><i data-lucide="sparkles"></i></span><span class="list-content"><strong>' + esc(quiz.title) + '</strong><small>' + asArray(quiz.questions).length + ' pergunta(s) · ' + origin + (quiz.lastScore != null ? ' · ' + quiz.lastScore + '%' : '') + '</small></span><div class="list-actions"><button class="button button-dark button-small" type="button" data-action="start-quiz" data-id="' + attr(quiz.id) + '"><i data-lucide="play"></i>Começar</button>' + (!archived && questions.length ? '<button class="row-button" type="button" data-action="add-past-to-quiz" data-id="' + attr(quiz.id) + '" aria-label="Adicionar perguntas anteriores"><i data-lucide="history"></i></button>' : '') + '</div></div>';
-    }).join("") : emptyState("sparkles", "Quiz por criar", "Cria um quiz normal ou usa as perguntas de testes anteriores desta aula.", "add-quiz", "Criar quiz");
+      var origin = quiz.generatedByAI ? "IA" : quiz.generatedFromPastQuestions ? "perguntas anteriores" : "manual";
+      return '<div class="list-row quiz-list-row"><span class="list-icon"><i data-lucide="sparkles"></i></span><span class="list-content"><strong>' + esc(quiz.title) + '</strong><small>' + asArray(quiz.questions).length + ' pergunta(s) · ' + origin + (quiz.lastScore != null ? ' · ' + quiz.lastScore + '%' : '') + '</small></span><div class="list-actions"><button class="button button-dark button-small" type="button" data-action="start-quiz" data-id="' + attr(quiz.id) + '"><i data-lucide="play"></i>Começar</button></div></div>';
+    }).join("") : emptyState("sparkles", "Quiz por criar", "Gera um quiz com os slides de uma ou várias aulas.", canGenerateAI ? "lesson-ai" : "add-quiz", canGenerateAI ? "Gerar com IA" : "Criar quiz");
+    var generatedNotes = asArray(lesson.aiNotes);
+    var generatedNotesHtml = generatedNotes.length ? '<div class="lesson-ai-notes">' + generatedNotes.map(renderAINote).join("") + '</div>' : '';
     var statusLabel = onlineComplete ? "Revista" : lessonEnded ? "Por rever" : "Preparada";
-    var statusCopy = onlineComplete ? "Quiz concluído. Esta aula está acompanhada e continua disponível para praticares." : lessonEnded ? "Faz um quiz curto agora para não deixares esta matéria acumular e anotares dúvidas cedo." : "Quando a aula terminar, faz o quiz para confirmares o que percebeste.";
-    var beOnlineActions = "";
-    if (!archived) {
-      if (quizzes.length) beOnlineActions += '<button class="button button-dark" type="button" data-action="start-quiz" data-id="' + attr(quizzes[0].id) + '"><i data-lucide="play"></i>' + (onlineComplete ? "Praticar novamente" : "Fazer quiz da aula") + '</button>';
-      if (questions.length) beOnlineActions += '<button class="button" type="button" data-action="generate-past-quiz" data-lesson="' + attr(lesson.id) + '"><i data-lucide="history"></i>Gerar com perguntas anteriores</button>';
-      beOnlineActions += '<button class="button" type="button" data-action="add-quiz" data-course="' + attr(lesson.courseId) + '" data-lesson="' + attr(lesson.id) + '"><i data-lucide="plus"></i>Criar quiz normal</button>';
-    }
-    return '<div class="page-head"><div><button class="button button-ghost button-small" type="button" data-route="course" data-id="' + attr(lesson.courseId) + '"><i data-lucide="arrow-left"></i>' + esc(course ? course.code || course.name : "Cadeira") + '</button><h2 style="margin-top:11px">' + esc(lesson.title) + '</h2><p>' + formatLongDate(lesson.date) + (lesson.start ? " · " + esc(lesson.start) + "–" + esc(lesson.end || "") : "") + ' · ' + esc(lessonTypeLabel(lesson.type)) + (lesson.room ? " · " + esc(lesson.room) : "") + '</p></div><div class="page-actions">' + (!archived ? '<button class="button" type="button" data-action="edit-lesson" data-id="' + attr(lesson.id) + '"><i data-lucide="pencil"></i>Editar aula</button><button class="button" type="button" data-action="quick-review" data-course="' + attr(lesson.courseId) + '" data-lesson="' + attr(lesson.id) + '"><i data-lucide="rotate-ccw"></i>Rever aula</button><button class="button ' + (lesson.mastered ? "button-yellow" : "button-dark") + '" type="button" data-action="toggle-mastery" data-id="' + attr(lesson.id) + '"><i data-lucide="badge-check"></i>' + (lesson.mastered ? "Dominada" : "Marcar dominada") + "</button>" : "") + '</div></div><div class="bento-grid"><article class="card course-hero span-12" style="--course-color:' + safeColor(course && course.color) + ';min-height:220px"><div class="course-hero-copy"><span class="badge badge-dark">' + esc(lesson.type || "Aula") + '</span><h2>' + esc(lesson.title) + '</h2><p>' + esc(lesson.topics || "Adiciona os tópicos dados nesta aula.") + '</p></div><div class="course-score"><strong>' + (lesson.mastered ? "✓" : questions.length) + '</strong><span>' + (lesson.mastered ? "matéria dominada" : "perguntas antigas") + '</span></div></article><article class="card span-12 beonline-lesson-card ' + (onlineComplete ? "is-online" : "") + '"><div class="beonline-lesson-copy"><div class="befirst-lesson-top"><span class="befirst-wordmark">BEFIRST<sup>™</sup></span><span class="badge ' + (onlineComplete ? "badge-mint" : lessonEnded ? "badge-danger" : "badge-violet") + '"><span class="beonline-dot"></span>' + statusLabel + '</span></div><h3>Revisão da aula</h3><p>' + esc(statusCopy) + '</p></div><div class="beonline-lesson-actions">' + beOnlineActions + '</div></article><article class="card span-12"><div class="card-title-row"><div><h3>Slides e PDFs</h3></div>' + (!archived ? '<button class="button button-small" type="button" data-action="add-material" data-course="' + attr(lesson.courseId) + '" data-lesson="' + attr(lesson.id) + '"><i data-lucide="file-up"></i>Carregar</button>' : "") + '</div><div style="margin-top:15px">' + materialsHtml + '</div></article><article class="card span-7"><div class="card-title-row"><div><h3>Perguntas de testes anteriores</h3></div><div class="list-actions">' + (!archived && questions.length ? '<button class="button button-dark button-small" type="button" data-action="generate-past-quiz" data-lesson="' + attr(lesson.id) + '"><i data-lucide="sparkles"></i>Fazer quiz</button>' : '') + (!archived ? '<button class="button button-small" type="button" data-action="add-question" data-course="' + attr(lesson.courseId) + '" data-lesson="' + attr(lesson.id) + '"><i data-lucide="plus"></i>Pergunta</button>' : "") + '</div></div><div style="margin-top:15px">' + questionsHtml + '</div></article><article class="card span-5"><div class="card-title-row"><div><h3>Quiz da aula</h3></div>' + (!archived ? '<button class="button button-small" type="button" data-action="add-quiz" data-course="' + attr(lesson.courseId) + '" data-lesson="' + attr(lesson.id) + '"><i data-lucide="plus"></i>Normal</button>' : "") + '</div><div class="list-stack">' + quizHtml + '</div></article><article class="card span-12"><div class="card-title-row"><div><h3>Apontamentos</h3></div>' + (!archived ? '<button class="button button-small" type="button" data-action="edit-lesson-notes" data-id="' + attr(lesson.id) + '"><i data-lucide="pencil"></i>Editar</button>' : "") + '</div><div class="form-note" style="margin-top:15px">' + (lesson.notes ? nl2br(lesson.notes) : "Ainda não escreveste apontamentos nesta aula.") + "</div></article></div>";
+    var statusCopy = onlineComplete ? "Quiz concluído. Esta aula continua disponível para praticares." : lessonEnded ? "Faz um quiz curto para não deixares a matéria acumular." : "Quando a aula terminar, faz o quiz para confirmares o que percebeste.";
+    var aiQuizButton = !archived && canGenerateAI ? '<button class="button button-violet button-small" type="button" data-action="lesson-ai" data-output="quiz" data-lesson="' + attr(lesson.id) + '"><i data-lucide="sparkles"></i>Gerar com IA</button>' : '';
+    var aiNotesButton = !archived && canGenerateAI ? '<button class="button button-violet button-small" type="button" data-action="lesson-ai" data-output="notes" data-lesson="' + attr(lesson.id) + '"><i data-lucide="sparkles"></i>Gerar com IA</button>' : '';
+    return '<div class="page-head"><div><button class="button button-ghost button-small" type="button" data-route="course" data-id="' + attr(lesson.courseId) + '"><i data-lucide="arrow-left"></i>' + esc(course ? course.code || course.name : "Cadeira") + '</button><h2 style="margin-top:11px">' + esc(lesson.title) + '</h2><p>' + formatLongDate(lesson.date) + (lesson.start ? ' · ' + esc(lesson.start) + '–' + esc(lesson.end || '') : '') + ' · ' + esc(lessonTypeLabel(lesson.type)) + (lesson.room ? ' · ' + esc(lesson.room) : '') + '</p></div><div class="page-actions">' + (!archived ? '<button class="button" type="button" data-action="edit-lesson" data-id="' + attr(lesson.id) + '"><i data-lucide="pencil"></i>Editar aula</button><button class="button ' + (lesson.mastered ? 'button-yellow' : 'button-dark') + '" type="button" data-action="toggle-mastery" data-id="' + attr(lesson.id) + '"><i data-lucide="badge-check"></i>' + (lesson.mastered ? 'Dominada' : 'Marcar dominada') + '</button>' : '') + '</div></div><div class="bento-grid"><article class="card course-hero span-12" style="--course-color:' + safeColor(course && course.color) + ';min-height:220px"><div class="course-hero-copy"><span class="badge badge-dark">' + esc(lesson.type || 'Aula') + '</span><h2>' + esc(lesson.title) + '</h2><p>' + esc(lesson.topics || 'Adiciona os tópicos dados nesta aula.') + '</p></div><div class="course-score"><strong>' + (lesson.mastered ? '✓' : questions.length) + '</strong><span>' + (lesson.mastered ? 'matéria dominada' : 'perguntas antigas') + '</span></div></article><article class="card span-12 beonline-lesson-card ' + (onlineComplete ? 'is-online' : '') + '"><div class="beonline-lesson-copy"><span class="badge ' + (onlineComplete ? 'badge-mint' : lessonEnded ? 'badge-danger' : 'badge-violet') + '">' + statusLabel + '</span><h3>Revisão da aula</h3><p>' + esc(statusCopy) + '</p></div></article><article class="card span-12"><div class="card-title-row"><div><h3>Slides e PDFs</h3><p class="card-subtitle">Os ficheiros são enviados para o Git e ficam disponíveis nos teus dispositivos.</p></div>' + (!archived ? '<button class="button button-small" type="button" data-action="add-material" data-course="' + attr(lesson.courseId) + '" data-lesson="' + attr(lesson.id) + '"><i data-lucide="file-up"></i>Carregar</button>' : '') + '</div><div style="margin-top:15px">' + materialsHtml + '</div></article><article class="card span-7"><div class="card-title-row"><div><h3>Perguntas de testes anteriores</h3></div><div class="list-actions">' + (!archived ? '<button class="button button-small" type="button" data-action="add-question" data-course="' + attr(lesson.courseId) + '" data-lesson="' + attr(lesson.id) + '"><i data-lucide="plus"></i>Pergunta</button>' : '') + '</div></div><div style="margin-top:15px">' + questionsHtml + '</div></article><article class="card span-5"><div class="card-title-row"><div><h3>Quiz da aula</h3></div><div class="list-actions">' + aiQuizButton + (!archived ? '<button class="button button-small" type="button" data-action="add-quiz" data-course="' + attr(lesson.courseId) + '" data-lesson="' + attr(lesson.id) + '"><i data-lucide="plus"></i>Manual</button>' : '') + '</div></div><div class="list-stack">' + quizHtml + '</div></article><article class="card span-12"><div class="card-title-row"><div><h3>Apontamentos</h3><p class="card-subtitle">Podes combinar slides de várias aulas e incluir perguntas antigas.</p></div><div class="list-actions">' + aiNotesButton + (!archived ? '<button class="button button-small" type="button" data-action="edit-lesson-notes" data-id="' + attr(lesson.id) + '"><i data-lucide="pencil"></i>Editar manual</button>' : '') + '</div></div>' + generatedNotesHtml + '<div class="form-note" style="margin-top:15px">' + (lesson.notes ? nl2br(lesson.notes) : 'Ainda não escreveste apontamentos manuais nesta aula.') + '</div></article></div>';
   }
 
   function plannerModeControl(active) {
@@ -2205,7 +2402,6 @@
   }
 
   function renderStudy() {
-    if (route.tab === "ai") return renderStudyAI();
     if (route.tab === "weekly") return renderWeeklyReview();
     setHeader("Estudar", "Quizzes e revisões");
     var quizzes = semesterItems("quizzes");
@@ -2235,7 +2431,7 @@
     var questionHtml = relatedQuestions.length ? relatedQuestions.slice(0, 6).map(function (item) { return renderQuestionCard(item, false); }).join("") : emptyState("message-circle-question", "Sem perguntas para esta matéria", "Adiciona perguntas antigas e associa-as às aulas que saem na avaliação.", "add-question", "Adicionar pergunta");
 
     var hero = featured ? '<article class="card card-violet span-12"><div class="card-title-row"><div><span class="badge badge-dark">Próxima avaliação · ' + relativeDate(featured.date) + '</span><h2 style="margin:18px 0 8px;font-size:clamp(1.8rem,4vw,3.5rem);letter-spacing:-.07em">' + esc(featured.title) + '</h2><p class="card-subtitle" style="color:rgba(24,25,31,.7)">' + esc(featuredCourse ? featuredCourse.name : "Avaliação") + ' · ' + scopedLessons.length + ' aulas na matéria · ' + relatedQuestions.length + ' perguntas anteriores</p></div><span class="hero-number" style="position:relative;right:auto;bottom:auto;font-size:7rem;color:rgba(255,255,255,.55)">20</span></div><div class="hero-actions"><button class="button button-dark" type="button" data-action="study-assessment" data-id="' + attr(featured.id) + '"><i data-lucide="play"></i>Estudar esta matéria</button><button class="button" type="button" data-action="assessment-scope" data-id="' + attr(featured.id) + '"><i data-lucide="list-tree"></i>Ver aulas incluídas</button></div></article>' : '<article class="card card-violet span-12"><div class="page-head"><div><h2>Sessão livre</h2><p>Sem avaliação marcada. Escolhe uma cadeira ou uma aula por rever.</p></div><button class="button button-dark" type="button" data-action="add-assessment">Marcar avaliação</button></div></article>';
-    return '<div class="page-head"><div><h2>Estudar com contexto.</h2><p>Matéria, slides, perguntas anteriores e quizzes no mesmo fluxo.</p></div><div class="page-actions"><button class="button button-violet" type="button" data-route="study" data-tab="ai"><i data-lucide="brain"></i>IA de estudo</button><button class="button" type="button" data-route="study" data-tab="weekly"><i data-lucide="clipboard-check"></i>Revisão semanal</button><button class="button" type="button" data-route="planner" data-planner-view="study-day"><i data-lucide="blocks"></i>Planear dia</button><button class="button" type="button" data-action="add-question"><i data-lucide="plus"></i>Pergunta antiga</button><button class="button button-dark" type="button" data-action="add-quiz"><i data-lucide="sparkles"></i>Novo quiz</button></div></div><div class="bento-grid">' + hero + '<article class="card span-5"><div class="card-title-row"><div><h3>Aulas por rever</h3></div><span class="badge badge-yellow">' + weakLessons.length + '</span></div><div class="list-stack">' + weakHtml + '</div></article><article class="card span-7"><div class="card-title-row"><div><p class="card-label">Perguntas de testes anteriores</p><h3>' + (featured ? "Ligadas à próxima avaliação" : "Banco geral") + '</h3></div><span class="badge badge-pink">' + relatedQuestions.length + '</span></div><div style="margin-top:14px">' + questionHtml + '</div></article>' + renderStudyHourEstimate() + '<section class="span-12 section-block"><div class="section-heading"><div><h3>Quizzes disponíveis</h3><p>Quizzes manuais e perguntas anteriores ligadas às aulas.</p></div></div><div class="bento-grid">' + quizCards + "</div></section></div>";
+    return '<div class="page-head"><div><h2>Estudar com contexto.</h2><p>Matéria, slides, perguntas anteriores e quizzes no mesmo fluxo.</p></div><div class="page-actions"><button class="button" type="button" data-route="study" data-tab="weekly"><i data-lucide="clipboard-check"></i>Revisão semanal</button><button class="button" type="button" data-route="planner" data-planner-view="study-day"><i data-lucide="blocks"></i>Planear dia</button><button class="button" type="button" data-action="add-question"><i data-lucide="plus"></i>Pergunta antiga</button><button class="button button-dark" type="button" data-action="add-quiz"><i data-lucide="sparkles"></i>Novo quiz</button></div></div><div class="bento-grid">' + hero + '<article class="card span-5"><div class="card-title-row"><div><h3>Aulas por rever</h3></div><span class="badge badge-yellow">' + weakLessons.length + '</span></div><div class="list-stack">' + weakHtml + '</div></article><article class="card span-7"><div class="card-title-row"><div><p class="card-label">Perguntas de testes anteriores</p><h3>' + (featured ? "Ligadas à próxima avaliação" : "Banco geral") + '</h3></div><span class="badge badge-pink">' + relatedQuestions.length + '</span></div><div style="margin-top:14px">' + questionHtml + '</div></article>' + renderStudyHourEstimate() + '<section class="span-12 section-block"><div class="section-heading"><div><h3>Quizzes disponíveis</h3><p>Quizzes manuais e perguntas anteriores ligadas às aulas.</p></div></div><div class="bento-grid">' + quizCards + "</div></section></div>";
   }
 
   function gradeSimulatorAssessmentFields(courseId) {
@@ -2883,11 +3079,11 @@
         lesson.end = selectedSlot.end;
         lesson.room = lesson.room || selectedSlot.room || "";
       }
-      body = '<form id="entityForm" data-type="lesson" data-id="' + attr(existingLesson && existingLesson.id) + '"><div class="form-grid"><div class="field"><label>Cadeira</label><select name="courseId" data-role="lesson-course" required><option value="">Escolher…</option>' + courseOptions(selectedCourse) + '</select></div><div class="field"><label>Data</label><input name="date" data-role="lesson-date" type="date" required value="' + attr(selectedLessonDate) + '"></div><div class="field"><label>Tipo de aula</label><select name="lessonType" data-role="lesson-type"><option value="T" ' + (selectedLessonType === "T" ? "selected" : "") + '>Teórica</option><option value="TP" ' + (selectedLessonType === "TP" ? "selected" : "") + '>Teórico-prática</option><option value="P" ' + (selectedLessonType === "P" ? "selected" : "") + '>Prática</option><option value="LAB" ' + (selectedLessonType === "LAB" ? "selected" : "") + '>Laboratório</option><option value="OT" ' + (selectedLessonType === "OT" ? "selected" : "") + '>Orientação</option></select></div><div class="field"><label>Bloco compatível do horário</label><select name="scheduleId" data-role="lesson-schedule" required><option value="">Escolher bloco…</option>' + scheduleOptionsForLesson(selectedCourse, selectedLessonType, selectedLessonDate, selectedScheduleId) + '</select><small>Só aparecem blocos da mesma cadeira, dia e tipo.</small></div><div class="field field-full"><label>Nome da aula</label><input name="title" required placeholder="Ex.: TP08 · Herança e polimorfismo" value="' + attr(lesson.title) + '"></div><div class="field"><label>Início</label><input name="start" type="time" readonly value="' + attr(lesson.start || "") + '"></div><div class="field"><label>Fim</label><input name="end" type="time" readonly value="' + attr(lesson.end || "") + '"></div><div class="field field-full"><label>Sala</label><input name="room" placeholder="Ex.: B2.14" value="' + attr(lesson.room) + '"></div><div class="field field-full"><label>Matéria / tópicos</label><textarea name="topics" placeholder="Conceitos dados, capítulos, exercícios…">' + esc(lesson.topics) + '</textarea></div>' + (!existingLesson ? '<div class="field"><label>PDF opcional</label><input name="file" type="file" accept="application/pdf,image/*,.ppt,.pptx"></div><div class="field"><label>Ano letivo do PDF</label><input name="materialYear" placeholder="2025/26" value="' + attr(year) + '"></div>' : "") + '</div><div class="form-note" style="margin-top:13px">A aula fica ligada ao período real do horário. O nome que escreveres aparecerá na aula em direto e no Calendário.</div></form>';
+      body = '<form id="entityForm" data-type="lesson" data-id="' + attr(existingLesson && existingLesson.id) + '"><div class="form-grid"><div class="field"><label>Cadeira</label><select name="courseId" data-role="lesson-course" required><option value="">Escolher…</option>' + courseOptions(selectedCourse) + '</select></div><div class="field"><label>Data</label><input name="date" data-role="lesson-date" type="date" required value="' + attr(selectedLessonDate) + '"></div><div class="field"><label>Tipo de aula</label><select name="lessonType" data-role="lesson-type"><option value="T" ' + (selectedLessonType === "T" ? "selected" : "") + '>Teórica</option><option value="TP" ' + (selectedLessonType === "TP" ? "selected" : "") + '>Teórico-prática</option><option value="P" ' + (selectedLessonType === "P" ? "selected" : "") + '>Prática</option><option value="LAB" ' + (selectedLessonType === "LAB" ? "selected" : "") + '>Laboratório</option><option value="OT" ' + (selectedLessonType === "OT" ? "selected" : "") + '>Orientação</option></select></div><div class="field"><label>Bloco compatível do horário</label><select name="scheduleId" data-role="lesson-schedule" required><option value="">Escolher bloco…</option>' + scheduleOptionsForLesson(selectedCourse, selectedLessonType, selectedLessonDate, selectedScheduleId) + '</select><small>Só aparecem blocos da mesma cadeira, dia e tipo.</small></div><div class="field field-full"><label>Nome da aula</label><input name="title" required placeholder="Ex.: TP08 · Herança e polimorfismo" value="' + attr(lesson.title) + '"></div><div class="field"><label>Início</label><input name="start" type="time" readonly value="' + attr(lesson.start || "") + '"></div><div class="field"><label>Fim</label><input name="end" type="time" readonly value="' + attr(lesson.end || "") + '"></div><div class="field field-full"><label>Sala</label><input name="room" placeholder="Ex.: B2.14" value="' + attr(lesson.room) + '"></div><div class="field field-full"><label>Matéria / tópicos</label><textarea name="topics" placeholder="Conceitos dados, capítulos, exercícios…">' + esc(lesson.topics) + '</textarea></div>' + (!existingLesson ? '<div class="field"><label>PDF opcional</label><input name="file" type="file" accept="application/pdf,image/*,.pptx,.txt,.md"></div><div class="field"><label>Ano letivo do PDF</label><input name="materialYear" placeholder="2025/26" value="' + attr(year) + '"></div>' : "") + '</div><div class="form-note" style="margin-top:13px">A aula fica ligada ao período real do horário. O nome que escreveres aparecerá na aula em direto e no Calendário.</div></form>';
     } else if (type === "material") {
       title = "Carregar slides ou PDF";
       var materialCourse = preset.courseId || (activeCourses()[0] && activeCourses()[0].id) || "";
-      body = '<form id="entityForm" data-type="material"><div class="form-grid"><div class="field"><label>Cadeira</label><select name="courseId" required><option value="">Escolher…</option>' + courseOptions(materialCourse) + '</select></div><div class="field"><label>Aula associada</label><select name="lessonId"><option value="">Biblioteca geral</option>' + lessonOptions(null, preset.lessonId ? [preset.lessonId] : [], true) + '</select></div><div class="field field-full"><label>Título</label><input name="title" required placeholder="Ex.: Slides · Polimorfismo" value="' + attr(preset.title) + '"></div><div class="field"><label>Tipo</label><select name="kind"><option value="slides">Slides</option><option value="pdf">PDF / texto</option><option value="notes">Apontamentos</option><option value="worksheet">Ficha prática</option></select></div><div class="field"><label>Ano letivo</label><input name="academicYear" required placeholder="2024/25" value="' + attr(preset.academicYear || year) + '"><small>Se for o ano atual, a etiqueta fica oculta.</small></div><div class="field field-full"><label>Ficheiro no dispositivo</label><input name="file" type="file" accept="application/pdf,image/*,.ppt,.pptx"><small>O ficheiro é guardado localmente no navegador.</small></div><div class="field field-full"><label>Ou caminho / URL</label><input name="url" placeholder="assets/slides/aula-08.pdf ou https://…"><small>Ideal para PDFs colocados manualmente na pasta do projeto e referenciados no JSON.</small></div></div></form>';
+      body = '<form id="entityForm" data-type="material"><div class="form-grid"><div class="field"><label>Cadeira</label><select name="courseId" required><option value="">Escolher…</option>' + courseOptions(materialCourse) + '</select></div><div class="field"><label>Aula associada</label><select name="lessonId"><option value="">Biblioteca geral</option>' + lessonOptions(null, preset.lessonId ? [preset.lessonId] : [], true) + '</select></div><div class="field field-full"><label>Título</label><input name="title" required placeholder="Ex.: Slides · Polimorfismo" value="' + attr(preset.title) + '"></div><div class="field"><label>Tipo</label><select name="kind"><option value="slides">Slides</option><option value="pdf">PDF / texto</option><option value="notes">Apontamentos</option><option value="worksheet">Ficha prática</option></select></div><div class="field"><label>Ano letivo</label><input name="academicYear" required placeholder="2024/25" value="' + attr(preset.academicYear || year) + '"><small>Se for o ano atual, a etiqueta fica oculta.</small></div><div class="field field-full"><label>Ficheiro no dispositivo</label><input name="file" type="file" accept="application/pdf,image/*,.pptx,.txt,.md"><small>O ficheiro é enviado para o repositório privado e fica também em cache neste dispositivo.</small></div><div class="field field-full"><label>Ou caminho / URL</label><input name="url" placeholder="assets/slides/aula-08.pdf ou https://…"><small>Ideal para PDFs colocados manualmente na pasta do projeto e referenciados no JSON.</small></div></div></form>';
     } else if (type === "task") {
       title = "Nova tarefa";
       body = '<form id="entityForm" data-type="task"><div class="form-grid"><div class="field field-full"><label>Título</label><input name="title" required placeholder="Ex.: Rever aula 08"></div><div class="field"><label>Tipo</label><select name="taskType"><option value="homework">Trabalho de casa</option><option value="project">Projeto</option><option value="review" ' + (preset.type === "review" ? "selected" : "") + '>Rever aula</option><option value="reading">Leitura</option><option value="other">Outro</option></select></div><div class="field"><label>Cadeira</label><select name="courseId"><option value="">Pessoal / geral</option>' + courseOptions(preset.courseId || "") + '</select></div><div class="field"><label>Prazo</label><input name="dueDate" type="date" value="' + attr(preset.dueDate || todayISO()) + '"></div><div class="field"><label>Hora</label><input name="dueTime" type="time" value="' + attr(preset.dueTime || "18:00") + '"></div><div class="field"><label>Prioridade</label><select name="priority"><option value="normal">Normal</option><option value="high">Alta</option><option value="low">Baixa</option></select></div><div class="field"><label>Ligada à aula</label><select name="lessonId"><option value="">Nenhuma</option>' + lessonOptions(null, preset.lessonId ? [preset.lessonId] : [], true) + '</select></div></div></form>';
@@ -3328,8 +3524,8 @@
         if (!existingLesson) state.lessons.push(lessonData);
         var lessonFile = data.get("file");
         if (lessonFile && lessonFile.size) {
-          var lessonBlobId = await DB.putFile(lessonFile, { courseId: course.id, lessonId: lessonData.id });
-          state.materials.push({ id: uid("material"), semesterId: course.semesterId, courseId: course.id, lessonId: lessonData.id, title: "Slides · " + lessonData.title, academicYear: String(data.get("materialYear") || (semesterById(course.semesterId) || {}).academicYear || ""), kind: "slides", source: "indexeddb", blobId: lessonBlobId, fileName: lessonFile.name, mimeType: lessonFile.type, uploadedAt: new Date().toISOString() });
+          var uploadedLessonFile = await uploadMaterialFile(lessonFile, { courseId: course.id, lessonId: lessonData.id });
+          state.materials.push({ id: uploadedLessonFile.id, semesterId: course.semesterId, courseId: course.id, lessonId: lessonData.id, title: "Slides · " + lessonData.title, academicYear: String(data.get("materialYear") || (semesterById(course.semesterId) || {}).academicYear || ""), kind: "slides", source: "remote", blobId: uploadedLessonFile.blobId, remoteFile: uploadedLessonFile.remoteFile, slides: uploadedLessonFile.slides, slideCount: uploadedLessonFile.slideCount, fileName: lessonFile.name, mimeType: lessonFile.type, uploadedAt: new Date().toISOString() });
         }
       } else if (type === "material") {
         var linkedLesson = lessonById(data.get("lessonId"));
@@ -3338,14 +3534,14 @@
         var file = data.get("file");
         var url = safeResourceUrl(data.get("url"));
         if ((!file || !file.size) && !url) throw new Error("Escolhe um ficheiro ou indica um caminho/URL.");
-        var blobId = null;
-        if (file && file.size) blobId = await DB.putFile(file, { courseId: materialCourse.id, lessonId: linkedLesson && linkedLesson.id });
+        var uploadedMaterial = file && file.size ? await uploadMaterialFile(file, { courseId: materialCourse.id, lessonId: linkedLesson && linkedLesson.id }) : null;
         state.materials.push({
-          id: uid("material"), semesterId: materialCourse.semesterId, courseId: materialCourse.id,
+          id: uploadedMaterial ? uploadedMaterial.id : uid("material"), semesterId: materialCourse.semesterId, courseId: materialCourse.id,
           lessonId: linkedLesson ? linkedLesson.id : null, title: String(data.get("title") || "").trim(),
           academicYear: String(data.get("academicYear") || "").trim(), kind: data.get("kind") || "slides",
-          source: blobId ? "indexeddb" : "url", blobId: blobId, url: blobId ? "" : url,
-          fileName: blobId ? file.name : url.split("/").pop(), mimeType: blobId ? file.type : "", uploadedAt: new Date().toISOString()
+          source: uploadedMaterial ? "remote" : "url", blobId: uploadedMaterial ? uploadedMaterial.blobId : null,
+          remoteFile: uploadedMaterial ? uploadedMaterial.remoteFile : null, slides: uploadedMaterial ? uploadedMaterial.slides : [], slideCount: uploadedMaterial ? uploadedMaterial.slideCount : 0,
+          url: uploadedMaterial ? "" : url, fileName: uploadedMaterial ? file.name : url.split("/").pop(), mimeType: uploadedMaterial ? file.type : "", uploadedAt: new Date().toISOString()
         });
       } else if (type === "task") {
         state.tasks.push({ id: uid("task"), semesterId: state.currentSemesterId, courseId: data.get("courseId") || null, lessonId: data.get("lessonId") || null, title: String(data.get("title") || "").trim(), type: data.get("taskType") || "homework", dueDate: data.get("dueDate") || "", dueTime: data.get("dueTime") || "", priority: data.get("priority") || "normal", done: false, createdAt: new Date().toISOString() });
@@ -3563,10 +3759,16 @@
 
       ensureBeOnlineTasks();
       await save(true);
+      if ((type === "material" || type === "lesson") && manualSyncActivity) {
+        setManualSyncActivity("A sincronizar a aula…", "A guardar a referência do ficheiro para aparecer nos outros dispositivos.", 97, true);
+        if (Sync && Sync.getStatus().configured) { try { await Sync.syncNow(state, defaultState()); } catch (_) {} }
+        finishManualSyncActivity(true);
+      }
       closeModal();
       render();
-      toast(type === "material" ? "Material guardado e ligado à aula." : type === "question" ? (id ? "Pergunta anterior atualizada." : "Pergunta anterior adicionada.") : type === "event" ? (id ? "Evento atualizado." : "Evento adicionado.") : type === "quiz" || type === "quiz-question" ? "Quiz atualizado." : postSaveMessage);
+      toast(type === "material" ? "Material enviado, guardado e ligado à aula." : type === "question" ? (id ? "Pergunta anterior atualizada." : "Pergunta anterior adicionada.") : type === "event" ? (id ? "Evento atualizado." : "Evento adicionado.") : type === "quiz" || type === "quiz-question" ? "Quiz atualizado." : postSaveMessage);
     } catch (error) {
+      if (manualSyncActivity) finishManualSyncActivity(false);
       setFormError(form, error.message || "Não foi possível guardar.");
       if (submit) submit.disabled = false;
     }
@@ -3811,19 +4013,35 @@
     var src = "";
     var newObjectUrl = null;
     var mime = material.mimeType || "";
-    if (material.source === "indexeddb" && material.blobId) {
-      var record = await DB.getFile(material.blobId);
-      if (!record || !record.blob) { toast("O ficheiro local já não está disponível neste dispositivo.", "error"); return; }
+    var record = material.blobId ? await DB.getFile(material.blobId) : null;
+    if (record && record.blob) {
       newObjectUrl = URL.createObjectURL(record.blob);
       src = newObjectUrl;
       mime = record.type || mime;
+    } else if (material.remoteFile && material.remoteFile.path && Sync) {
+      setManualSyncActivity("A descarregar o material…", "A obter o ficheiro sincronizado do Git.", 4, true);
+      try {
+        var blob = await Sync.downloadFile(material.remoteFile, { onProgress: function (report) {
+          var progress = report.progress == null ? null : 5 + Math.round(report.progress * 0.9);
+          var detail = report.total ? formatBytes(report.loaded) + " de " + formatBytes(report.total) + " descarregados" : "A receber o ficheiro…";
+          setManualSyncActivity("A descarregar o material…", detail, progress, true);
+        } });
+        newObjectUrl = URL.createObjectURL(blob);
+        src = newObjectUrl;
+        mime = blob.type || mime;
+        finishManualSyncActivity(true);
+      } catch (error) {
+        finishManualSyncActivity(false);
+        toast(error.message || "Não foi possível descarregar o material.", "error");
+        return;
+      }
     } else {
       src = safeResourceUrl(material.url);
     }
-    if (!src) { toast("Este material não tem um caminho válido.", "error"); return; }
+    if (!src) { toast("Este material ainda não tem uma cópia sincronizada disponível.", "error"); return; }
     var isOffice = /powerpoint|presentation/i.test(mime) || /\.pptx?(?:$|\?)/i.test(material.fileName || src);
     var body = isOffice
-      ? '<div class="empty-state"><span class="empty-icon"><i data-lucide="presentation"></i></span><h3>Pré-visualização indisponível</h3><p>O navegador não mostra ficheiros PowerPoint diretamente. Podes abrir ou guardar o ficheiro original.</p><a class="button button-dark" href="' + attr(src) + '" target="_blank" rel="noopener" download><i data-lucide="external-link"></i>Abrir ficheiro</a></div>'
+      ? '<div class="empty-state"><span class="empty-icon"><i data-lucide="presentation"></i></span><h3>PowerPoint pronto</h3><p>O navegador não o pré-visualiza diretamente. Abre ou guarda o ficheiro original.</p><a class="button button-dark" href="' + attr(src) + '" target="_blank" rel="noopener" download="' + attr(material.fileName || "apresentacao.pptx") + '"><i data-lucide="download"></i>Abrir ficheiro</a></div>'
       : '<iframe class="pdf-frame" src="' + attr(src) + '#view=FitH" title="' + attr(material.title) + '"></iframe><div class="list-actions" style="margin-top:12px"><a class="button button-small" href="' + attr(src) + '" target="_blank" rel="noopener"><i data-lucide="external-link"></i>Abrir noutra janela</a></div>';
     openModal(material.title, body, { className: "modal-pdf" });
     if (newObjectUrl) activeObjectUrl = newObjectUrl;
@@ -4129,6 +4347,10 @@
     var linkedPastQuestions = kind === "pastExams" ? state.questions.filter(function (question) { return question.pastExamId === id; }) : [];
     var confirmation = linkedPastQuestions.length ? "Remover este teste anterior e as " + linkedPastQuestions.length + " pergunta(s) associadas?" : "Remover este item? Esta ação não pode ser desfeita.";
     if (!window.confirm(confirmation)) return;
+    if (kind === "materials" && item.remoteFile && item.remoteFile.path && Sync && Sync.getStatus().configured) {
+      setManualSyncActivity("A apagar o material…", "A remover também o ficheiro do repositório privado.", 25, true);
+      try { await Sync.deleteFile(item.remoteFile); } catch (error) { finishManualSyncActivity(false); toast(error.message || "Não foi possível apagar o ficheiro remoto.", "error"); return; }
+    }
     if (kind === "materials" && item.blobId) await DB.deleteFile(item.blobId);
     var imageOwners = kind === "questions" || kind === "events" ? [item] : linkedPastQuestions;
     for (var ownerIndex = 0; ownerIndex < imageOwners.length; ownerIndex += 1) {
@@ -4140,6 +4362,7 @@
     if (kind === "pastExams") state.questions = state.questions.filter(function (question) { return question.pastExamId !== id; });
     state[kind] = state[kind].filter(function (entry) { return entry.id !== id; });
     await save(true);
+    if (kind === "materials" && manualSyncActivity) finishManualSyncActivity(true);
     closeModal();
     render();
     toast("Item removido.");
@@ -4429,6 +4652,12 @@
       confirmDeleteAIProject(button.dataset.id);
     } else if (action === "confirm-ai-delete-project") {
       await deleteAIProject(button.dataset.id);
+    } else if (action === "sync-material") {
+      await syncExistingMaterial(button.dataset.id);
+    } else if (action === "lesson-ai") {
+      openLessonAIModal(button.dataset.lesson || route.id, button.dataset.output || "quiz", button.dataset.material || "");
+    } else if (action === "run-lesson-ai") {
+      await runLessonAI();
     } else if (action === "add-material") {
       openEntityForm("material", { courseId: button.dataset.course || "", lessonId: button.dataset.lesson || "" });
     } else if (action === "add-task") {

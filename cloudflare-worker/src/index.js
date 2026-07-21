@@ -163,9 +163,9 @@ function safeFileId(value) {
 }
 
 function safeFileName(value) {
-  const raw = String(value || "apresentacao.pptx").split(/[\/]/).pop() || "apresentacao.pptx";
+  const raw = String(value || "ficheiro").split(/[\/]/).pop() || "ficheiro";
   const clean = raw.normalize("NFKD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-zA-Z0-9._ -]+/g, "-").replace(/\s+/g, "-").replace(/-+/g, "-").replace(/^[-.]+|[-.]+$/g, "").slice(0, 120);
-  return clean || "apresentacao.pptx";
+  return clean || "ficheiro";
 }
 
 function fileRoot(env) {
@@ -357,15 +357,15 @@ export class SyncCoordinator extends DurableObject {
     }
     if (request.method === "POST" && url.pathname.endsWith("/files/upload")) {
       const id = url.searchParams.get("id") || "";
-      const name = url.searchParams.get("name") || "apresentacao.pptx";
-      const mimeType = request.headers.get("Content-Type") || "application/vnd.openxmlformats-officedocument.presentationml.presentation";
+      const name = url.searchParams.get("name") || "ficheiro";
+      const mimeType = request.headers.get("Content-Type") || "application/octet-stream";
       const deviceName = request.headers.get("X-Twenty-Device") || "Dispositivo";
       const bytes = new Uint8Array(await request.arrayBuffer());
       return this.serial(() => this.uploadFile({ id, name, mimeType, deviceName }, bytes));
     }
     if (request.method === "GET" && url.pathname.endsWith("/files/download")) {
       const path = url.searchParams.get("path") || "";
-      const name = url.searchParams.get("name") || "apresentacao.pptx";
+      const name = url.searchParams.get("name") || "ficheiro";
       return this.downloadFile(path, name);
     }
     if (request.method === "POST" && url.pathname.endsWith("/files/delete")) {
@@ -439,17 +439,19 @@ export class SyncCoordinator extends DurableObject {
 
   async getState() {
     const current = await readGitHubState(this.env);
-    const conflicts = current.state && current.state.meta && Array.isArray(current.state.meta.syncConflicts)
+    const conflictHistory = current.state && current.state.meta && Array.isArray(current.state.meta.syncConflicts)
       ? current.state.meta.syncConflicts.slice(-20)
       : [];
-    return jsonResponse({ exists: current.exists, state: current.state, sha: current.sha, version: current.version || 0, updatedAt: current.updatedAt || "", conflicts });
+    // Um pull normal não volta a anunciar conflitos antigos como se fossem novos.
+    return jsonResponse({ exists: current.exists, state: current.state, sha: current.sha, version: current.version || 0, updatedAt: current.updatedAt || "", conflicts: [], conflictHistory });
   }
 
   async uploadFile(metadata, bytes) {
     if (!metadata.id || !metadata.name || !bytes || !bytes.byteLength) return jsonResponse({ error: "Ficheiro inválido." }, 400);
-    if (!/\.pptx$/i.test(metadata.name)) return jsonResponse({ error: "Apenas ficheiros .pptx são suportados." }, 400);
+    const allowed = /\.(pptx|pdf|png|jpe?g|webp|gif|txt|md)$/i;
+    if (!allowed.test(metadata.name)) return jsonResponse({ error: "Formato não suportado. Usa PPTX, PDF, imagem, TXT ou Markdown." }, 400);
     const maxBytes = Math.max(1, Number(this.env.MAX_FILE_BYTES) || 25 * 1024 * 1024);
-    if (bytes.byteLength > maxBytes) return jsonResponse({ error: `O PowerPoint excede o limite de ${Math.round(maxBytes / 1024 / 1024)} MB.` }, 413);
+    if (bytes.byteLength > maxBytes) return jsonResponse({ error: `O ficheiro excede o limite de ${Math.round(maxBytes / 1024 / 1024)} MB.` }, 413);
     const path = buildFilePath(this.env, metadata.id, metadata.name);
     const written = await writeGitHubBinary(this.env, path, bytes, metadata);
     const uploadedAt = new Date().toISOString();
@@ -472,7 +474,7 @@ export class SyncCoordinator extends DurableObject {
     const path = validateFilePath(this.env, rawPath);
     const source = await downloadGitHubBinary(this.env, path);
     const headers = new Headers(source.headers);
-    headers.set("Content-Type", source.headers.get("Content-Type") || "application/vnd.openxmlformats-officedocument.presentationml.presentation");
+    headers.set("Content-Type", source.headers.get("Content-Type") || "application/octet-stream");
     headers.set("Content-Disposition", `attachment; filename="${safeFileName(rawName)}"`);
     headers.set("X-Twenty-File-Name", safeFileName(rawName));
     headers.set("Cache-Control", "private, no-store");

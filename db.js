@@ -53,20 +53,35 @@
     });
   }
 
+
+  function semanticState(value) {
+    var clean = JSON.parse(JSON.stringify(value || {}));
+    clean.meta = clean.meta || {};
+    [
+      "revision", "gitRevision", "updatedAt", "source", "externalCheckedAt",
+      "externalFingerprint", "lastSyncAt", "sync", "syncConflicts"
+    ].forEach(function (key) { delete clean.meta[key]; });
+    return JSON.stringify(clean);
+  }
+
   function saveState(state, options) {
     var clean = JSON.parse(JSON.stringify(state));
     options = options || {};
-    return open().then(function (db) {
-      if (!db) {
-        localStorage.setItem(STATE_KEY, JSON.stringify(clean));
-        return clean;
-      }
-      return transaction("kv", "readwrite", function (store) {
-        store.put(clean, STATE_KEY);
-        return clean;
+    var changed = true;
+    return getState().catch(function () { return null; }).then(function (previous) {
+      changed = semanticState(previous) !== semanticState(clean);
+      return open().then(function (db) {
+        if (!db) {
+          localStorage.setItem(STATE_KEY, JSON.stringify(clean));
+          return clean;
+        }
+        return transaction("kv", "readwrite", function (store) {
+          store.put(clean, STATE_KEY);
+          return clean;
+        });
       });
     }).then(function () {
-      if (!options.skipSync && window.TwentySync) {
+      if (!options.skipSync && changed && window.TwentySync) {
         return window.TwentySync.queueState(clean).catch(function (error) {
           console.error("Twenty sync queue:", error);
           return clean;

@@ -1,16 +1,16 @@
 "use strict";
 
-var CACHE = "twenty-study-os-v17-pptx-sync";
+var CACHE = "twenty-study-os-v18-lesson-ai";
 var APP_SHELL = [
   "./",
   "./index.html",
-  "./styles.css?v=17-pptx-sync",
-  "./sync.js?v=17-pptx-sync",
-  "./db.js?v=17-pptx-sync",
-  "./ai.js?v=17-pptx-sync",
-  "./ai-worker.js?v=17-pptx-sync",
-  "./app.js?v=17-pptx-sync",
-  "./lucide.min.js?v=17-pptx-sync",
+  "./styles.css?v=18-lesson-ai",
+  "./sync.js?v=18-lesson-ai",
+  "./db.js?v=18-lesson-ai",
+  "./ai.js?v=18-lesson-ai",
+  "./ai-worker.js?v=18-lesson-ai",
+  "./app.js?v=18-lesson-ai",
+  "./lucide.min.js?v=18-lesson-ai",
   "./manifest.webmanifest",
   "./icon.svg",
   "./icon-192.png",

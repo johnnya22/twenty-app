@@ -41,7 +41,7 @@
     var memory = Number(navigator.deviceMemory) || 0;
     if (/Android/i.test(ua) && (memory >= 6 || /SM-S92/i.test(ua))) return "quality";
     if (/Macintosh|Mac OS X/i.test(ua) && !/Apple Silicon|arm64/i.test(ua)) return "fast";
-    return memory >= 8 ? "quality" : "fast";
+    return "fast";
   }
 
   function selectedModel(mode) {
@@ -51,7 +51,7 @@
 
   function ensureWorker() {
     if (worker) return worker;
-    worker = new Worker("ai-worker.js?v=16-ai-slides", { type: "module" });
+    worker = new Worker("ai-worker.js?v=18-lesson-ai", { type: "module" });
     worker.addEventListener("message", function (event) {
       var message = event.data || {};
       var item = pending.get(message.id);
@@ -87,24 +87,40 @@
         item.reject(new Error(message.error || "A IA local falhou."));
       }
     });
-    worker.addEventListener("error", function (event) {
-      var error = new Error(event.message || "O Web Worker da IA terminou inesperadamente.");
+    function rejectWorkerRequests(message) {
+      var error = new Error(message || "O motor de IA foi interrompido pelo navegador.");
+      error.workerTerminated = true;
       pending.forEach(function (item) { item.reject(error); });
       pending.clear();
       runtime.busy = false;
-      worker.terminate();
+      try { worker && worker.terminate(); } catch (_) {}
       worker = null;
+    }
+    worker.addEventListener("error", function (event) {
+      rejectWorkerRequests(event.message || "O motor de IA terminou inesperadamente.");
+    });
+    worker.addEventListener("messageerror", function () {
+      rejectWorkerRequests("O navegador interrompeu a comunicação com o motor de IA.");
     });
     return worker;
   }
 
-  function askWorker(payload, onProgress) {
+  function askWorkerOnce(payload, onProgress) {
     if (!supportsWebGPU()) return Promise.reject(new Error("Este navegador não disponibiliza WebGPU. Abre a Twenty no Chrome atualizado."));
     var id = "ai_req_" + (++requestCounter) + "_" + Date.now();
     runtime.busy = true;
     return new Promise(function (resolve, reject) {
       pending.set(id, { resolve: resolve, reject: reject, onProgress: onProgress });
       ensureWorker().postMessage({ id: id, ...payload });
+    });
+  }
+
+  function askWorker(payload, onProgress) {
+    return askWorkerOnce(payload, onProgress).catch(function (error) {
+      if (!error.workerTerminated || payload.__retried) throw error;
+      if (onProgress) onProgress({ kind: "warning", progress: null, text: "O navegador libertou a memória da IA. A reiniciar no modelo rápido…" });
+      var retry = Object.assign({}, payload, { modelId: MODELS.fast.id, __retried: true });
+      return askWorkerOnce(retry, onProgress);
     });
   }
 
@@ -188,7 +204,7 @@
     var length = 0;
     (slides || []).forEach(function (slide) {
       var block = "[Slide " + slide.number + "] " + slide.title + "\n" + slide.text;
-      if (current.length && (current.length >= 8 || length + block.length > 7200)) {
+      if (current.length && (current.length >= 5 || length + block.length > 4800)) {
         chunks.push(current);
         current = [];
         length = 0;
@@ -390,7 +406,7 @@
       var notesResponse = await completeJSON(activeModelId, [
         { role: "system", content: "És um explicador universitário. Escreve em português de Portugal, usa apenas a matéria fornecida e cita os slides de origem. Não inventes." },
         { role: "user", content: (output === "summary" ? "Cria um resumo rápido e muito claro." : "Cria apontamentos completos, organizados para estudar.") + " Responde apenas JSON: {\"title\":\"...\",\"overview\":\"...\",\"sections\":[{\"heading\":\"...\",\"content\":\"...\",\"sourceSlides\":[1]}],\"keyTakeaways\":[\"...\"]}.\n\nMATÉRIA:\n" + material }
-      ], { maxTokens: output === "summary" ? 750 : 1450, seed: 101 }, onProgress);
+      ], { maxTokens: output === "summary" ? 650 : 1050, seed: 101 }, onProgress);
       notes = normalizeNotes(notesResponse.data || {});
       summary = notes.overview;
       actualModel = notesResponse.modelId || actualModel;
@@ -402,7 +418,7 @@
       var quizResponse = await completeJSON(activeModelId, [
         { role: "system", content: "És um professor universitário a criar um quiz fiel aos slides. Português de Portugal. Não uses conhecimento externo. Cada pergunta tem exatamente quatro opções plausíveis e uma só correta." },
         { role: "user", content: "Cria " + count + " perguntas " + difficultyInstruction(options.difficulty) + ". Responde apenas JSON: {\"questions\":[{\"question\":\"...\",\"options\":[\"A\",\"B\",\"C\",\"D\"],\"correctIndex\":0,\"explanation\":\"...\",\"sourceSlides\":[1],\"difficulty\":\"easy|medium|hard\"}]}. Evita perguntas repetidas.\n\nMATÉRIA:\n" + material }
-      ], { maxTokens: Math.min(2200, 450 + count * 85), seed: 202 }, onProgress);
+      ], { maxTokens: Math.min(1500, 360 + count * 62), seed: 202 }, onProgress);
       questions = normalizeQuiz(quizResponse.data || {}, count);
       actualModel = quizResponse.modelId || actualModel;
     }
@@ -413,7 +429,7 @@
       var cardResponse = await completeJSON(activeModelId, [
         { role: "system", content: "Cria flashcards curtos, claros e fiéis aos slides, em português de Portugal. Não inventes informação." },
         { role: "user", content: "Cria até " + cardCount + " flashcards. Responde apenas JSON: {\"cards\":[{\"front\":\"pergunta ou conceito\",\"back\":\"resposta clara\",\"sourceSlides\":[1]}]}.\n\nMATÉRIA:\n" + material }
-      ], { maxTokens: 1300, seed: 303 }, onProgress);
+      ], { maxTokens: 950, seed: 303 }, onProgress);
       flashcards = normalizeFlashcards(cardResponse.data || {});
       actualModel = cardResponse.modelId || actualModel;
     }
