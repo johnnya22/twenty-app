@@ -45,6 +45,8 @@
   var canteenLoadPromise = null;
   var canteenSelectedDate = null;
   var canteenClockTimer = null;
+  var homeClockTimer = null;
+  var homeDebug = null;
   var COLORS = ["#a99df7", "#ff92ae", "#ffad72", "#79cdb8", "#80bee8", "#f3e873", "#cab6ea", "#87d7df"];
   var WEEKDAYS = ["Domingo", "Segunda", "Terça", "Quarta", "Quinta", "Sexta", "Sábado"];
   var SHORT_WEEKDAYS = ["Dom", "Seg", "Ter", "Qua", "Qui", "Sex", "Sáb"];
@@ -412,6 +414,10 @@
   }
 
   function save(silent) {
+    if (homeDebug && homeDebug.active) {
+      if (!silent) toast("Alteração aplicada apenas à simulação.");
+      return Promise.resolve();
+    }
     touchState();
     return DB.saveState(state).then(function () {
       if (!silent) toast("Alterações guardadas neste dispositivo.");
@@ -427,6 +433,7 @@
 
   function loadExternalJSON(options) {
     options = options || {};
+    if (homeDebug && homeDebug.active) return Promise.resolve(false);
     if (state && state.settings && state.settings.jsonSync === false && !options.force) return Promise.resolve(false);
     return fetch(externalJSONUrl(), { cache: "no-store" }).then(function (response) {
       if (!response.ok) throw new Error("JSON externo indisponível");
@@ -805,6 +812,10 @@
       clearTimeout(canteenClockTimer);
       canteenClockTimer = null;
     }
+    if (homeClockTimer) {
+      clearTimeout(homeClockTimer);
+      homeClockTimer = null;
+    }
     renderShell();
     var html;
     if (route.name === "home") html = renderHome();
@@ -831,6 +842,11 @@
     if (route.name === "canteen") {
       canteenClockTimer = setTimeout(function () {
         if (route.name === "canteen") render();
+      }, 60000 - (Date.now() % 60000) + 250);
+    }
+    if (route.name === "home") {
+      homeClockTimer = setTimeout(function () {
+        if (route.name === "home" && !modalRoot.querySelector(".modal-card")) render();
       }, 60000 - (Date.now() % 60000) + 250);
     }
   }
@@ -1055,7 +1071,7 @@
 
   function lessonHasEnded(lesson, date) {
     if (!lesson || !lesson.date) return false;
-    var now = date || new Date();
+    var now = date || activeHomeNow();
     var today = todayISO(now);
     if (lesson.date < today) return true;
     if (lesson.date > today) return false;
@@ -1122,73 +1138,654 @@
     return '<div class="empty-state"><span class="empty-icon"><i data-lucide="' + icon + '"></i></span><h3>' + esc(title) + "</h3><p>" + esc(text) + "</p>" + (action ? '<button class="button button-dark button-small" type="button" data-action="' + attr(action) + '"><i data-lucide="plus"></i>' + esc(label || "Adicionar") + "</button>" : "") + "</div>";
   }
 
+  function activeHomeNow() {
+    if (homeDebug && homeDebug.active && homeDebug.now) {
+      var simulated = new Date(homeDebug.now);
+      if (!Number.isNaN(simulated.getTime())) return simulated;
+    }
+    return new Date();
+  }
+
+  function homeDebugScenarios(baseDate) {
+    var base = new Date(baseDate || new Date());
+    function at(hour, minute) {
+      var value = new Date(base);
+      value.setHours(hour, minute, 0, 0);
+      return value.toISOString();
+    }
+    return [
+      { id: "morning", time: at(8, 10), label: "Manhã", title: "Antes das aulas", copy: "A Home apresenta a primeira aula, a sala e o que convém preparar." },
+      { id: "soon", time: at(8, 52), label: "08:52", title: "Quase a começar", copy: "Faltam poucos minutos. A prioridade é abrir a aula e deixar os materiais prontos." },
+      { id: "live", time: at(9, 35), label: "09:35", title: "Aula a decorrer", copy: "A Home centra-se na aula atual sem encher o ecrã de informação secundária." },
+      { id: "closing", time: at(10, 22), label: "10:22", title: "Aula a terminar", copy: "Mesmo com outra aula colada, a Home fecha primeiro a aula atual e avisa que o Lesson Check pode continuar nos primeiros 10 minutos seguintes." },
+      { id: "settling", time: at(10, 35), label: "10:35", title: "Primeiros 10 minutos", copy: "Enquanto os alunos chegam, a Home usa esta janela para o Lesson Check da aula anterior." },
+      { id: "between", time: at(12, 12), label: "12:12", title: "Entre aulas", copy: "A Home fecha o que ficou pendente e mostra claramente quando começa a próxima aula." },
+      { id: "after", time: at(15, 40), label: "15:40", title: "Depois das aulas", copy: "Primeiro aparecem os Lesson Checks. Só depois surgem os TPCs." },
+      { id: "homework", time: at(18, 10), label: "18:10", title: "TPC em casa", copy: "Com os Lesson Checks concluídos, a Home transforma-se numa fila simples de TPCs." },
+      { id: "complete", time: at(21, 5), label: "21:05", title: "Dia fechado", copy: "Com tudo concluído, aparece o Report Card e a sensação de dia escolar terminado." }
+    ];
+  }
+
+  function buildHomeTutorialState(baseDate) {
+    var now = new Date(baseDate || new Date());
+    var day = todayISO(now);
+    var tomorrow = new Date(now);
+    tomorrow.setDate(tomorrow.getDate() + 1);
+    var semesterId = "demo_semester";
+    var courses = [
+      { id: "demo_programacao", semesterId: semesterId, name: "Programação", code: "PROG", ects: 6, color: "#a99df7", lessonTypes: ["T"], evaluation: { components: [], examReplacesTests: false, replacementPolicy: "if-higher" } },
+      { id: "demo_design", semesterId: semesterId, name: "Design de Interfaces", code: "DI", ects: 6, color: "#ffad72", lessonTypes: ["TP"], evaluation: { components: [], examReplacesTests: false, replacementPolicy: "if-higher" } },
+      { id: "demo_ia", semesterId: semesterId, name: "Inteligência Artificial", code: "IA", ects: 6, color: "#79cdb8", lessonTypes: ["T"], evaluation: { components: [], examReplacesTests: false, replacementPolicy: "if-higher" } }
+    ];
+    var schedule = [
+      { id: "demo_schedule_1", semesterId: semesterId, courseId: "demo_programacao", weekday: now.getDay(), start: "09:00", end: "10:30", room: "A1.12", type: "T" },
+      { id: "demo_schedule_2", semesterId: semesterId, courseId: "demo_design", weekday: now.getDay(), start: "10:30", end: "12:00", room: "Lab 2", type: "TP" },
+      { id: "demo_schedule_3", semesterId: semesterId, courseId: "demo_ia", weekday: now.getDay(), start: "14:00", end: "15:30", room: "B2.08", type: "T" }
+    ];
+    var lessons = [
+      { id: "demo_lesson_1", semesterId: semesterId, courseId: "demo_programacao", scheduleId: "demo_schedule_1", title: "Arrays e ciclos", date: day, start: "09:00", end: "10:30", room: "A1.12", type: "T", notes: "", aiNotes: [], mastered: false },
+      { id: "demo_lesson_2", semesterId: semesterId, courseId: "demo_design", scheduleId: "demo_schedule_2", title: "Hierarquia visual", date: day, start: "10:30", end: "12:00", room: "Lab 2", type: "TP", notes: "", aiNotes: [], mastered: false },
+      { id: "demo_lesson_3", semesterId: semesterId, courseId: "demo_ia", scheduleId: "demo_schedule_3", title: "Pesquisa heurística", date: day, start: "14:00", end: "15:30", room: "B2.08", type: "T", notes: "", aiNotes: [], mastered: false }
+    ];
+    function quiz(id, lessonId, courseId, title) {
+      return { id: id, semesterId: semesterId, courseId: courseId, lessonId: lessonId, title: title, questions: [
+        { id: id + "_q1", mode: "multiple-choice", prompt: "Qual foi a ideia principal desta aula?", options: ["Aplicar o conceito central", "Ignorar os exemplos", "Memorizar sem perceber", "Saltar a revisão"], answerIndex: 0, explanation: "O Lesson Check confirma a compreensão do conceito principal." },
+        { id: id + "_q2", mode: "multiple-choice", prompt: "Qual é o melhor próximo passo quando algo não ficou claro?", options: ["Anotar a dúvida", "Esperar pelo exame", "Apagar os apontamentos", "Fingir que ficou claro"], answerIndex: 0, explanation: "Detetar a dúvida cedo evita matéria acumulada." }
+      ] };
+    }
+    var demo = defaultState();
+    demo.profile = { name: "Johnny", institution: "Twenty Campus", degree: "Licenciatura", targetGrade: 18, onboardingComplete: true, tutorialSeen: true };
+    demo.settings = Object.assign(demo.settings, { jsonSync: false });
+    demo.currentSemesterId = semesterId;
+    demo.semesters = [{ id: semesterId, name: "Semestre de demonstração", academicYear: academicYearFor(now), startDate: day, endDate: "", archived: false }];
+    demo.courses = courses;
+    demo.schedule = schedule;
+    demo.lessons = lessons;
+    demo.quizzes = [
+      quiz("demo_quiz_1", "demo_lesson_1", "demo_programacao", "Lesson Check · Arrays e ciclos"),
+      quiz("demo_quiz_2", "demo_lesson_2", "demo_design", "Lesson Check · Hierarquia visual"),
+      quiz("demo_quiz_3", "demo_lesson_3", "demo_ia", "Lesson Check · Pesquisa heurística")
+    ];
+    demo.tasks = [
+      { id: "demo_check_1", semesterId: semesterId, courseId: "demo_programacao", lessonId: "demo_lesson_1", title: "Quiz da aula · Arrays e ciclos", type: "lesson-quiz", dueDate: day, dueTime: "20:30", priority: "high", done: false, autoGenerated: true },
+      { id: "demo_check_2", semesterId: semesterId, courseId: "demo_design", lessonId: "demo_lesson_2", title: "Quiz da aula · Hierarquia visual", type: "lesson-quiz", dueDate: day, dueTime: "20:30", priority: "high", done: false, autoGenerated: true },
+      { id: "demo_check_3", semesterId: semesterId, courseId: "demo_ia", lessonId: "demo_lesson_3", title: "Quiz da aula · Pesquisa heurística", type: "lesson-quiz", dueDate: day, dueTime: "20:30", priority: "high", done: false, autoGenerated: true },
+      { id: "demo_tpc_1", semesterId: semesterId, courseId: "demo_programacao", lessonId: "demo_lesson_1", title: "Resolver exercícios 4–8", type: "homework", dueDate: day, dueTime: "19:00", priority: "high", done: false },
+      { id: "demo_tpc_2", semesterId: semesterId, courseId: "demo_design", lessonId: "demo_lesson_2", title: "Refazer o ecrã com melhor hierarquia", type: "homework", dueDate: day, dueTime: "20:00", priority: "normal", done: false }
+    ];
+    demo.assessments = [{ id: "demo_assessment", semesterId: semesterId, courseId: "demo_ia", title: "Mini-teste de pesquisa", type: "Teste", date: todayISO(tomorrow), time: "10:00", location: "B2.08", lessonIds: ["demo_lesson_3"] }];
+    demo.meta.updatedAt = "";
+    demo.meta.revision = 0;
+    return normalizeState(demo);
+  }
+
+  function prepareHomeDebugScenario(index) {
+    if (!homeDebug || !homeDebug.active) return;
+    var scenarios = homeDebugScenarios(homeDebug.baseDate);
+    var nextIndex = clamp(index, 0, scenarios.length - 1);
+    var scenario = scenarios[nextIndex];
+    state = normalizeState(clone(homeDebug.templateState));
+    if (scenario.id === "homework" || scenario.id === "complete") {
+      state.lessons.forEach(function (lesson, lessonIndex) {
+        lesson.quizCompletedAt = scenario.id === "complete" || lessonIndex < 3 ? scenario.time : "";
+      });
+      state.tasks.forEach(function (task) {
+        if (task.type === "lesson-quiz") task.done = true;
+        if (scenario.id === "complete" && task.type !== "lesson-quiz") task.done = true;
+      });
+      state.quizzes.forEach(function (quiz, quizIndex) {
+        quiz.lastCompletedAt = scenario.time;
+        quiz.lastScore = [90, 80, 85][quizIndex] || 85;
+      });
+    }
+    homeDebug.index = nextIndex;
+    homeDebug.now = scenario.time;
+    homeDebug.scenario = scenario.id;
+    route = { name: "home", id: null, tab: "overview" };
+    render();
+    history.replaceState(null, "", "#home");
+  }
+
+  function startHomeDebugTutorial() {
+    closeModal();
+    var baseDate = new Date();
+    homeDebug = {
+      active: true,
+      tutorial: true,
+      originalState: clone(state),
+      templateState: buildHomeTutorialState(baseDate),
+      baseDate: baseDate.toISOString(),
+      index: 0,
+      now: "",
+      scenario: "morning"
+    };
+    prepareHomeDebugScenario(0);
+  }
+
+  function startHomeDebugAt(value) {
+    var simulated = new Date(value);
+    if (Number.isNaN(simulated.getTime())) {
+      toast("Escolhe uma data e hora válidas.", "warning");
+      return;
+    }
+    if (!homeDebug || !homeDebug.active) {
+      homeDebug = { active: true, tutorial: false, originalState: clone(state), templateState: clone(state), baseDate: simulated.toISOString(), index: 0, now: simulated.toISOString(), scenario: "custom" };
+    } else {
+      homeDebug.tutorial = false;
+      homeDebug.templateState = clone(state);
+      homeDebug.now = simulated.toISOString();
+      homeDebug.scenario = "custom";
+    }
+    closeModal();
+    setRoute("home");
+  }
+
+  function stopHomeDebug() {
+    if (!homeDebug || !homeDebug.active) return;
+    var original = homeDebug.originalState;
+    homeDebug = null;
+    state = normalizeState(original || state);
+    closeModal();
+    route = { name: "settings", id: null, tab: "overview" };
+    render();
+    history.replaceState(null, "", "#settings");
+    toast("Simulação terminada. Os teus dados reais não foram alterados.");
+  }
+
+  function homeDebugSnapshot() {
+    var context = homeContext(activeHomeNow());
+    return {
+      time: activeHomeNow().toLocaleString("pt-PT", { weekday: "short", hour: "2-digit", minute: "2-digit" }),
+      phase: context.phase,
+      label: context.phaseLabel,
+      current: context.current && (context.current.course ? context.current.course.name : context.current.type),
+      next: context.next && (context.next.course ? context.next.course.name : context.next.type),
+      pendingChecks: context.pendingChecks.length,
+      pendingHomework: context.tasks.homeworkPending.length + context.tasks.overdue.length
+    };
+  }
+
+  function openHomeDebugLab() {
+    var snapshot = homeDebugSnapshot();
+    var now = activeHomeNow();
+    var localValue = now.getFullYear() + "-" + String(now.getMonth() + 1).padStart(2, "0") + "-" + String(now.getDate()).padStart(2, "0") + "T" + String(now.getHours()).padStart(2, "0") + ":" + String(now.getMinutes()).padStart(2, "0");
+    var scenarios = homeDebugScenarios(now).map(function (scenario, index) {
+      return '<button class="debug-scenario-button" type="button" data-action="debug-start-scenario" data-index="' + index + '"><strong>' + esc(scenario.title) + '</strong><small>' + esc(scenario.label) + ' · ' + esc(scenario.copy) + '</small></button>';
+    }).join("");
+    var body = '<div class="debug-summary-grid"><span><small>Hora usada</small><strong>' + esc(snapshot.time) + '</strong></span><span><small>Estado</small><strong>' + esc(snapshot.label) + '</strong></span><span><small>Lesson Checks</small><strong>' + snapshot.pendingChecks + ' pendente(s)</strong></span><span><small>TPC</small><strong>' + snapshot.pendingHomework + ' pendente(s)</strong></span></div><div class="form-note">Este laboratório é apenas visual. Não faz commits, não mexe no Git e restaura os teus dados quando sais.</div><div class="section-heading"><div><h3>Tutorial com dados de exemplo</h3><p>Cria temporariamente horário, aulas, teste e TPCs para percorreres um dia completo.</p></div></div><button class="button button-dark" type="button" data-action="debug-start-tutorial"><i data-lucide="play"></i>Iniciar tutorial do dia escolar</button><div class="section-heading"><div><h3>Ir diretamente para um cenário</h3><p>Usa o mesmo template e abre uma situação específica.</p></div></div><div class="debug-scenario-list">' + scenarios + '</div><div class="section-heading"><div><h3>Simular uma hora nos teus dados atuais</h3><p>Útil para testar o teu horário real sem esperar pela hora verdadeira.</p></div></div><div class="debug-time-row"><input id="debugCustomTime" type="datetime-local" value="' + attr(localValue) + '"><button class="button" type="button" data-action="debug-apply-time"><i data-lucide="clock-3"></i>Aplicar</button></div>' + (homeDebug && homeDebug.active ? '<button class="button button-danger" style="margin-top:15px" type="button" data-action="debug-exit"><i data-lucide="x"></i>Sair da simulação</button>' : '');
+    openModal("Laboratório da Home", body, { className: "debug-lab-modal" });
+  }
+
+  function renderHomeDebugBar() {
+    if (!homeDebug || !homeDebug.active) return "";
+    var scenarios = homeDebugScenarios(homeDebug.baseDate);
+    var scenario = homeDebug.tutorial ? scenarios[homeDebug.index] : null;
+    var title = scenario ? scenario.title : "Hora simulada";
+    var copy = scenario ? scenario.copy : "A Home está a usar uma hora de teste. Os teus dados reais continuam protegidos.";
+    return '<aside class="home-debug-bar"><div><span class="badge badge-dark"><i data-lucide="flask-conical"></i>Admin · simulação</span><strong>' + esc(title) + '</strong><p>' + esc(copy) + '</p></div><div class="home-debug-time"><strong>' + esc(activeHomeNow().toLocaleTimeString("pt-PT", { hour: "2-digit", minute: "2-digit" })) + '</strong><small>' + (scenario ? (homeDebug.index + 1) + ' / ' + scenarios.length : 'hora manual') + '</small></div><div class="home-debug-actions">' + (scenario ? '<button class="icon-button" type="button" data-action="debug-prev" aria-label="Cenário anterior" ' + (homeDebug.index === 0 ? "disabled" : "") + '><i data-lucide="arrow-left"></i></button><button class="button button-dark button-small" type="button" data-action="debug-next">' + (homeDebug.index === scenarios.length - 1 ? "Terminar" : "Seguinte") + '<i data-lucide="arrow-right"></i></button>' : '') + '<button class="icon-button" type="button" data-action="debug-exit" aria-label="Sair da simulação"><i data-lucide="x"></i></button></div></aside>';
+  }
+
+  function homeGreeting(date) {
+    var hour = (date || new Date()).getHours();
+    if (hour < 12) return "Bom dia";
+    if (hour < 19) return "Boa tarde";
+    return "Boa noite";
+  }
+
+  function homeAtmosphere(date) {
+    var now = date || new Date();
+    var month = now.getMonth();
+    var hour = now.getHours();
+    if (hour >= 20 || hour < 6) return { label: "Sessão de biblioteca", icon: "moon-star", className: "is-night" };
+    if (month >= 8 && month <= 10) return { label: "Autumn term", icon: "leaf", className: "is-autumn" };
+    if (month === 11 || month <= 1) return { label: "Winter term", icon: "snowflake", className: "is-winter" };
+    if (month >= 2 && month <= 4) return { label: "Spring term", icon: "flower-2", className: "is-spring" };
+    return { label: "Campus hours", icon: "sun", className: "is-day" };
+  }
+
+  function homeMinutesCopy(value) {
+    var minutes = Math.max(0, Math.round(Number(value) || 0));
+    if (minutes < 1) return "agora";
+    if (minutes === 1) return "1 min";
+    if (minutes < 60) return minutes + " min";
+    var hours = Math.floor(minutes / 60);
+    var rest = minutes % 60;
+    return hours + "h" + (rest ? String(rest).padStart(2, "0") : "");
+  }
+
+  function todayClassBlocks(date) {
+    var now = date || new Date();
+    var day = todayISO(now);
+    var weekday = now.getDay();
+    var blocks = semesterItems("schedule").filter(function (entry) {
+      return Number(entry.weekday) === weekday;
+    }).map(function (entry) {
+      var lesson = linkedLessonForSlot(entry, day);
+      return {
+        key: "schedule_" + entry.id,
+        schedule: entry,
+        lesson: lesson || null,
+        course: courseById(entry.courseId),
+        dateISO: day,
+        start: entry.start || "",
+        end: entry.end || entry.start || "",
+        startMin: timeMinutes(entry.start),
+        endMin: timeMinutes(entry.end || entry.start),
+        room: entry.room || "",
+        type: entry.type || "Aula"
+      };
+    });
+
+    semesterItems("lessons").filter(function (lesson) {
+      return lesson.date === day;
+    }).forEach(function (lesson) {
+      var represented = blocks.some(function (block) {
+        return block.lesson && block.lesson.id === lesson.id;
+      });
+      if (represented) return;
+      blocks.push({
+        key: "lesson_" + lesson.id,
+        schedule: null,
+        lesson: lesson,
+        course: courseById(lesson.courseId),
+        dateISO: day,
+        start: lesson.start || "",
+        end: lesson.end || lesson.start || "",
+        startMin: timeMinutes(lesson.start),
+        endMin: timeMinutes(lesson.end || lesson.start),
+        room: lesson.room || "",
+        type: lesson.type || "Aula"
+      });
+    });
+
+    return blocks.sort(function (a, b) {
+      return a.startMin - b.startMin || a.endMin - b.endMin;
+    });
+  }
+
+  function latestQuizForLesson(lessonId) {
+    return state.quizzes.filter(function (quiz) {
+      return quiz.lessonId === lessonId && quiz.lastScore != null;
+    }).sort(function (a, b) {
+      return String(b.lastCompletedAt || "").localeCompare(String(a.lastCompletedAt || ""));
+    })[0] || null;
+  }
+
+  function availableQuizForLesson(lessonId) {
+    return state.quizzes.find(function (quiz) {
+      return quiz.lessonId === lessonId && asArray(quiz.questions).length;
+    }) || null;
+  }
+
+  function lessonCheckButton(lesson, label, className) {
+    if (!lesson) return "";
+    var quiz = availableQuizForLesson(lesson.id);
+    if (quiz) {
+      return '<button class="button ' + (className || "button-dark") + '" type="button" data-action="start-quiz" data-id="' + attr(quiz.id) + '"><i data-lucide="sparkles"></i>' + esc(label || "Fazer Lesson Check") + "</button>";
+    }
+    return '<button class="button ' + (className || "button-dark") + '" type="button" data-action="lesson-ai" data-output="quiz" data-lesson="' + attr(lesson.id) + '"><i data-lucide="sparkles"></i>' + esc(label || "Criar Lesson Check") + "</button>";
+  }
+
+  function blockOpenButton(block, label, className) {
+    if (!block) return "";
+    if (block.lesson) {
+      return '<button class="button ' + (className || "button-dark") + '" type="button" data-route="lesson" data-id="' + attr(block.lesson.id) + '"><i data-lucide="book-open"></i>' + esc(label || "Abrir aula") + "</button>";
+    }
+    if (!block.schedule || !block.course) {
+      return '<button class="button ' + (className || "button-dark") + '" type="button" data-route="courses"><i data-lucide="library-big"></i>' + esc(label || "Ver cadeiras") + "</button>";
+    }
+    return '<button class="button ' + (className || "button-dark") + '" type="button" data-action="create-lesson" data-course="' + attr(block.course.id) + '" data-schedule="' + attr(block.schedule.id) + '" data-date="' + attr(block.dateISO) + '" data-start="' + attr(block.start) + '" data-end="' + attr(block.end) + '" data-room="' + attr(block.room) + '" data-type="' + attr(block.type) + '"><i data-lucide="file-plus-2"></i>' + esc(label || "Preparar aula") + "</button>";
+  }
+
+  function homeTaskBuckets(day) {
+    var today = day || todayISO();
+    var all = semesterItems("tasks");
+    var todayTasks = all.filter(function (task) {
+      return task.dueDate === today;
+    });
+    var overdue = all.filter(function (task) {
+      return !task.done && task.dueDate && task.dueDate < today;
+    });
+    var homeworkDue = todayTasks.filter(function (task) {
+      return task.type !== "lesson-quiz";
+    });
+    var homeworkPending = homeworkDue.filter(function (task) { return !task.done; });
+    return {
+      all: all,
+      today: todayTasks,
+      overdue: overdue,
+      homeworkDue: homeworkDue,
+      homeworkPending: homeworkPending,
+      homeworkDone: homeworkDue.filter(function (task) { return task.done; })
+    };
+  }
+
+  function homeDailyReport(blocks, date) {
+    var day = todayISO(date || new Date());
+    var endedLessons = blocks.filter(function (block) {
+      return block.lesson && block.endMin <= nowMinutes(date || new Date());
+    });
+    var courseScores = {};
+    blocks.forEach(function (block) {
+      if (!block.lesson || !block.course) return;
+      var quiz = latestQuizForLesson(block.lesson.id);
+      if (!quiz) return;
+      if (!courseScores[block.course.id]) {
+        courseScores[block.course.id] = { course: block.course, scores: [] };
+      }
+      courseScores[block.course.id].scores.push(Number(quiz.lastScore) || 0);
+    });
+    var subjects = Object.keys(courseScores).map(function (courseId) {
+      var item = courseScores[courseId];
+      var percentage = item.scores.reduce(function (sum, score) { return sum + score; }, 0) / item.scores.length;
+      return { course: item.course, percentage: percentage, grade: percentage / 5 };
+    });
+    var academic = subjects.length ? subjects.reduce(function (sum, item) { return sum + item.grade; }, 0) / subjects.length : null;
+    var tasks = homeTaskBuckets(day);
+    var checksDue = endedLessons.length;
+    var checksDone = endedLessons.filter(function (block) { return lessonIsBeOnline(block.lesson); }).length;
+    var routineTotal = checksDue + tasks.homeworkDue.length;
+    var routineDone = checksDone + tasks.homeworkDone.length;
+    return {
+      academic: academic,
+      subjects: subjects,
+      checksDue: checksDue,
+      checksDone: checksDone,
+      homeworkDue: tasks.homeworkDue.length,
+      homeworkDone: tasks.homeworkDone.length,
+      routine: routineTotal ? Math.round(routineDone / routineTotal * 100) : 100,
+      complete: routineTotal ? routineDone >= routineTotal : blocks.length > 0,
+      day: day
+    };
+  }
+
+  function homeContext(date) {
+    var now = date || activeHomeNow();
+    var minute = nowMinutes(now);
+    var blocks = todayClassBlocks(now);
+    var current = blocks.find(function (block) {
+      return block.startMin <= minute && block.endMin > minute;
+    }) || null;
+    var next = blocks.find(function (block) {
+      return block.startMin > minute;
+    }) || null;
+    var ended = blocks.filter(function (block) {
+      return block.endMin <= minute;
+    });
+    var previous = ended.length ? ended[ended.length - 1] : null;
+    var pendingChecks = ended.filter(function (block) {
+      return block.lesson && !lessonIsBeOnline(block.lesson);
+    });
+    var tasks = homeTaskBuckets(todayISO(now));
+    var report = homeDailyReport(blocks, now);
+    var atmosphere = homeAtmosphere(now);
+    var context = {
+      now: now,
+      blocks: blocks,
+      current: current,
+      previous: previous,
+      next: next,
+      ended: ended,
+      pendingChecks: pendingChecks,
+      tasks: tasks,
+      report: report,
+      atmosphere: atmosphere,
+      phase: "quiet",
+      phaseLabel: "Hoje",
+      title: "",
+      copy: "",
+      icon: "book-open",
+      stat: "",
+      statLabel: "",
+      primary: "",
+      secondary: ""
+    };
+    var name = (state.profile.name || "estudante").split(/\s+/)[0];
+    var greeting = homeGreeting(now) + ", " + name + ".";
+
+    if (current) {
+      var elapsed = Math.max(0, minute - current.startMin);
+      var remaining = Math.max(0, current.endMin - minute);
+      var previousPending = pendingChecks.length ? pendingChecks[pendingChecks.length - 1] : null;
+      var following = blocks.find(function (block) { return block.startMin >= current.endMin; }) || null;
+
+      if (elapsed < 10) {
+        if (previousPending) {
+          context.phase = "settling";
+          context.phaseLabel = "Primeiros minutos";
+          context.title = "Enquanto a sala enche, fecha " + (previousPending.course ? previousPending.course.name : "a aula anterior") + ".";
+          context.copy = (current.course ? current.course.name : "A aula") + " já começou, mas estes primeiros 10 minutos são uma janela tranquila para fazeres o Lesson Check anterior sem ficares para trás.";
+          context.icon = "book-check";
+          context.stat = homeMinutesCopy(10 - elapsed);
+          context.statLabel = "da janela inicial";
+          context.primary = lessonCheckButton(previousPending.lesson, "Fazer Lesson Check", "button-yellow");
+          context.secondary = blockOpenButton(current, "Abrir aula atual", "");
+        } else {
+          context.phase = "starting";
+          context.phaseLabel = "A começar";
+          context.title = (current.course ? current.course.name : "A aula") + " está a começar sem pressa.";
+          context.copy = "Os primeiros minutos são para chegar, abrir os materiais e perceber o plano da aula. A Twenty não te inventa urgência onde ela não existe.";
+          context.icon = "door-open";
+          context.stat = homeMinutesCopy(10 - elapsed);
+          context.statLabel = "de chegada";
+          context.primary = blockOpenButton(current, "Abrir aula", "button-yellow");
+        }
+        return context;
+      }
+
+      if (remaining <= 15 && current.lesson && !lessonIsBeOnline(current.lesson)) {
+        var isBackToBack = following && following.startMin - current.endMin <= 10;
+        context.phase = "closing";
+        context.phaseLabel = "A aula está a terminar";
+        context.title = "Fecha " + (current.course ? current.course.name : "a aula") + " com um Lesson Check.";
+        context.copy = "A aula termina às " + current.end + ". " + (isBackToBack ? "A próxima começa às " + following.start + ", por isso podes começar agora e continuar durante os primeiros 10 minutos seguintes." : "Faz uma verificação curta agora para descobrires logo o que ficou menos claro.");
+        context.icon = "sparkles";
+        context.stat = homeMinutesCopy(remaining);
+        context.statLabel = "até terminar";
+        context.primary = lessonCheckButton(current.lesson, "Fazer Lesson Check", "button-yellow");
+        context.secondary = isBackToBack ? blockOpenButton(following, "Ver próxima aula", "") : blockOpenButton(current, "Abrir aula", "");
+      } else {
+        context.phase = "live";
+        context.phaseLabel = "Em aula";
+        context.title = (current.course ? current.course.name : "A aula") + " está a acontecer agora.";
+        context.copy = (current.lesson ? current.lesson.title + ". " : "") + (current.room ? current.room + " · " : "") + "Tens tudo da aula reunido num só sítio.";
+        context.icon = "radio-tower";
+        context.stat = homeMinutesCopy(remaining);
+        context.statLabel = "restantes";
+        context.primary = blockOpenButton(current, "Entrar na aula", "button-yellow");
+        if (current.lesson) context.secondary = lessonCheckButton(current.lesson, "Lesson Check", "");
+      }
+      return context;
+    }
+
+    if (next) {
+      var untilNext = Math.max(0, next.startMin - minute);
+      var lastPending = pendingChecks.length ? pendingChecks[pendingChecks.length - 1] : null;
+      if (untilNext <= 10) {
+        context.phase = "soon";
+        context.phaseLabel = "Quase a começar";
+        context.title = (next.course ? next.course.name : "A próxima aula") + " começa daqui a " + homeMinutesCopy(untilNext) + ".";
+        context.copy = (next.lesson ? next.lesson.title + " · " : "") + next.start + "–" + next.end + (next.room ? " · " + next.room : "") + ". " + (lastPending ? "O Lesson Check anterior continua disponível nos primeiros 10 minutos da aula." : "Abre a aula e deixa tudo preparado.");
+        context.icon = "alarm-clock";
+        context.stat = next.start;
+        context.statLabel = "começa";
+        context.primary = blockOpenButton(next, next.lesson ? "Preparar-me" : "Preparar aula", "button-yellow");
+        if (lastPending) context.secondary = lessonCheckButton(lastPending.lesson, "Fechar aula anterior", "");
+      } else if (lastPending) {
+        context.phase = "between";
+        context.phaseLabel = "Entre aulas";
+        context.title = "A aula terminou. Fecha o ciclo antes da próxima.";
+        context.copy = "Faz o Lesson Check de " + (lastPending.course ? lastPending.course.name : lastPending.lesson.title) + ". Depois, a próxima aula começa às " + next.start + ".";
+        context.icon = "book-check";
+        context.stat = homeMinutesCopy(untilNext);
+        context.statLabel = "até à próxima";
+        context.primary = lessonCheckButton(lastPending.lesson, "Fazer Lesson Check", "button-yellow");
+        context.secondary = blockOpenButton(next, "Ver próxima aula", "");
+      } else if (untilNext <= 45) {
+        context.phase = "soon";
+        context.phaseLabel = "Quase a começar";
+        context.title = (next.course ? next.course.name : "A próxima aula") + " começa daqui a " + homeMinutesCopy(untilNext) + ".";
+        context.copy = (next.lesson ? next.lesson.title + " · " : "") + next.start + "–" + next.end + (next.room ? " · " + next.room : "") + ". Abre a aula e deixa tudo preparado.";
+        context.icon = "alarm-clock";
+        context.stat = next.start;
+        context.statLabel = "começa";
+        context.primary = blockOpenButton(next, next.lesson ? "Preparar-me" : "Preparar aula", "button-yellow");
+        context.secondary = '<button class="button" type="button" data-route="planner"><i data-lucide="calendar-days"></i>Ver o dia</button>';
+      } else if (!ended.length) {
+        context.phase = "before";
+        context.phaseLabel = "Antes das aulas";
+        context.title = greeting + " O teu dia começa às " + next.start + ".";
+        context.copy = blocks.length + " aula" + (blocks.length === 1 ? "" : "s") + " hoje. A primeira é " + (next.course ? next.course.name : "aula") + (next.room ? " em " + next.room : "") + ".";
+        context.icon = atmosphere.icon;
+        context.stat = homeMinutesCopy(untilNext);
+        context.statLabel = "até começar";
+        context.primary = blockOpenButton(next, "Preparar primeira aula", "button-yellow");
+        context.secondary = '<button class="button" type="button" data-route="planner"><i data-lucide="calendar-days"></i>Ver horário</button>';
+      } else {
+        context.phase = "between";
+        context.phaseLabel = "Intervalo";
+        context.title = "Respira. A próxima aula é " + (next.course ? next.course.name : "daqui a pouco") + ".";
+        context.copy = "Começa às " + next.start + (next.room ? " em " + next.room : "") + ". Podes rever o essencial ou simplesmente fazer uma pausa.";
+        context.icon = "coffee";
+        context.stat = homeMinutesCopy(untilNext);
+        context.statLabel = "de intervalo";
+        context.primary = blockOpenButton(next, "Ver próxima aula", "button-yellow");
+        context.secondary = '<button class="button" type="button" data-route="study"><i data-lucide="book-open-check"></i>Revisão curta</button>';
+      }
+      return context;
+    }
+
+    if (pendingChecks.length) {
+      var firstPending = pendingChecks[0];
+      context.phase = "after";
+      context.phaseLabel = "Depois das aulas";
+      context.title = "As aulas acabaram. Faltam " + pendingChecks.length + " Lesson Check" + (pendingChecks.length === 1 ? "" : "s") + ".";
+      context.copy = "Faz primeiro a verificação rápida do que aprendeste. O TPC vem depois — são duas coisas diferentes.";
+      context.icon = "book-check";
+      context.stat = String(pendingChecks.length);
+      context.statLabel = pendingChecks.length === 1 ? "aula por fechar" : "aulas por fechar";
+      context.primary = lessonCheckButton(firstPending.lesson, "Fazer o próximo", "button-yellow");
+      context.secondary = '<button class="button" type="button" data-route="study"><i data-lucide="sparkles"></i>Ver estudo</button>';
+      return context;
+    }
+
+    if (tasks.homeworkPending.length || tasks.overdue.length) {
+      var totalPending = tasks.homeworkPending.length + tasks.overdue.length;
+      context.phase = "homework";
+      context.phaseLabel = blocks.length ? "Depois das aulas" : "Sessão de estudo";
+      context.title = blocks.length ? "Foi um bom dia de escola. Agora, fecha os TPCs." : "Hoje a biblioteca chama por ti.";
+      context.copy = totalPending + " tarefa" + (totalPending === 1 ? "" : "s") + " à tua espera. Faz uma de cada vez e o relatório do dia fecha sozinho.";
+      context.icon = "notebook-pen";
+      context.stat = String(totalPending);
+      context.statLabel = totalPending === 1 ? "TPC pendente" : "TPCs pendentes";
+      context.primary = '<button class="button button-yellow" type="button" data-route="planner"><i data-lucide="list-checks"></i>Começar TPC</button>';
+      context.secondary = '<button class="button" type="button" data-action="add-task"><i data-lucide="plus"></i>Adicionar TPC</button>';
+      return context;
+    }
+
+    if (blocks.length) {
+      context.phase = "complete";
+      context.phaseLabel = "Dia concluído";
+      context.title = "Mochila fechada. O dia escolar está completo.";
+      context.copy = report.academic == null ? "Cumpriste a rotina de hoje. Amanhã, a Home volta a adaptar-se ao teu horário." : "Nota académica provisória: " + round(report.academic, 1) + "/20. Agora podes descansar sem aquela sensação de que te esqueceste de alguma coisa.";
+      context.icon = "badge-check";
+      context.stat = report.academic == null ? "✓" : round(report.academic, 1);
+      context.statLabel = report.academic == null ? "rotina completa" : "nota do dia";
+      context.primary = '<button class="button button-yellow" type="button" data-route="grades"><i data-lucide="award"></i>Ver Report Card</button>';
+      context.secondary = '<button class="button" type="button" data-route="planner"><i data-lucide="calendar-days"></i>Ver amanhã</button>';
+      return context;
+    }
+
+    context.phase = "quiet";
+    context.phaseLabel = atmosphere.label;
+    context.title = greeting + " Hoje tens espaço para estudar ao teu ritmo.";
+    context.copy = "Sem aulas marcadas. Podes adiantar um TPC, rever matéria ou simplesmente aproveitar o dia livre.";
+    context.icon = atmosphere.icon;
+    context.stat = "Livre";
+    context.statLabel = "agenda escolar";
+    context.primary = '<button class="button button-yellow" type="button" data-route="study"><i data-lucide="sparkles"></i>Estudar um pouco</button>';
+    context.secondary = '<button class="button" type="button" data-route="planner"><i data-lucide="calendar-days"></i>Ver calendário</button>';
+    return context;
+  }
+
+  function renderHomeStep(icon, label, meta, status) {
+    return '<div class="school-step ' + (status || "") + '"><span><i data-lucide="' + icon + '"></i></span><div><strong>' + esc(label) + '</strong><small>' + esc(meta) + '</small></div>' + (status === "is-done" ? '<i class="school-step-check" data-lucide="check"></i>' : "") + "</div>";
+  }
+
+  function renderLessonCheckRow(block) {
+    if (!block || !block.lesson) return "";
+    var course = block.course;
+    var quiz = availableQuizForLesson(block.lesson.id);
+    var action = quiz
+      ? '<button class="button button-dark button-small" type="button" data-action="start-quiz" data-id="' + attr(quiz.id) + '"><i data-lucide="play"></i>Fazer</button>'
+      : '<button class="button button-dark button-small" type="button" data-action="lesson-ai" data-output="quiz" data-lesson="' + attr(block.lesson.id) + '"><i data-lucide="sparkles"></i>Criar</button>';
+    return '<div class="list-row school-action-row"><span class="list-icon yellow"><i data-lucide="book-check"></i></span><span class="list-content"><strong>Lesson Check · ' + esc(block.lesson.title) + '</strong><small>' + esc(course ? course.name : "Aula") + ' · 3–7 minutos</small></span><span class="badge badge-violet">Agora</span>' + action + "</div>";
+  }
+
+  function renderDailyReportCard(report, blocks) {
+    var subjectRows = report.subjects.length ? report.subjects.slice(0, 4).map(function (item) {
+      return '<div class="report-subject"><span><i data-lucide="book-open"></i>' + esc(item.course.name) + '</span><strong>' + round(item.grade, 1) + '</strong></div>';
+    }).join("") : '<p class="report-empty">Faz os Lesson Checks para construíres a nota académica de hoje.</p>';
+    var grade = report.academic == null ? "—" : round(report.academic, 1);
+    var status = report.complete ? "Fechado" : "Em construção";
+    return '<article class="card span-5 daily-report-card ' + (report.complete ? "is-complete" : "") + '"><div class="card-title-row"><div><p class="card-label">Report Card · Hoje</p><h3>O teu dia escolar</h3></div><span class="badge ' + (report.complete ? "badge-mint" : "badge-yellow") + '">' + status + '</span></div><div class="report-grade"><strong>' + grade + '</strong><span>/20<br>nota académica</span></div><div class="report-subjects">' + subjectRows + '</div><div class="report-routine"><span><strong>' + report.routine + '%</strong> rotina escolar</span><div class="mini-progress"><span style="width:' + report.routine + '%"></span></div><small>' + report.checksDone + '/' + report.checksDue + ' Lesson Checks · ' + report.homeworkDone + '/' + report.homeworkDue + ' TPCs</small></div><button class="button button-small" type="button" data-route="grades"><i data-lucide="arrow-right"></i>Ver notas</button></article>';
+  }
+
   function renderHome() {
-    setHeader("Hoje", "Resumo académico");
+    setHeader("Hoje", "O teu dia escolar");
     var semester = currentSemester();
     if (!semester) {
-      return '<div class="page-head"><div><h2>Novo semestre</h2><p>Configura as cadeiras, o horário e as avaliações do próximo período letivo.</p></div></div>' + emptyState("calendar-plus", "Sem semestre ativo", "Os semestres anteriores permanecem disponíveis no arquivo.", "new-semester", "Criar semestre");
-    }
-    var name = (state.profile.name || "estudante").split(/\s+/)[0];
-    var live = getLiveLesson();
-    var next = getNextClass();
-    var progress = overallProgress();
-    var ects = ectsAverage();
-    var pendingTasks = semesterItems("tasks").filter(function (task) { return !task.done; }).sort(function (a, b) { return String(a.dueDate || "9999").localeCompare(String(b.dueDate || "9999")); });
-    var upcoming = semesterItems("assessments").filter(function (item) { return !item.date || item.date >= todayISO(); }).sort(function (a, b) { return String(a.date || "9999").localeCompare(String(b.date || "9999")); });
-    var upcomingEvents = semesterItems("events").filter(function (item) { return !item.date || item.date >= todayISO(); }).sort(function (a, b) { return String(a.date || "9999").localeCompare(String(b.date || "9999")); });
-    var online = beOnlineStatus();
-    var overdueTasks = pendingTasks.filter(function (task) { return task.dueDate && task.dueDate < todayISO(); });
-    var todayEvents = upcomingEvents.filter(function (event) { return event.date === todayISO(); });
-    var urgentAssessment = upcoming.find(function (item) {
-      if (!item.date) return false;
-      return Math.round((localDate(item.date) - localDate(todayISO())) / 86400000) <= 3;
-    });
-    var heroTitle = "Resumo de hoje";
-    var heroCopy = "Consulta as próximas aulas, tarefas, avaliações e eventos.";
-    if (live && live.course) {
-      heroTitle = "Em curso: " + (live.lesson ? live.lesson.title : live.course.name);
-      heroCopy = live.lesson ? "Slides, apontamentos, quiz e perguntas anteriores disponíveis." : "Este período ainda não tem uma aula preparada.";
-    } else if (overdueTasks.length) {
-      heroTitle = overdueTasks.length + " tarefa" + (overdueTasks.length === 1 ? " em atraso" : "s em atraso");
-      heroCopy = "Revê os prazos e atualiza as prioridades.";
-    } else if (online.pending.length) {
-      heroTitle = online.pending.length + " aula" + (online.pending.length === 1 ? " por rever." : "s por rever.");
-      heroCopy = "Conclui os quizzes pendentes e regista as dúvidas identificadas.";
-    } else if (urgentAssessment) {
-      heroTitle = urgentAssessment.title + " está a chegar.";
-      heroCopy = relativeDate(urgentAssessment.date) + ". Abre a matéria definida, as aulas incluídas e as perguntas anteriores.";
-    } else if (next && next.lesson && next.dateISO === todayISO()) {
-      heroTitle = "Próxima aula preparada";
-      heroCopy = next.lesson.title + " · " + next.schedule.start + "–" + next.schedule.end + ".";
-    } else if (todayEvents.length) {
-      heroTitle = todayEvents[0].title + " é hoje.";
-      heroCopy = (todayEvents[0].time ? "Às " + todayEvents[0].time + ". " : "") + (todayEvents[0].location || "Consulta os detalhes no Calendário.");
+      return '<div class="page-head"><div><h2>Novo semestre</h2><p>Configura as cadeiras e o horário para a Home começar a acompanhar o teu dia.</p></div></div>' + emptyState("calendar-plus", "Sem semestre ativo", "Quando houver horário, a Home passa a mostrar automaticamente o que está a acontecer e o que vem a seguir.", "new-semester", "Criar semestre");
     }
 
-    var liveHtml;
-    if (live && live.course) {
-      var materials = live.lesson ? state.materials.filter(function (item) { return item.lessonId === live.lesson.id; }) : [];
-      var questions = live.lesson ? state.questions.filter(function (item) { return asArray(item.lessonIds).indexOf(live.lesson.id) >= 0; }) : [];
-      var quizzes = live.lesson ? state.quizzes.filter(function (item) { return item.lessonId === live.lesson.id; }) : [];
-      liveHtml = '<article class="card live-card span-7"><div class="live-top"><span class="live-pill"><span class="live-dot"></span> Aula em direto</span>' + (state.settings.campusSimulation ? '<span class="simulated-label">' + simulatedPeople(live.course.id) + ' a acompanhar · simulação</span>' : "") + '</div><h3>' + esc(live.lesson ? live.lesson.title : live.course.name) + '</h3><p>' + esc(live.course.name) + ' · ' + esc(live.start || "") + '–' + esc(live.end || "") + (live.room ? " · " + esc(live.room) : "") + '</p><div class="live-meta"><span><i data-lucide="file-text"></i>' + materials.length + ' PDF</span><span><i data-lucide="circle-help"></i>' + questions.length + ' perguntas anteriores</span><span><i data-lucide="sparkles"></i>' + quizzes.length + ' quiz</span></div><div class="live-actions">' + (live.lesson ? '<button class="button button-yellow" type="button" data-route="lesson" data-id="' + attr(live.lesson.id) + '"><i data-lucide="play"></i>Abrir aula</button><button class="button" type="button" data-action="edit-lesson" data-id="' + attr(live.lesson.id) + '"><i data-lucide="pencil"></i>Editar aula</button>' : '<button class="button button-yellow" type="button" data-action="create-lesson-from-live" data-id="' + attr(live.schedule.id) + '"><i data-lucide="link"></i>Preparar esta aula</button>') + (live.lesson ? '<button class="button" type="button" data-action="quick-review" data-course="' + attr(live.course.id) + '" data-lesson="' + attr(live.lesson.id) + '"><i data-lucide="rotate-ccw"></i>Rever depois</button>' : '') + '</div></article>';
-    } else if (next && next.course) {
-      liveHtml = '<article class="card card-dark span-7"><div class="card-title-row"><div><p class="card-label">Próxima aula</p><h3>' + esc(next.lesson ? next.lesson.title : next.course.name) + '</h3><p class="card-subtitle">' + esc(next.course.name) + ' · ' + (next.dateISO === todayISO() ? "Hoje" : WEEKDAYS[next.date.getDay()]) + ' · ' + esc(next.schedule.start) + '–' + esc(next.schedule.end) + (next.schedule.room ? " · " + esc(next.schedule.room) : "") + '</p></div><span class="badge badge-yellow">' + esc(next.schedule.type || "Aula") + '</span></div><div class="live-meta"><span><i data-lucide="clock-3"></i>' + relativeDate(next.dateISO) + '</span><span><i data-lucide="map-pin"></i>' + esc(next.schedule.room || "Sala por definir") + '</span><span><i data-lucide="' + (next.lesson ? "check" : "file-plus-2") + '"></i>' + (next.lesson ? "Aula preparada" : "Por preparar") + '</span></div><div class="live-actions">' + (next.lesson ? '<button class="button button-yellow" type="button" data-route="lesson" data-id="' + attr(next.lesson.id) + '"><i data-lucide="arrow-right"></i>Abrir aula</button><button class="button" type="button" data-action="edit-lesson" data-id="' + attr(next.lesson.id) + '"><i data-lucide="pencil"></i>Editar aula</button>' : '<button class="button button-yellow" type="button" data-action="create-lesson" data-course="' + attr(next.course.id) + '" data-schedule="' + attr(next.schedule.id) + '" data-date="' + attr(next.dateISO) + '" data-start="' + attr(next.schedule.start) + '" data-end="' + attr(next.schedule.end) + '" data-room="' + attr(next.schedule.room || "") + '" data-type="' + attr(next.schedule.type || "T") + '"><i data-lucide="file-plus-2"></i>Preparar aula</button>') + '</div></article>';
-    } else {
-      liveHtml = '<article class="card card-dark span-7">' + emptyState("clock-3", "Nenhuma aula em curso", "Configura o horário para identificar automaticamente as aulas em curso.", "add-schedule", "Adicionar horário") + "</article>";
+    var context = homeContext(activeHomeNow());
+    var blocks = context.blocks;
+    var report = context.report;
+    var currentMinute = nowMinutes(context.now);
+    var completedClasses = blocks.filter(function (block) { return block.endMin < currentMinute; }).length;
+    var endedLessons = blocks.filter(function (block) { return block.lesson && block.endMin < currentMinute; });
+    var completedChecks = endedLessons.filter(function (block) { return lessonIsBeOnline(block.lesson); }).length;
+    var tasks = context.tasks;
+    var afterSchoolItems = context.pendingChecks.map(renderLessonCheckRow).join("");
+    var homeworkList = tasks.overdue.concat(tasks.homeworkPending).filter(function (task, index, array) {
+      return array.findIndex(function (candidate) { return candidate.id === task.id; }) === index;
+    }).slice(0, 4);
+    afterSchoolItems += homeworkList.map(renderTaskRow).join("");
+    if (!afterSchoolItems) {
+      afterSchoolItems = emptyState("check-check", "Nada pendente depois das aulas", "Quando houver Lesson Checks ou TPCs, aparecem aqui pela ordem certa.", "add-task", "Adicionar TPC");
     }
 
-    var taskHtml = pendingTasks.length ? pendingTasks.slice(0, 4).map(renderTaskRow).join("") : emptyState("check-check", "Sem tarefas pendentes", "Não existem tarefas por concluir.", "add-task", "Nova tarefa");
-    var homeAgenda = upcoming.map(function (item) { return Object.assign({ agendaKind: "assessment" }, item); }).concat(upcomingEvents.map(function (item) { return Object.assign({ agendaKind: "event" }, item); })).sort(function (a, b) { return String(a.date || "9999").localeCompare(String(b.date || "9999")) || String(a.time || "").localeCompare(String(b.time || "")); });
-    var upcomingHtml = homeAgenda.length ? homeAgenda.slice(0, 4).map(function (item) {
-      var course = courseById(item.courseId);
-      var isEvent = item.agendaKind === "event";
-      return '<div class="list-row"><span class="list-icon ' + (isEvent ? "pink" : "orange") + '"><i data-lucide="' + (isEvent ? "party-popper" : assessmentIcon(item.type)) + '"></i></span><span class="list-content"><strong>' + esc(item.title) + '</strong><small>' + esc(isEvent ? item.location || "Evento da faculdade" : course ? course.name : "Avaliação") + ' · ' + relativeDate(item.date) + (item.time ? " às " + esc(item.time) : "") + (!isEvent && item.requiresTestSheet ? ' · comprar folha de teste' : '') + '</small></span><span class="badge ' + (item.date === todayISO() ? "badge-danger" : isEvent ? "badge-pink" : "badge-yellow") + '">' + esc(isEvent ? "Evento" : item.type || "Avaliação") + "</span></div>";
-    }).join("") : emptyState("calendar-check", "Sem eventos próximos", "Não existem avaliações ou eventos agendados.", "add-assessment", "Adicionar data");
+    var nextAssessment = semesterItems("assessments").filter(function (item) {
+      return item.date && item.date >= todayISO();
+    }).sort(function (a, b) {
+      return String(a.date).localeCompare(String(b.date));
+    })[0] || null;
+    var nextAssessmentCourse = nextAssessment ? courseById(nextAssessment.courseId) : null;
+    var nextAssessmentHtml = nextAssessment
+      ? '<div class="next-date-feature"><span class="list-icon orange"><i data-lucide="' + assessmentIcon(nextAssessment.type) + '"></i></span><div><p class="card-label">Próxima avaliação</p><h3>' + esc(nextAssessment.title) + '</h3><p>' + esc(nextAssessmentCourse ? nextAssessmentCourse.name : "Avaliação") + ' · ' + relativeDate(nextAssessment.date) + (nextAssessment.time ? " às " + esc(nextAssessment.time) : "") + '</p></div><span class="badge badge-yellow">' + esc(nextAssessment.type || "Avaliação") + "</span></div>"
+      : emptyState("calendar-check", "Sem avaliações próximas", "Quando adicionares uma avaliação, a Home liga-a ao teu plano diário.", "add-assessment", "Adicionar avaliação");
 
-    var onlineTitle = !online.due.length ? "Sem aulas concluídas" : online.isOnline ? "Revisão em dia" : online.pending.length + " aula" + (online.pending.length === 1 ? "" : "s") + " por rever";
-    var onlineCopy = !online.due.length ? "O estado será atualizado após a primeira aula." : online.isOnline ? "Todos os quizzes das aulas concluídas estão atualizados." : "Conclui os quizzes pendentes e regista as dúvidas identificadas.";
-    var onlineCard = '<article class="card card-yellow span-5 target-card beonline-card"><div class="target-copy"><p class="card-label befirst-wordmark">BEFIRST<sup>™</sup></p><h3>' + esc(onlineTitle) + '</h3><p>' + esc(onlineCopy) + '</p><div class="tiny-stats"><span><strong>' + online.completed.length + '/' + online.due.length + '</strong>aulas revistas</span><span><strong>' + progress + '%</strong>matéria dominada</span><span><strong>' + semesterItems("questions").length + '</strong>perguntas antigas</span></div>' + (online.pending.length ? '<button class="button button-dark button-small" style="margin-top:14px" type="button" data-action="beonline-next"><i data-lucide="play"></i>Rever próxima aula</button>' : '') + '</div><div class="progress-ring" style="--progress:' + online.progress + '%"><strong>' + online.progress + '%</strong></div></article>';
-    return '<section class="card hero-card span-12"><div class="hero-copy"><p class="hello">Olá, ' + esc(name) + '.</p><h2>' + esc(heroTitle) + '</h2><p>' + esc(heroCopy) + '</p><div class="hero-actions"><button class="button button-dark" type="button" data-route="study"><i data-lucide="sparkles"></i>Estudar agora</button><button class="button" type="button" data-action="quick-add"><i data-lucide="plus"></i>Adicionar</button></div></div><div class="hero-art"><span class="hero-orbit one"></span><span class="hero-orbit two"></span><span class="hero-number">20</span><span class="floating-chip one"><i data-lucide="coffee"></i>Modo de estudo</span><span class="floating-chip two"><i data-lucide="book-open"></i>' + activeCourses().length + ' cadeiras</span></div></section><div class="bento-grid" style="margin-top:15px">' + liveHtml + onlineCard + '<article class="card card-pink span-3 metric-card"><div class="metric-top"><p class="card-label">Média ECTS</p><span class="metric-icon"><i data-lucide="chart-no-axes-column-increasing"></i></span></div><div><p class="metric-value">' + (ects.value == null ? "—" : round(ects.value, 1)) + '</p><p class="metric-caption">' + (ects.value == null ? "Adiciona notas para calcular" : "ponderada por " + ects.ects + " ECTS") + '</p></div></article><article class="card card-violet span-3 metric-card"><div class="metric-top"><p class="card-label">Tarefas</p><span class="metric-icon"><i data-lucide="list-checks"></i></span></div><div><p class="metric-value">' + pendingTasks.length + '</p><p class="metric-caption">' + overdueTasks.length + ' atrasadas · ' + pendingTasks.filter(function (task) { return task.dueDate === todayISO(); }).length + ' para hoje</p></div></article><article class="card card-orange span-3 metric-card"><div class="metric-top"><p class="card-label">Avaliações</p><span class="metric-icon"><i data-lucide="alarm-clock"></i></span></div><div><p class="metric-value">' + upcoming.length + '</p><p class="metric-caption">próximas neste semestre</p></div></article><article class="card card-mint span-3 metric-card"><div class="metric-top"><p class="card-label">Perguntas antigas</p><span class="metric-icon"><i data-lucide="message-circle-question"></i></span></div><div><p class="metric-value">' + semesterItems("questions").length + '</p><p class="metric-caption">ligadas à matéria</p></div></article><article class="card span-6"><div class="card-title-row"><div><h3>Tarefas prioritárias</h3></div><button class="button button-small" type="button" data-action="add-task"><i data-lucide="plus"></i>Tarefa</button></div><div class="list-stack">' + taskHtml + '</div></article><article class="card span-6"><div class="card-title-row"><div><h3>Próximas datas</h3></div><button class="button button-small" type="button" data-action="planner-mode" data-mode="calendar"><i data-lucide="arrow-right"></i>Ver calendário</button></div><div class="list-stack">' + upcomingHtml + "</div></article></div>";
+    var classesStepStatus = !blocks.length ? "" : completedClasses >= blocks.length ? "is-done" : context.current ? "is-active" : completedClasses ? "is-active" : "";
+    var checksStepStatus = !endedLessons.length ? "" : completedChecks >= endedLessons.length ? "is-done" : context.pendingChecks.length ? "is-active" : "";
+    var tpcDone = tasks.homeworkDone.length;
+    var tpcTotal = tasks.homeworkDue.length;
+    var tpcStepStatus = !tpcTotal ? (context.phase === "complete" ? "is-done" : "") : tpcDone >= tpcTotal ? "is-done" : (context.phase === "homework" ? "is-active" : "");
+    var reportStatus = report.complete && blocks.length ? "is-done" : context.phase === "complete" ? "is-active" : "";
+
+    var timeline = renderHomeStep("graduation-cap", "Aulas", blocks.length ? completedClasses + "/" + blocks.length + " concluídas" : "Sem aulas hoje", classesStepStatus)
+      + renderHomeStep("book-check", "Lesson Checks", endedLessons.length ? completedChecks + "/" + endedLessons.length + " feitos" : "Aparecem no fim da aula", checksStepStatus)
+      + renderHomeStep("notebook-pen", "TPC", tpcTotal ? tpcDone + "/" + tpcTotal + " concluídos" : "Sem TPC para hoje", tpcStepStatus)
+      + renderHomeStep("award", "Report Card", report.complete && blocks.length ? "Dia fechado" : "Atualiza ao longo do dia", reportStatus);
+
+    var hero = '<section class="school-now-card span-12 ' + attr(context.atmosphere.className) + ' phase-' + attr(context.phase) + '"><div class="school-now-copy"><div class="school-now-kicker"><span><i data-lucide="' + attr(context.atmosphere.icon) + '"></i>' + esc(context.atmosphere.label) + '</span><b>' + esc(context.phaseLabel) + '</b></div><h2>' + esc(context.title) + '</h2><p>' + esc(context.copy) + '</p><div class="school-now-actions">' + context.primary + context.secondary + '</div></div><div class="school-now-status"><span class="school-now-icon"><i data-lucide="' + attr(context.icon) + '"></i></span><strong>' + esc(context.stat) + '</strong><small>' + esc(context.statLabel) + '</small><div class="school-now-glow"></div></div></section>';
+
+    return renderHomeDebugBar() + hero
+      + '<div class="bento-grid home-school-grid" style="margin-top:15px">'
+      + '<article class="card span-5 school-path-card"><div class="card-title-row"><div><p class="card-label">O teu dia</p><h3>Da aula ao fim do dia</h3><p class="card-subtitle">A Home muda o próximo passo à medida que vais avançando.</p></div><span class="metric-icon"><i data-lucide="route"></i></span></div><div class="school-steps">' + timeline + "</div></article>"
+      + '<article class="card span-7 after-school-card"><div class="card-title-row"><div><p class="card-label">A seguir</p><h3>Lesson Checks e TPC</h3><p class="card-subtitle">Primeiro verificas o que aprendeste. Depois aplicas em casa.</p></div><button class="button button-small" type="button" data-action="add-task"><i data-lucide="plus"></i>TPC</button></div><div class="list-stack after-school-list">' + afterSchoolItems + "</div></article>"
+      + renderDailyReportCard(report, blocks)
+      + '<article class="card span-7 next-date-card"><div class="card-title-row"><div><p class="card-label">No horizonte</p><h3>O que merece atenção</h3></div><button class="button button-small" type="button" data-route="planner"><i data-lucide="calendar-days"></i>Calendário</button></div><div style="margin-top:15px">' + nextAssessmentHtml + '</div><div class="home-mini-stats"><span><strong>' + tasks.overdue.length + '</strong> em atraso</span><span><strong>' + semesterItems("questions").length + '</strong> perguntas antigas</span><span><strong>' + overallProgress() + '%</strong> matéria dominada</span></div></article>'
+      + "</div>";
   }
 
   function assessmentIcon(type) {
@@ -2729,7 +3326,9 @@
     var forceControls = '<span class="sync-force-actions" role="group" aria-label="Substituição manual de dados"><button class="button button-small sync-icon-button" type="button" data-action="force-git-pull" aria-label="Forçar pull: substituir este dispositivo pelos dados do Git" title="Forçar pull"' + forceDisabled + '><i data-lucide="arrow-down-to-line"></i></button><button class="button button-dark button-small sync-icon-button" type="button" data-action="force-git-push" aria-label="Forçar push: substituir o Git pelos dados deste dispositivo" title="Forçar push"' + forceDisabled + '><i data-lucide="arrow-up-to-line"></i></button></span>';
     var syncProgress = '<div id="gitSyncInlineProgress" class="sync-inline-progress ' + (syncInfo.state === "syncing" ? "is-active is-indeterminate" : "") + '"><span></span></div>';
     var syncCard = '<article id="gitSyncCard" class="card settings-card card-violet" aria-busy="' + (syncInfo.state === "syncing" ? "true" : "false") + '"><div class="card-title-row"><div><p class="card-label">Git como base de dados</p><h3 id="gitSyncTitle">' + esc(syncDisplay.title) + '</h3><p id="gitSyncDetail" class="card-subtitle">' + esc(syncDisplay.detail) + '</p></div><span class="metric-icon"><i data-lucide="git-commit-horizontal"></i></span></div><div class="settings-row"><div><strong id="gitSyncSummary">' + esc(syncVersionSummary) + '</strong><small>Fusão por campos · fila offline · histórico em commits.</small></div><span id="gitSyncBadge" class="badge ' + syncDisplay.badgeClass + '">' + esc(syncVersionBadge) + '</span></div>' + syncProgress + '<div class="list-actions"><button class="button button-small" type="button" data-action="configure-git-sync"><i data-lucide="settings-2"></i>Configurar</button><button class="button button-dark button-small" type="button" data-action="sync-now"><i data-lucide="refresh-cw"></i>Sincronizar agora</button>' + forceControls + (syncInfo.configured ? '<button class="button button-small" type="button" data-action="disable-git-sync"><i data-lucide="pause"></i>Pausar</button>' : '') + '</div></article>';
-    return '<div class="page-head"><div><h2>Definições</h2><p>Perfil, semestres, conteúdo e dados locais.</p></div><div class="page-actions"><button class="button" type="button" data-action="show-tutorial"><i data-lucide="map"></i>Visita guiada</button><button class="button button-dark" type="button" data-action="quick-add"><i data-lucide="plus"></i>Adicionar conteúdo</button></div></div><div class="settings-grid">' + syncCard + '<article class="card settings-card"><div class="card-title-row"><div><p class="card-label">Perfil académico</p><h3>' + esc(state.profile.name || "Estudante") + '</h3><p class="card-subtitle">' + esc(state.profile.degree || "Curso por configurar") + (state.profile.institution ? " · " + esc(state.profile.institution) : "") + '</p></div><span class="metric-icon"><i data-lucide="user-round"></i></span></div><div class="settings-row"><div><strong>Meta</strong><small>Objetivo utilizado nos indicadores de desempenho.</small></div><span class="badge badge-yellow">' + (Number(state.profile.targetGrade) || 20) + '/20</span></div><button class="button button-small" type="button" data-action="edit-profile"><i data-lucide="pencil"></i>Editar perfil</button></article><article class="card settings-card card-violet"><div class="card-title-row"><div><p class="card-label">Semestre ativo</p><h3>' + esc(semester ? semester.name : "Nenhum") + '</h3><p class="card-subtitle">' + esc(semester ? semester.academicYear : "Cria o próximo semestre") + '</p></div><span class="metric-icon"><i data-lucide="calendar-range"></i></span></div><div class="settings-row"><div><strong>' + activeCourses().length + ' cadeiras</strong><small>' + archived + ' semestre(s) no arquivo.</small></div><span class="badge badge-dark">' + activeCourses().reduce(function (sum, course) { return sum + (Number(course.ects) || 0); }, 0) + ' ECTS</span></div><div class="list-actions"><button class="button button-small" type="button" data-action="new-semester"><i data-lucide="calendar-plus"></i>Novo</button>' + (semester ? '<button class="button button-danger button-small" type="button" data-action="archive-semester"><i data-lucide="archive"></i>Arquivar semestre</button>' : "") + '</div></article><article class="card settings-card"><div class="card-title-row"><div><p class="card-label">Ficheiro JSON</p><h3>academic-data.json</h3><p class="card-subtitle">Editável fora da app; relido ao abrir ou regressar à janela.</p></div><span class="metric-icon"><i data-lucide="braces"></i></span></div><div class="settings-row"><div><strong>Última verificação</strong><small>' + esc(lastCheck) + ' · revisão local ' + (Number(state.meta.revision) || 0) + '</small></div><button class="switch ' + (state.settings.jsonSync ? "is-on" : "") + '" type="button" data-action="toggle-json-sync" aria-label="Ativar sincronização JSON"><span></span></button></div><div class="list-actions"><button class="button button-small" type="button" data-action="reload-json"><i data-lucide="refresh-cw"></i>Reler</button><button class="button button-small" type="button" data-action="export-json"><i data-lucide="download"></i>Exportar</button><button class="button button-small" type="button" data-action="import-json"><i data-lucide="upload"></i>Importar</button></div></article><article class="card settings-card card-yellow"><div class="card-title-row"><div><h3>Atividade simulada no campus</h3><p class="card-subtitle">Apresenta indicadores simulados de atividade no campus.</p></div><span class="metric-icon"><i data-lucide="users-round"></i></span></div><div class="settings-row"><div><strong>Contador simulado</strong><small>Mostra “pessoas a acompanhar” com etiqueta de simulação.</small></div><button class="switch ' + (state.settings.campusSimulation ? "is-on" : "") + '" type="button" data-action="toggle-campus"><span></span></button></div><span class="badge badge-dark">Local · privado · transparente</span></article><article class="card settings-card"><div class="card-title-row"><div><h3>Dados no dispositivo</h3><p class="card-subtitle">Os metadados ficam em IndexedDB; os PDFs enviados ficam separados do JSON.</p></div><span class="metric-icon"><i data-lucide="hard-drive"></i></span></div><div class="settings-row"><div><strong id="storageFileCount">A contar ficheiros…</strong><small>PDFs e documentos enviados na app.</small></div><span class="badge badge-mint">Local-first</span></div><button class="button button-small" type="button" data-action="export-json"><i data-lucide="shield-check"></i>Criar backup JSON</button></article><article class="card settings-card card-dark"><div class="card-title-row"><div><h3>Adicionar conteúdo</h3><p class="card-subtitle">Aulas, materiais, perguntas antigas, quizzes, notas e avaliações.</p></div><span class="metric-icon"><i data-lucide="wrench"></i></span></div><div class="quick-grid" style="grid-template-columns:repeat(3,1fr);margin-top:17px"><button type="button" data-action="create-lesson"><i data-lucide="presentation"></i>Aula</button><button type="button" data-action="add-material"><i data-lucide="file-up"></i>PDF</button><button type="button" data-action="add-question"><i data-lucide="message-circle-question"></i>Pergunta</button><button type="button" data-action="add-quiz"><i data-lucide="sparkles"></i>Quiz</button><button type="button" data-action="add-grade"><i data-lucide="chart-no-axes-combined"></i>Nota</button><button type="button" data-action="add-assessment"><i data-lucide="file-pen-line"></i>Avaliação</button></div></article><article class="card settings-card span-12"><div class="card-title-row"><div><p class="card-label">Segurança</p><h3>Recomeçar neste dispositivo</h3><p class="card-subtitle">Remove o estado local e os PDFs guardados. O ficheiro academic-data.json não é apagado.</p></div><button class="button button-danger" type="button" data-action="reset-app"><i data-lucide="trash-2"></i>Apagar dados locais</button></div></article></div>';
+    var debugSnapshot = homeDebugSnapshot();
+    var debugCard = '<article class="card settings-card debug-admin-card"><div class="card-title-row"><div><p class="card-label">Ferramentas de desenvolvimento</p><h3>Laboratório da Home</h3><p class="card-subtitle">Testa manhã, aulas coladas, primeiros 10 minutos, TPC e Report Card sem esperar pela hora real.</p></div><span class="metric-icon"><i data-lucide="flask-conical"></i></span></div><div class="settings-row"><div><strong>' + esc(debugSnapshot.label) + '</strong><small>' + esc(debugSnapshot.time) + ' · motor: ' + esc(debugSnapshot.phase) + '</small></div><span class="badge ' + (homeDebug && homeDebug.active ? "badge-yellow" : "badge-mint") + '">' + (homeDebug && homeDebug.active ? "Simulação ativa" : "Dados reais") + '</span></div><div class="list-actions"><button class="button button-dark button-small" type="button" data-action="debug-start-tutorial"><i data-lucide="play"></i>Tutorial do dia</button><button class="button button-small" type="button" data-action="debug-open-lab"><i data-lucide="bug"></i>Abrir debug</button>' + (homeDebug && homeDebug.active ? '<button class="button button-danger button-small" type="button" data-action="debug-exit"><i data-lucide="x"></i>Sair</button>' : '') + '</div></article>';
+    return '<div class="page-head"><div><h2>Definições</h2><p>Perfil, semestres, conteúdo e dados locais.</p></div><div class="page-actions"><button class="button" type="button" data-action="show-tutorial"><i data-lucide="map"></i>Visita guiada</button><button class="button button-dark" type="button" data-action="quick-add"><i data-lucide="plus"></i>Adicionar conteúdo</button></div></div><div class="settings-grid">' + syncCard + debugCard + '<article class="card settings-card"><div class="card-title-row"><div><p class="card-label">Perfil académico</p><h3>' + esc(state.profile.name || "Estudante") + '</h3><p class="card-subtitle">' + esc(state.profile.degree || "Curso por configurar") + (state.profile.institution ? " · " + esc(state.profile.institution) : "") + '</p></div><span class="metric-icon"><i data-lucide="user-round"></i></span></div><div class="settings-row"><div><strong>Meta</strong><small>Objetivo utilizado nos indicadores de desempenho.</small></div><span class="badge badge-yellow">' + (Number(state.profile.targetGrade) || 20) + '/20</span></div><button class="button button-small" type="button" data-action="edit-profile"><i data-lucide="pencil"></i>Editar perfil</button></article><article class="card settings-card card-violet"><div class="card-title-row"><div><p class="card-label">Semestre ativo</p><h3>' + esc(semester ? semester.name : "Nenhum") + '</h3><p class="card-subtitle">' + esc(semester ? semester.academicYear : "Cria o próximo semestre") + '</p></div><span class="metric-icon"><i data-lucide="calendar-range"></i></span></div><div class="settings-row"><div><strong>' + activeCourses().length + ' cadeiras</strong><small>' + archived + ' semestre(s) no arquivo.</small></div><span class="badge badge-dark">' + activeCourses().reduce(function (sum, course) { return sum + (Number(course.ects) || 0); }, 0) + ' ECTS</span></div><div class="list-actions"><button class="button button-small" type="button" data-action="new-semester"><i data-lucide="calendar-plus"></i>Novo</button>' + (semester ? '<button class="button button-danger button-small" type="button" data-action="archive-semester"><i data-lucide="archive"></i>Arquivar semestre</button>' : "") + '</div></article><article class="card settings-card"><div class="card-title-row"><div><p class="card-label">Ficheiro JSON</p><h3>academic-data.json</h3><p class="card-subtitle">Editável fora da app; relido ao abrir ou regressar à janela.</p></div><span class="metric-icon"><i data-lucide="braces"></i></span></div><div class="settings-row"><div><strong>Última verificação</strong><small>' + esc(lastCheck) + ' · revisão local ' + (Number(state.meta.revision) || 0) + '</small></div><button class="switch ' + (state.settings.jsonSync ? "is-on" : "") + '" type="button" data-action="toggle-json-sync" aria-label="Ativar sincronização JSON"><span></span></button></div><div class="list-actions"><button class="button button-small" type="button" data-action="reload-json"><i data-lucide="refresh-cw"></i>Reler</button><button class="button button-small" type="button" data-action="export-json"><i data-lucide="download"></i>Exportar</button><button class="button button-small" type="button" data-action="import-json"><i data-lucide="upload"></i>Importar</button></div></article><article class="card settings-card card-yellow"><div class="card-title-row"><div><h3>Atividade simulada no campus</h3><p class="card-subtitle">Apresenta indicadores simulados de atividade no campus.</p></div><span class="metric-icon"><i data-lucide="users-round"></i></span></div><div class="settings-row"><div><strong>Contador simulado</strong><small>Mostra “pessoas a acompanhar” com etiqueta de simulação.</small></div><button class="switch ' + (state.settings.campusSimulation ? "is-on" : "") + '" type="button" data-action="toggle-campus"><span></span></button></div><span class="badge badge-dark">Local · privado · transparente</span></article><article class="card settings-card"><div class="card-title-row"><div><h3>Dados no dispositivo</h3><p class="card-subtitle">Os metadados ficam em IndexedDB; os PDFs enviados ficam separados do JSON.</p></div><span class="metric-icon"><i data-lucide="hard-drive"></i></span></div><div class="settings-row"><div><strong id="storageFileCount">A contar ficheiros…</strong><small>PDFs e documentos enviados na app.</small></div><span class="badge badge-mint">Local-first</span></div><button class="button button-small" type="button" data-action="export-json"><i data-lucide="shield-check"></i>Criar backup JSON</button></article><article class="card settings-card card-dark"><div class="card-title-row"><div><h3>Adicionar conteúdo</h3><p class="card-subtitle">Aulas, materiais, perguntas antigas, quizzes, notas e avaliações.</p></div><span class="metric-icon"><i data-lucide="wrench"></i></span></div><div class="quick-grid" style="grid-template-columns:repeat(3,1fr);margin-top:17px"><button type="button" data-action="create-lesson"><i data-lucide="presentation"></i>Aula</button><button type="button" data-action="add-material"><i data-lucide="file-up"></i>PDF</button><button type="button" data-action="add-question"><i data-lucide="message-circle-question"></i>Pergunta</button><button type="button" data-action="add-quiz"><i data-lucide="sparkles"></i>Quiz</button><button type="button" data-action="add-grade"><i data-lucide="chart-no-axes-combined"></i>Nota</button><button type="button" data-action="add-assessment"><i data-lucide="file-pen-line"></i>Avaliação</button></div></article><article class="card settings-card span-12"><div class="card-title-row"><div><p class="card-label">Segurança</p><h3>Recomeçar neste dispositivo</h3><p class="card-subtitle">Remove o estado local e os PDFs guardados. O ficheiro academic-data.json não é apagado.</p></div><button class="button button-danger" type="button" data-action="reset-app"><i data-lucide="trash-2"></i>Apagar dados locais</button></div></article></div>';
   }
 
   function updateStorageCount() {
@@ -4212,9 +4811,9 @@
     return [
       { route: "settings", selector: ".page-head", page: "Admin", title: "Admin e dados", copy: "É aqui que configuras o semestre, geres os dados locais e inicias ações administrativas." },
       { route: "settings", selector: ".settings-grid", page: "Admin", title: "Configuração do sistema", copy: "Cada cartão trata de uma área: perfil, semestre, JSON, atividade simulada, armazenamento e segurança." },
-      { route: "home", selector: ".hero-card", page: "Hoje", title: "Resumo do dia", copy: "A página inicial adapta-se ao momento: aula em curso, próxima aula, tarefas, avaliações e progresso." },
-      { route: "home", selector: ".live-card, .beonline-card", page: "Hoje", title: "Aula em direto e BEFIRST™", copy: "O horário ativa a aula atual. O BEFIRST™ acompanha as aulas que já reviste através do respetivo quiz." },
-      { route: "home", selector: ".metric-card", page: "Hoje", title: "Indicadores rápidos", copy: "Média ECTS, tarefas, avaliações e perguntas anteriores são atualizados a partir dos teus dados." },
+      { route: "home", selector: ".school-now-card", page: "Hoje", title: "O que está a acontecer agora", copy: "A Home escolhe um próximo passo: preparar, acompanhar a aula, fazer o Lesson Check, tratar do TPC ou fechar o dia." },
+      { route: "home", selector: ".after-school-card", page: "Hoje", title: "Lesson Checks antes do TPC", copy: "A verificação rápida fecha cada aula. O trabalho de casa fica separado para a sessão depois das aulas." },
+      { route: "home", selector: ".daily-report-card", page: "Hoje", title: "Report Card diário", copy: "A nota académica vem dos Lesson Checks e a rotina mostra o trabalho escolar concluído." },
       { route: "courses", selector: ".course-grid, .empty-state", page: "Cadeiras", title: "Cadeiras do semestre", copy: "Abre uma cadeira para consultar aulas, materiais, avaliações, perguntas, quizzes e notas." },
       { route: "planner", plannerMode: "calendar", selector: ".planner-mode-control", page: "Calendário", title: "Horário ou calendário", copy: "O Horário guarda os blocos recorrentes. O Calendário combina aulas, testes, eventos e tarefas com data." },
       { route: "planner", plannerMode: "calendar", selector: ".calendar-view-control", page: "Calendário", title: "Quatro vistas", copy: "Alterna entre Dia, 3 dias, Semana e Mês. As setas avançam exatamente o intervalo selecionado." },
@@ -4836,6 +5435,25 @@
       if (Sync) Sync.disable();
       render();
       toast("Sincronização Git pausada neste dispositivo.");
+    } else if (action === "debug-open-lab") {
+      openHomeDebugLab();
+    } else if (action === "debug-start-tutorial") {
+      startHomeDebugTutorial();
+    } else if (action === "debug-start-scenario") {
+      var chosenScenario = Number(button.dataset.index || 0);
+      if (!homeDebug || !homeDebug.active || !homeDebug.tutorial) startHomeDebugTutorial();
+      prepareHomeDebugScenario(chosenScenario);
+    } else if (action === "debug-apply-time") {
+      var debugInput = modalRoot.querySelector("#debugCustomTime");
+      startHomeDebugAt(debugInput && debugInput.value);
+    } else if (action === "debug-prev") {
+      prepareHomeDebugScenario((homeDebug && homeDebug.index || 0) - 1);
+    } else if (action === "debug-next") {
+      var debugSteps = homeDebugScenarios(homeDebug && homeDebug.baseDate);
+      if (!homeDebug || homeDebug.index >= debugSteps.length - 1) stopHomeDebug();
+      else prepareHomeDebugScenario(homeDebug.index + 1);
+    } else if (action === "debug-exit") {
+      stopHomeDebug();
     } else if (action === "toggle-campus") {
       state.settings.campusSimulation = !state.settings.campusSimulation;
       await save(true); render();
@@ -5006,14 +5624,14 @@
       render();
       clearInterval(beOnlineTimer);
       beOnlineTimer = setInterval(function () {
-        if (!state || onboarding) return;
+        if (!state || onboarding || (homeDebug && homeDebug.active)) return;
         if (ensureBeOnlineTasks()) {
           save(true).then(function () { render(); toast("A aula terminou: o quiz de revisão está pronto."); });
         }
       }, 60000);
       if (!state.profile.onboardingComplete || !state.currentSemesterId || !activeCourses().length) startOnboarding(state.semesters.length ? "new-semester" : "first");
       if ("serviceWorker" in navigator && location.protocol !== "file:") {
-        navigator.serviceWorker.register("sw.js?v=16-ai-slides", { updateViaCache: "none" }).then(function () {
+        navigator.serviceWorker.register("sw.js?v=20-school-lab", { updateViaCache: "none" }).then(function () {
           if (Sync && Sync.getStatus().configured) Sync.startAutoSync();
         }).catch(function () {
           if (Sync && Sync.getStatus().configured) Sync.startAutoSync();
@@ -5215,7 +5833,7 @@
     clearTimeout(externalCheckTimer);
     externalCheckTimer = setTimeout(function () {
       if (Sync && Sync.getStatus().configured) return;
-      if (!state || !state.settings.jsonSync || onboarding) return;
+      if (!state || !state.settings.jsonSync || onboarding || (homeDebug && homeDebug.active)) return;
       loadExternalJSON({ silent: true }).then(async function (changed) {
         var tasksChanged = ensureBeOnlineTasks();
         if (tasksChanged) await save(true);
@@ -5228,6 +5846,7 @@
   });
 
   window.addEventListener("twenty:remote-state", function (event) {
+    if (homeDebug && homeDebug.active) return;
     if (!event.detail || !event.detail.state || !state) return;
     state = normalizeState(event.detail.state);
     DB.saveState(state, { skipSync: true }).then(function () {
@@ -5246,7 +5865,7 @@
     updateSyncActivityFromStatus(Sync ? Sync.getStatus() : null);
   });
   document.addEventListener("visibilitychange", function () {
-    if (!document.hidden && Sync && state && Sync.getStatus().configured) Sync.checkForUpdates({ force: true }).catch(function () {});
+    if (!document.hidden && !(homeDebug && homeDebug.active) && Sync && state && Sync.getStatus().configured) Sync.checkForUpdates({ force: true }).catch(function () {});
   });
 
   init();
