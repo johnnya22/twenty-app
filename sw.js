@@ -1,16 +1,16 @@
 "use strict";
 
-var CACHE = "twenty-study-os-v20-school-lab";
+var CACHE = "twenty-study-os-v21-class-kit";
 var APP_SHELL = [
   "./",
   "./index.html",
-  "./styles.css?v=20-school-lab",
-  "./sync.js?v=20-school-lab",
-  "./db.js?v=20-school-lab",
-  "./ai.js?v=20-school-lab",
-  "./ai-worker.js?v=20-school-lab",
-  "./app.js?v=20-school-lab",
-  "./lucide.min.js?v=20-school-lab",
+  "./styles.css?v=21-class-kit",
+  "./sync.js?v=21-class-kit",
+  "./db.js?v=21-class-kit",
+  "./ai.js?v=21-class-kit",
+  "./ai-worker.js?v=21-class-kit",
+  "./app.js?v=21-class-kit",
+  "./lucide.min.js?v=21-class-kit",
   "./manifest.webmanifest",
   "./icon.svg",
   "./icon-192.png",
@@ -70,6 +70,17 @@ self.addEventListener("fetch", function (event) {
   var request = event.request;
   if (request.method !== "GET" || request.url.indexOf("blob:") === 0) return;
   var url = new URL(request.url);
+  if (url.hostname === "cdn.jsdelivr.net" && url.pathname.indexOf("/mathjax@") >= 0) {
+    event.respondWith(caches.match(request).then(function (cached) {
+      if (cached) return cached;
+      return fetch(request).then(function (response) {
+        var copy = response.clone();
+        caches.open(CACHE).then(function (cache) { cache.put(request, copy); });
+        return response;
+      });
+    }));
+    return;
+  }
   if (url.origin !== self.location.origin) return;
   if (url.pathname.indexOf("/data/") >= 0) {
     event.respondWith(networkFirst(request));

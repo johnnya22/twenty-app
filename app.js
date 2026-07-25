@@ -69,6 +69,181 @@
 
   function nl2br(value) { return esc(value).replace(/\n/g, "<br>"); }
 
+
+  function normalizeContentBlocks(value) {
+    if (value == null) return [];
+    if (typeof value === "string" || typeof value === "number") {
+      return [{ type: "text", text: String(value) }];
+    }
+    if (!Array.isArray(value)) {
+      if (value && typeof value === "object" && value.type) return [value];
+      return [];
+    }
+    return value.map(function (block) {
+      if (typeof block === "string" || typeof block === "number") return { type: "text", text: String(block) };
+      return block && typeof block === "object" ? block : null;
+    }).filter(Boolean);
+  }
+
+  function contentBlocksPlainText(value) {
+    return normalizeContentBlocks(value).map(function (block) {
+      if (block.type === "text") return block.text || block.content || "";
+      if (block.type === "latex") return block.latex || "";
+      if (block.type === "code") return block.code || "";
+      if (block.type === "slide-image") return block.description || block.alt || ("Imagem do slide " + (block.slideNumber || ""));
+      if (block.type === "image") return block.alt || block.caption || "Imagem";
+      if (block.type === "svg") return block.alt || "Diagrama SVG";
+      return block.text || block.content || "";
+    }).filter(Boolean).join("\n");
+  }
+
+  function sanitizeSvgMarkup(markup) {
+    var source = String(markup || "").trim();
+    if (!source || source.length > 60000 || !/^<svg[\s>]/i.test(source)) return "";
+    try {
+      var doc = new DOMParser().parseFromString(source, "image/svg+xml");
+      if (doc.querySelector("parsererror") || !doc.documentElement || doc.documentElement.nodeName.toLowerCase() !== "svg") return "";
+      var allowed = new Set(["svg", "g", "path", "rect", "circle", "ellipse", "line", "polyline", "polygon", "text", "tspan", "defs", "marker", "lineargradient", "radialgradient", "stop", "clippath"]);
+      Array.from(doc.querySelectorAll("*")).forEach(function (node) {
+        if (!allowed.has(node.nodeName.toLowerCase())) { node.remove(); return; }
+        Array.from(node.attributes).forEach(function (attribute) {
+          var name = attribute.name.toLowerCase();
+          var value = attribute.value || "";
+          var allowedAttr = ["viewbox", "width", "height", "x", "y", "x1", "x2", "y1", "y2", "cx", "cy", "r", "rx", "ry", "d", "points", "fill", "stroke", "stroke-width", "stroke-linecap", "stroke-linejoin", "opacity", "transform", "font-size", "font-weight", "text-anchor", "dominant-baseline", "offset", "stop-color", "stop-opacity", "marker-end", "marker-start", "id", "class", "xmlns"].indexOf(name) >= 0;
+          if (!allowedAttr || /^on/i.test(name) || /javascript:|data:text\/html/i.test(value)) node.removeAttribute(attribute.name);
+        });
+      });
+      var root = doc.documentElement;
+      if (!root.getAttribute("viewBox") && !root.getAttribute("viewbox")) root.setAttribute("viewBox", "0 0 640 360");
+      root.setAttribute("role", "img");
+      root.setAttribute("focusable", "false");
+      return new XMLSerializer().serializeToString(root);
+    } catch (_) {
+      return "";
+    }
+  }
+
+  function renderContentBlock(block, options) {
+    options = options || {};
+    var type = String(block && block.type || "text").toLowerCase();
+    if (type === "text") {
+      var textValue = block.text != null ? block.text : block.content;
+      return '<div class="content-block content-text">' + nl2br(textValue || "") + '</div>';
+    }
+    if (type === "latex") {
+      var latex = String(block.latex || block.value || "").trim();
+      if (!latex) return "";
+      return '<div class="content-block math-content ' + (block.display === false ? "is-inline" : "is-display") + '">' + (block.display === false ? '\\(' + esc(latex) + '\\)' : '\\[' + esc(latex) + '\\]') + '</div>';
+    }
+    if (type === "code") {
+      var language = String(block.language || "text").replace(/[^a-z0-9_+\-#.]/gi, "").slice(0, 24) || "text";
+      return '<div class="content-block ide-code"><div class="ide-code-head"><span></span><span></span><span></span><b>' + esc(language) + '</b></div><pre><code>' + esc(block.code || "") + '</code></pre></div>';
+    }
+    if (type === "svg") {
+      var svg = sanitizeSvgMarkup(block.svg || block.code || "");
+      if (!svg) return '<div class="content-block content-warning"><i data-lucide="triangle-alert"></i>O SVG desta resposta não passou a validação.</div>';
+      return '<figure class="content-block svg-content">' + svg + (block.alt || block.caption ? '<figcaption>' + esc(block.alt || block.caption) + '</figcaption>' : '') + '</figure>';
+    }
+    if (type === "slide-image") {
+      var slideNumber = Number(block.slideNumber || block.slide || 0) || "?";
+      var description = block.description || block.alt || "Usar a imagem relevante deste slide.";
+      var materialButton = block.materialId ? '<button class="button button-small" type="button" data-action="open-material" data-id="' + attr(block.materialId) + '"><i data-lucide="presentation"></i>Abrir slides</button>' : '';
+      return '<figure class="content-block slide-image-request"><div><span class="metric-icon"><i data-lucide="image"></i></span><p><strong>Imagem do slide ' + esc(slideNumber) + '</strong><small>' + esc(description) + '</small></p></div>' + materialButton + (block.caption ? '<figcaption>' + esc(block.caption) + '</figcaption>' : '') + '</figure>';
+    }
+    if (type === "image") {
+      var src = safeResourceUrl(block.url || block.src || "");
+      if (!src) return '<div class="content-block slide-image-request"><div><span class="metric-icon"><i data-lucide="image-off"></i></span><p><strong>Imagem pedida</strong><small>' + esc(block.description || block.alt || "A imagem ainda precisa de ser associada.") + '</small></p></div></div>';
+      return '<figure class="content-block image-content"><img src="' + attr(src) + '" alt="' + attr(block.alt || block.caption || "Imagem") + '">' + (block.caption ? '<figcaption>' + esc(block.caption) + '</figcaption>' : '') + '</figure>';
+    }
+    if (type === "heading") {
+      var level = Number(block.level) === 3 ? 3 : 2;
+      return '<h' + level + ' class="content-block content-heading">' + esc(block.text || block.content || "") + '</h' + level + '>';
+    }
+    if (type === "list") {
+      var ordered = !!block.ordered;
+      return '<' + (ordered ? 'ol' : 'ul') + ' class="content-block content-list">' + asArray(block.items).map(function (item) { return '<li>' + renderContentBlocks(item, options) + '</li>'; }).join('') + '</' + (ordered ? 'ol' : 'ul') + '>';
+    }
+    return '<div class="content-block content-text">' + nl2br(block.text || block.content || "") + '</div>';
+  }
+
+  function renderContentBlocks(value, options) {
+    return '<div class="rich-content">' + normalizeContentBlocks(value).map(function (block) { return renderContentBlock(block, options); }).join("") + '</div>';
+  }
+
+  function renderQuizOptionContent(option) {
+    if (Array.isArray(option) || (option && typeof option === "object")) return renderContentBlocks(option);
+    return '<div class="rich-content"><div class="content-block content-text">' + esc(option || "") + '</div></div>';
+  }
+
+  function blocksToNotebookHTML(value) {
+    return normalizeContentBlocks(value).map(function (block) {
+      var type = String(block.type || "text").toLowerCase();
+      if (type === "text") return '<p>' + nl2br(block.text != null ? block.text : block.content || "") + '</p>';
+      if (type === "heading") return '<h' + (Number(block.level) === 3 ? 3 : 2) + '>' + esc(block.text || block.content || "") + '</h' + (Number(block.level) === 3 ? 3 : 2) + '>';
+      return '<div class="notebook-embed" contenteditable="false">' + renderContentBlock(block) + '</div>';
+    }).join("");
+  }
+
+  function sanitizeNotebookHTML(value) {
+    try {
+      var doc = new DOMParser().parseFromString('<div id="noteRoot">' + String(value || "") + '</div>', "text/html");
+      var root = doc.getElementById("noteRoot");
+      var allowed = new Set(["P", "BR", "STRONG", "B", "EM", "I", "U", "S", "H2", "H3", "UL", "OL", "LI", "BLOCKQUOTE", "PRE", "CODE", "DIV", "SPAN", "A", "FIGURE", "FIGCAPTION", "SMALL", "IMG"]);
+      Array.from(root.querySelectorAll("script,style,iframe,object,embed,form,input,button")).forEach(function (node) { node.remove(); });
+      Array.from(root.querySelectorAll("*")).forEach(function (node) {
+        if (node.nodeName.toLowerCase() === "svg") {
+          var safeSvg = sanitizeSvgMarkup(new XMLSerializer().serializeToString(node));
+          var holder = doc.createElement("div");
+          holder.innerHTML = safeSvg || '<span>SVG removido</span>';
+          node.replaceWith(holder.firstElementChild || holder.firstChild);
+          return;
+        }
+        if (!allowed.has(node.nodeName)) {
+          var fragment = doc.createDocumentFragment();
+          while (node.firstChild) fragment.appendChild(node.firstChild);
+          node.replaceWith(fragment);
+          return;
+        }
+        Array.from(node.attributes).forEach(function (attribute) {
+          var name = attribute.name.toLowerCase();
+          var keep = name === "class" || name === "contenteditable" || name.indexOf("data-") === 0 || (node.nodeName === "A" && name === "href");
+          if (!keep || /^on/.test(name)) node.removeAttribute(attribute.name);
+        });
+        if (node.nodeName === "A") {
+          var href = safeResourceUrl(node.getAttribute("href") || "");
+          if (href) { node.setAttribute("href", href); node.setAttribute("target", "_blank"); node.setAttribute("rel", "noopener"); }
+          else node.removeAttribute("href");
+        }
+        if (node.nodeName === "IMG") {
+          var imageSrc = safeResourceUrl(node.getAttribute("src") || "");
+          if (imageSrc) node.setAttribute("src", imageSrc); else node.remove();
+          node.setAttribute("alt", node.getAttribute("alt") || "Imagem dos apontamentos");
+        }
+      });
+      return root.innerHTML;
+    } catch (_) {
+      return '<p>' + nl2br(String(value || "")) + '</p>';
+    }
+  }
+
+  function typesetMath(root) {
+    if (!root || !root.querySelector(".math-content")) return;
+    if (window.MathJax && typeof window.MathJax.typesetPromise === "function") {
+      setTimeout(function () { window.MathJax.typesetPromise([root]).catch(function () {}); }, 0);
+    }
+  }
+
+  function parseJSONReply(value) {
+    var text = String(value || "").trim();
+    if (!text) throw new Error("Cola primeiro a resposta JSON da IA.");
+    var fenced = text.match(/```(?:json)?\s*([\s\S]*?)```/i);
+    if (fenced) text = fenced[1].trim();
+    var first = text.indexOf("{");
+    var last = text.lastIndexOf("}");
+    if (first >= 0 && last > first) text = text.slice(first, last + 1);
+    try { return JSON.parse(text); } catch (_) { throw new Error("A resposta não é JSON válido. Pede à IA para devolver apenas o objeto JSON."); }
+  }
+
   function clone(value) { return JSON.parse(JSON.stringify(value)); }
 
   function asArray(value) { return Array.isArray(value) ? value : []; }
@@ -235,7 +410,7 @@
 
   function defaultState() {
     return {
-      schemaVersion: 5,
+      schemaVersion: 6,
       meta: {
         revision: 0,
         updatedAt: "",
@@ -293,7 +468,7 @@
   function normalizeState(input) {
     var base = defaultState();
     var source = input && typeof input === "object" ? input : {};
-    base.schemaVersion = Math.max(5, Number(source.schemaVersion) || 0);
+    base.schemaVersion = Math.max(6, Number(source.schemaVersion) || 0);
     base.meta = Object.assign(base.meta, source.meta || {});
     base.profile = Object.assign(base.profile, source.profile || {});
     base.settings = Object.assign(base.settings, source.settings || {});
@@ -329,7 +504,11 @@
       return Object.assign({ id: uid("semester"), name: "Semestre", academicYear: academicYearFor(), startDate: "", endDate: "", archived: false }, semester);
     });
     base.lessons = base.lessons.map(function (lesson) {
-      return Object.assign({ notes: "", aiNotes: [], mastered: false }, lesson, { aiNotes: asArray(lesson.aiNotes) });
+      var normalized = Object.assign({ notes: "", notesHtml: "", notesPaper: "lined", notesFont: "app", aiNotes: [], mastered: false }, lesson, { aiNotes: asArray(lesson.aiNotes) });
+      if (!normalized.notesHtml && normalized.notes) normalized.notesHtml = '<p>' + nl2br(normalized.notes) + '</p>';
+      if (["lined", "grid", "blank"].indexOf(normalized.notesPaper) < 0) normalized.notesPaper = "lined";
+      normalized.notesHtml = sanitizeNotebookHTML(normalized.notesHtml || "");
+      return normalized;
     });
     base.materials = base.materials.map(function (material) {
       return Object.assign({ remoteFile: null, slides: [], slideCount: 0, uploadStatus: "ready" }, material, {
@@ -339,6 +518,9 @@
     });
     base.tasks = base.tasks.map(function (task) {
       if (task.type === "lesson-quiz" && /^Quiz beOnLine · /.test(task.title || "")) task.title = String(task.title).replace(/^Quiz beOnLine · /, "Quiz da aula · ");
+      task.contentBlocks = normalizeContentBlocks(task.contentBlocks || task.instructionsBlocks || []);
+      task.solutionBlocks = normalizeContentBlocks(task.solutionBlocks || []);
+      task.checklist = asArray(task.checklist).map(String).filter(Boolean);
       return task;
     });
     base.quizzes = base.quizzes.map(function (quiz) {
@@ -358,7 +540,17 @@
       return Object.assign({}, event, { images: normalizeImageRefs(event.images, "event") });
     });
     base.quizzes = base.quizzes.map(function (quiz) {
-      quiz.questions = asArray(quiz.questions).map(function (question) { return Object.assign({}, question, { images: normalizeImageRefs(question.images) }); });
+      quiz.questions = asArray(quiz.questions).map(function (question) {
+        var normalized = Object.assign({}, question, { images: normalizeImageRefs(question.images) });
+        normalized.promptBlocks = normalizeContentBlocks(normalized.promptBlocks || normalized.prompt || "");
+        normalized.explanationBlocks = normalizeContentBlocks(normalized.explanationBlocks || normalized.explanation || normalized.answer || "");
+        normalized.optionBlocks = asArray(normalized.optionBlocks).length ? normalized.optionBlocks.map(normalizeContentBlocks) : asArray(normalized.options).map(function (option) { return normalizeContentBlocks(option); });
+        if (normalized.answerIndex == null && normalized.correctIndex != null) normalized.answerIndex = normalized.correctIndex;
+        normalized.options = normalized.optionBlocks.map(contentBlocksPlainText);
+        normalized.prompt = contentBlocksPlainText(normalized.promptBlocks);
+        normalized.explanation = contentBlocksPlainText(normalized.explanationBlocks);
+        return normalized;
+      });
       return quiz;
     });
     base.studyBlocks = base.studyBlocks.map(function (block) {
@@ -832,6 +1024,7 @@
     view.focus({ preventScroll: true });
     refreshIcons(document);
     hydrateLocalImages(view);
+    typesetMath(view);
     if (route.name === "settings") {
       enhanceSettingsActions();
       updateStorageCount();
@@ -1079,16 +1272,31 @@
     return end ? timeMinutes(end) <= nowMinutes(now) : true;
   }
 
+
+  function configuredQuizForLesson(lessonId) {
+    return state.quizzes.find(function (quiz) {
+      return quiz.lessonId === lessonId && asArray(quiz.questions).length;
+    }) || null;
+  }
+
+  function homeworkForLesson(lessonId) {
+    return state.tasks.find(function (task) {
+      return task.lessonId === lessonId && (task.type === "homework" || task.type === "tpc") && (task.lockedContent || asArray(task.contentBlocks).length || task.configuredFromPrompt);
+    }) || null;
+  }
+
   function lessonIsBeOnline(lesson) {
     if (!lesson) return false;
+    var quiz = configuredQuizForLesson(lesson.id);
+    if (!quiz) return false;
     if (lesson.quizCompletedAt || lesson.beOnlineCompletedAt) return true;
-    return state.quizzes.some(function (quiz) {
-      return quiz.lessonId === lesson.id && !!quiz.lastCompletedAt;
-    });
+    return !!quiz.lastCompletedAt;
   }
 
   function beOnlineStatus() {
-    var due = semesterItems("lessons").filter(function (lesson) { return lessonHasEnded(lesson); });
+    var due = semesterItems("lessons").filter(function (lesson) {
+      return lessonHasEnded(lesson) && !!configuredQuizForLesson(lesson.id);
+    });
     var completed = due.filter(lessonIsBeOnline);
     var pending = due.filter(function (lesson) { return !lessonIsBeOnline(lesson); });
     return {
@@ -1103,9 +1311,16 @@
   function ensureBeOnlineTasks() {
     if (!state.currentSemesterId) return false;
     var changed = false;
+    var before = state.tasks.length;
+    state.tasks = state.tasks.filter(function (task) {
+      if (task.type !== "lesson-quiz" || !task.autoGenerated) return true;
+      return !!configuredQuizForLesson(task.lessonId);
+    });
+    if (state.tasks.length !== before) changed = true;
     semesterItems("lessons").filter(function (lesson) {
-      return lessonHasEnded(lesson);
+      return lessonHasEnded(lesson) && !!configuredQuizForLesson(lesson.id);
     }).forEach(function (lesson) {
+      var quiz = configuredQuizForLesson(lesson.id);
       var task = state.tasks.find(function (item) { return item.type === "lesson-quiz" && item.lessonId === lesson.id; });
       if (lessonIsBeOnline(lesson)) {
         if (task && !task.done) { task.done = true; changed = true; }
@@ -1115,7 +1330,7 @@
         var course = courseById(lesson.courseId);
         state.tasks.push({
           id: uid("task"), semesterId: lesson.semesterId, courseId: lesson.courseId, lessonId: lesson.id,
-          title: "Quiz da aula · " + lesson.title, type: "lesson-quiz", dueDate: lesson.date,
+          quizId: quiz && quiz.id, title: "Quiz da aula · " + lesson.title, type: "lesson-quiz", dueDate: lesson.date,
           dueTime: lesson.end && lesson.end > "20:30" ? lesson.end : "20:30", priority: "high", done: false, autoGenerated: true,
           createdAt: new Date().toISOString(), courseName: course ? course.name : ""
         });
@@ -1157,11 +1372,11 @@
       { id: "morning", time: at(8, 10), label: "Manhã", title: "Antes das aulas", copy: "A Home apresenta a primeira aula, a sala e o que convém preparar." },
       { id: "soon", time: at(8, 52), label: "08:52", title: "Quase a começar", copy: "Faltam poucos minutos. A prioridade é abrir a aula e deixar os materiais prontos." },
       { id: "live", time: at(9, 35), label: "09:35", title: "Aula a decorrer", copy: "A Home centra-se na aula atual sem encher o ecrã de informação secundária." },
-      { id: "closing", time: at(10, 22), label: "10:22", title: "Aula a terminar", copy: "Mesmo com outra aula colada, a Home fecha primeiro a aula atual e avisa que o Lesson Check pode continuar nos primeiros 10 minutos seguintes." },
-      { id: "settling", time: at(10, 35), label: "10:35", title: "Primeiros 10 minutos", copy: "Enquanto os alunos chegam, a Home usa esta janela para o Lesson Check da aula anterior." },
+      { id: "closing", time: at(10, 22), label: "10:22", title: "Aula a terminar", copy: "Mesmo com outra aula colada, a Home fecha primeiro a aula atual e avisa que o Quiz da aula pode continuar nos primeiros 10 minutos seguintes." },
+      { id: "settling", time: at(10, 35), label: "10:35", title: "Primeiros 10 minutos", copy: "Enquanto os alunos chegam, a Home usa esta janela para o quiz da aula anterior." },
       { id: "between", time: at(12, 12), label: "12:12", title: "Entre aulas", copy: "A Home fecha o que ficou pendente e mostra claramente quando começa a próxima aula." },
-      { id: "after", time: at(15, 40), label: "15:40", title: "Depois das aulas", copy: "Primeiro aparecem os Lesson Checks. Só depois surgem os TPCs." },
-      { id: "homework", time: at(18, 10), label: "18:10", title: "TPC em casa", copy: "Com os Lesson Checks concluídos, a Home transforma-se numa fila simples de TPCs." },
+      { id: "after", time: at(15, 40), label: "15:40", title: "Depois das aulas", copy: "Primeiro aparecem os Quizzes da aula. Só depois surgem os TPCs." },
+      { id: "homework", time: at(18, 10), label: "18:10", title: "TPC em casa", copy: "Com os Quizzes da aula concluídos, a Home transforma-se numa fila simples de TPCs." },
       { id: "complete", time: at(21, 5), label: "21:05", title: "Dia fechado", copy: "Com tudo concluído, aparece o Report Card e a sensação de dia escolar terminado." }
     ];
   }
@@ -1189,7 +1404,7 @@
     ];
     function quiz(id, lessonId, courseId, title) {
       return { id: id, semesterId: semesterId, courseId: courseId, lessonId: lessonId, title: title, questions: [
-        { id: id + "_q1", mode: "multiple-choice", prompt: "Qual foi a ideia principal desta aula?", options: ["Aplicar o conceito central", "Ignorar os exemplos", "Memorizar sem perceber", "Saltar a revisão"], answerIndex: 0, explanation: "O Lesson Check confirma a compreensão do conceito principal." },
+        { id: id + "_q1", mode: "multiple-choice", prompt: "Qual foi a ideia principal desta aula?", options: ["Aplicar o conceito central", "Ignorar os exemplos", "Memorizar sem perceber", "Saltar a revisão"], answerIndex: 0, explanation: "O Quiz da aula confirma a compreensão do conceito principal." },
         { id: id + "_q2", mode: "multiple-choice", prompt: "Qual é o melhor próximo passo quando algo não ficou claro?", options: ["Anotar a dúvida", "Esperar pelo exame", "Apagar os apontamentos", "Fingir que ficou claro"], answerIndex: 0, explanation: "Detetar a dúvida cedo evita matéria acumulada." }
       ] };
     }
@@ -1202,9 +1417,9 @@
     demo.schedule = schedule;
     demo.lessons = lessons;
     demo.quizzes = [
-      quiz("demo_quiz_1", "demo_lesson_1", "demo_programacao", "Lesson Check · Arrays e ciclos"),
-      quiz("demo_quiz_2", "demo_lesson_2", "demo_design", "Lesson Check · Hierarquia visual"),
-      quiz("demo_quiz_3", "demo_lesson_3", "demo_ia", "Lesson Check · Pesquisa heurística")
+      quiz("demo_quiz_1", "demo_lesson_1", "demo_programacao", "Quiz da aula · Arrays e ciclos"),
+      quiz("demo_quiz_2", "demo_lesson_2", "demo_design", "Quiz da aula · Hierarquia visual"),
+      quiz("demo_quiz_3", "demo_lesson_3", "demo_ia", "Quiz da aula · Pesquisa heurística")
     ];
     demo.tasks = [
       { id: "demo_check_1", semesterId: semesterId, courseId: "demo_programacao", lessonId: "demo_lesson_1", title: "Quiz da aula · Arrays e ciclos", type: "lesson-quiz", dueDate: day, dueTime: "20:30", priority: "high", done: false, autoGenerated: true },
@@ -1312,7 +1527,7 @@
     var scenarios = homeDebugScenarios(now).map(function (scenario, index) {
       return '<button class="debug-scenario-button" type="button" data-action="debug-start-scenario" data-index="' + index + '"><strong>' + esc(scenario.title) + '</strong><small>' + esc(scenario.label) + ' · ' + esc(scenario.copy) + '</small></button>';
     }).join("");
-    var body = '<div class="debug-summary-grid"><span><small>Hora usada</small><strong>' + esc(snapshot.time) + '</strong></span><span><small>Estado</small><strong>' + esc(snapshot.label) + '</strong></span><span><small>Lesson Checks</small><strong>' + snapshot.pendingChecks + ' pendente(s)</strong></span><span><small>TPC</small><strong>' + snapshot.pendingHomework + ' pendente(s)</strong></span></div><div class="form-note">Este laboratório é apenas visual. Não faz commits, não mexe no Git e restaura os teus dados quando sais.</div><div class="section-heading"><div><h3>Tutorial com dados de exemplo</h3><p>Cria temporariamente horário, aulas, teste e TPCs para percorreres um dia completo.</p></div></div><button class="button button-dark" type="button" data-action="debug-start-tutorial"><i data-lucide="play"></i>Iniciar tutorial do dia escolar</button><div class="section-heading"><div><h3>Ir diretamente para um cenário</h3><p>Usa o mesmo template e abre uma situação específica.</p></div></div><div class="debug-scenario-list">' + scenarios + '</div><div class="section-heading"><div><h3>Simular uma hora nos teus dados atuais</h3><p>Útil para testar o teu horário real sem esperar pela hora verdadeira.</p></div></div><div class="debug-time-row"><input id="debugCustomTime" type="datetime-local" value="' + attr(localValue) + '"><button class="button" type="button" data-action="debug-apply-time"><i data-lucide="clock-3"></i>Aplicar</button></div>' + (homeDebug && homeDebug.active ? '<button class="button button-danger" style="margin-top:15px" type="button" data-action="debug-exit"><i data-lucide="x"></i>Sair da simulação</button>' : '');
+    var body = '<div class="debug-summary-grid"><span><small>Hora usada</small><strong>' + esc(snapshot.time) + '</strong></span><span><small>Estado</small><strong>' + esc(snapshot.label) + '</strong></span><span><small>Quizzes da aula</small><strong>' + snapshot.pendingChecks + ' pendente(s)</strong></span><span><small>TPC</small><strong>' + snapshot.pendingHomework + ' pendente(s)</strong></span></div><div class="form-note">Este laboratório é apenas visual. Não faz commits, não mexe no Git e restaura os teus dados quando sais.</div><div class="section-heading"><div><h3>Tutorial com dados de exemplo</h3><p>Cria temporariamente horário, aulas, teste e TPCs para percorreres um dia completo.</p></div></div><button class="button button-dark" type="button" data-action="debug-start-tutorial"><i data-lucide="play"></i>Iniciar tutorial do dia escolar</button><div class="section-heading"><div><h3>Ir diretamente para um cenário</h3><p>Usa o mesmo template e abre uma situação específica.</p></div></div><div class="debug-scenario-list">' + scenarios + '</div><div class="section-heading"><div><h3>Simular uma hora nos teus dados atuais</h3><p>Útil para testar o teu horário real sem esperar pela hora verdadeira.</p></div></div><div class="debug-time-row"><input id="debugCustomTime" type="datetime-local" value="' + attr(localValue) + '"><button class="button" type="button" data-action="debug-apply-time"><i data-lucide="clock-3"></i>Aplicar</button></div>' + (homeDebug && homeDebug.active ? '<button class="button button-danger" style="margin-top:15px" type="button" data-action="debug-exit"><i data-lucide="x"></i>Sair da simulação</button>' : '');
     openModal("Laboratório da Home", body, { className: "debug-lab-modal" });
   }
 
@@ -1419,11 +1634,9 @@
 
   function lessonCheckButton(lesson, label, className) {
     if (!lesson) return "";
-    var quiz = availableQuizForLesson(lesson.id);
-    if (quiz) {
-      return '<button class="button ' + (className || "button-dark") + '" type="button" data-action="start-quiz" data-id="' + attr(quiz.id) + '"><i data-lucide="sparkles"></i>' + esc(label || "Fazer Lesson Check") + "</button>";
-    }
-    return '<button class="button ' + (className || "button-dark") + '" type="button" data-action="lesson-ai" data-output="quiz" data-lesson="' + attr(lesson.id) + '"><i data-lucide="sparkles"></i>' + esc(label || "Criar Lesson Check") + "</button>";
+    var quiz = configuredQuizForLesson(lesson.id);
+    if (!quiz) return "";
+    return '<button class="button ' + (className || "button-dark") + '" type="button" data-action="start-quiz" data-id="' + attr(quiz.id) + '"><i data-lucide="check-check"></i>' + esc(label || "Fazer quiz") + "</button>";
   }
 
   function blockOpenButton(block, label, className) {
@@ -1482,8 +1695,9 @@
     });
     var academic = subjects.length ? subjects.reduce(function (sum, item) { return sum + item.grade; }, 0) / subjects.length : null;
     var tasks = homeTaskBuckets(day);
-    var checksDue = endedLessons.length;
-    var checksDone = endedLessons.filter(function (block) { return lessonIsBeOnline(block.lesson); }).length;
+    var quizLessons = endedLessons.filter(function (block) { return !!configuredQuizForLesson(block.lesson.id); });
+    var checksDue = quizLessons.length;
+    var checksDone = quizLessons.filter(function (block) { return lessonIsBeOnline(block.lesson); }).length;
     var routineTotal = checksDue + tasks.homeworkDue.length;
     var routineDone = checksDone + tasks.homeworkDone.length;
     return {
@@ -1514,7 +1728,7 @@
     });
     var previous = ended.length ? ended[ended.length - 1] : null;
     var pendingChecks = ended.filter(function (block) {
-      return block.lesson && !lessonIsBeOnline(block.lesson);
+      return block.lesson && !!configuredQuizForLesson(block.lesson.id) && !lessonIsBeOnline(block.lesson);
     });
     var tasks = homeTaskBuckets(todayISO(now));
     var report = homeDailyReport(blocks, now);
@@ -1554,17 +1768,17 @@
           context.phase = "settling";
           context.phaseLabel = "Primeiros minutos";
           context.title = "Enquanto a sala enche, fecha " + (previousPending.course ? previousPending.course.name : "a aula anterior") + ".";
-          context.copy = (current.course ? current.course.name : "A aula") + " já começou, mas estes primeiros 10 minutos são uma janela tranquila para fazeres o Lesson Check anterior sem ficares para trás.";
+          context.copy = (current.course ? current.course.name : "A aula") + " já começou, mas estes primeiros 10 minutos são uma janela tranquila para fazeres o Quiz da aula anterior sem ficares para trás.";
           context.icon = "book-check";
           context.stat = homeMinutesCopy(10 - elapsed);
           context.statLabel = "da janela inicial";
-          context.primary = lessonCheckButton(previousPending.lesson, "Fazer Lesson Check", "button-yellow");
+          context.primary = lessonCheckButton(previousPending.lesson, "Fazer Quiz da aula", "button-yellow");
           context.secondary = blockOpenButton(current, "Abrir aula atual", "");
         } else {
           context.phase = "starting";
           context.phaseLabel = "A começar";
-          context.title = (current.course ? current.course.name : "A aula") + " está a começar sem pressa.";
-          context.copy = "Os primeiros minutos são para chegar, abrir os materiais e perceber o plano da aula. A Twenty não te inventa urgência onde ela não existe.";
+          context.title = (current.course ? current.course.name : "A aula") + " irá começar em breve.";
+          context.copy = "Abre os materiais e prepara o que precisas para a aula.";
           context.icon = "door-open";
           context.stat = homeMinutesCopy(10 - elapsed);
           context.statLabel = "de chegada";
@@ -1573,16 +1787,16 @@
         return context;
       }
 
-      if (remaining <= 15 && current.lesson && !lessonIsBeOnline(current.lesson)) {
+      if (remaining <= 15 && current.lesson && configuredQuizForLesson(current.lesson.id) && !lessonIsBeOnline(current.lesson)) {
         var isBackToBack = following && following.startMin - current.endMin <= 10;
         context.phase = "closing";
         context.phaseLabel = "A aula está a terminar";
-        context.title = "Fecha " + (current.course ? current.course.name : "a aula") + " com um Lesson Check.";
+        context.title = "Fecha " + (current.course ? current.course.name : "a aula") + " com um Quiz da aula.";
         context.copy = "A aula termina às " + current.end + ". " + (isBackToBack ? "A próxima começa às " + following.start + ", por isso podes começar agora e continuar durante os primeiros 10 minutos seguintes." : "Faz uma verificação curta agora para descobrires logo o que ficou menos claro.");
         context.icon = "sparkles";
         context.stat = homeMinutesCopy(remaining);
         context.statLabel = "até terminar";
-        context.primary = lessonCheckButton(current.lesson, "Fazer Lesson Check", "button-yellow");
+        context.primary = lessonCheckButton(current.lesson, "Fazer Quiz da aula", "button-yellow");
         context.secondary = isBackToBack ? blockOpenButton(following, "Ver próxima aula", "") : blockOpenButton(current, "Abrir aula", "");
       } else {
         context.phase = "live";
@@ -1593,7 +1807,7 @@
         context.stat = homeMinutesCopy(remaining);
         context.statLabel = "restantes";
         context.primary = blockOpenButton(current, "Entrar na aula", "button-yellow");
-        if (current.lesson) context.secondary = lessonCheckButton(current.lesson, "Lesson Check", "");
+        if (current.lesson && configuredQuizForLesson(current.lesson.id) && !lessonIsBeOnline(current.lesson)) context.secondary = lessonCheckButton(current.lesson, "Quiz da aula", "");
       }
       return context;
     }
@@ -1605,7 +1819,7 @@
         context.phase = "soon";
         context.phaseLabel = "Quase a começar";
         context.title = (next.course ? next.course.name : "A próxima aula") + " começa daqui a " + homeMinutesCopy(untilNext) + ".";
-        context.copy = (next.lesson ? next.lesson.title + " · " : "") + next.start + "–" + next.end + (next.room ? " · " + next.room : "") + ". " + (lastPending ? "O Lesson Check anterior continua disponível nos primeiros 10 minutos da aula." : "Abre a aula e deixa tudo preparado.");
+        context.copy = (next.lesson ? next.lesson.title + " · " : "") + next.start + "–" + next.end + (next.room ? " · " + next.room : "") + ". " + (lastPending ? "O Quiz da aula anterior continua disponível nos primeiros 10 minutos da aula." : "Abre a aula e deixa tudo preparado.");
         context.icon = "alarm-clock";
         context.stat = next.start;
         context.statLabel = "começa";
@@ -1615,11 +1829,11 @@
         context.phase = "between";
         context.phaseLabel = "Entre aulas";
         context.title = "A aula terminou. Fecha o ciclo antes da próxima.";
-        context.copy = "Faz o Lesson Check de " + (lastPending.course ? lastPending.course.name : lastPending.lesson.title) + ". Depois, a próxima aula começa às " + next.start + ".";
+        context.copy = "Faz o Quiz da aula de " + (lastPending.course ? lastPending.course.name : lastPending.lesson.title) + ". Depois, a próxima aula começa às " + next.start + ".";
         context.icon = "book-check";
         context.stat = homeMinutesCopy(untilNext);
         context.statLabel = "até à próxima";
-        context.primary = lessonCheckButton(lastPending.lesson, "Fazer Lesson Check", "button-yellow");
+        context.primary = lessonCheckButton(lastPending.lesson, "Fazer Quiz da aula", "button-yellow");
         context.secondary = blockOpenButton(next, "Ver próxima aula", "");
       } else if (untilNext <= 45) {
         context.phase = "soon";
@@ -1659,7 +1873,7 @@
       var firstPending = pendingChecks[0];
       context.phase = "after";
       context.phaseLabel = "Depois das aulas";
-      context.title = "As aulas acabaram. Faltam " + pendingChecks.length + " Lesson Check" + (pendingChecks.length === 1 ? "" : "s") + ".";
+      context.title = "As aulas acabaram. Faltam " + pendingChecks.length + " Quiz da aula" + (pendingChecks.length === 1 ? "" : "s") + ".";
       context.copy = "Faz primeiro a verificação rápida do que aprendeste. O TPC vem depois — são duas coisas diferentes.";
       context.icon = "book-check";
       context.stat = String(pendingChecks.length);
@@ -1715,20 +1929,19 @@
   function renderLessonCheckRow(block) {
     if (!block || !block.lesson) return "";
     var course = block.course;
-    var quiz = availableQuizForLesson(block.lesson.id);
-    var action = quiz
-      ? '<button class="button button-dark button-small" type="button" data-action="start-quiz" data-id="' + attr(quiz.id) + '"><i data-lucide="play"></i>Fazer</button>'
-      : '<button class="button button-dark button-small" type="button" data-action="lesson-ai" data-output="quiz" data-lesson="' + attr(block.lesson.id) + '"><i data-lucide="sparkles"></i>Criar</button>';
-    return '<div class="list-row school-action-row"><span class="list-icon yellow"><i data-lucide="book-check"></i></span><span class="list-content"><strong>Lesson Check · ' + esc(block.lesson.title) + '</strong><small>' + esc(course ? course.name : "Aula") + ' · 3–7 minutos</small></span><span class="badge badge-violet">Agora</span>' + action + "</div>";
+    var quiz = configuredQuizForLesson(block.lesson.id);
+    if (!quiz || lessonIsBeOnline(block.lesson)) return "";
+    var action = '<button class="button button-dark button-small" type="button" data-action="start-quiz" data-id="' + attr(quiz.id) + '"><i data-lucide="play"></i>Fazer</button>';
+    return '<div class="list-row school-action-row"><span class="list-icon yellow"><i data-lucide="check-check"></i></span><span class="list-content"><strong>Quiz da aula · ' + esc(block.lesson.title) + '</strong><small>' + esc(course ? course.name : "Aula") + ' · 3–7 minutos</small></span><span class="badge badge-violet">Agora</span>' + action + "</div>";
   }
 
   function renderDailyReportCard(report, blocks) {
     var subjectRows = report.subjects.length ? report.subjects.slice(0, 4).map(function (item) {
       return '<div class="report-subject"><span><i data-lucide="book-open"></i>' + esc(item.course.name) + '</span><strong>' + round(item.grade, 1) + '</strong></div>';
-    }).join("") : '<p class="report-empty">Faz os Lesson Checks para construíres a nota académica de hoje.</p>';
+    }).join("") : '<p class="report-empty">Faz os Quizzes da aula para construíres a nota académica de hoje.</p>';
     var grade = report.academic == null ? "—" : round(report.academic, 1);
     var status = report.complete ? "Fechado" : "Em construção";
-    return '<article class="card span-5 daily-report-card ' + (report.complete ? "is-complete" : "") + '"><div class="card-title-row"><div><p class="card-label">Report Card · Hoje</p><h3>O teu dia escolar</h3></div><span class="badge ' + (report.complete ? "badge-mint" : "badge-yellow") + '">' + status + '</span></div><div class="report-grade"><strong>' + grade + '</strong><span>/20<br>nota académica</span></div><div class="report-subjects">' + subjectRows + '</div><div class="report-routine"><span><strong>' + report.routine + '%</strong> rotina escolar</span><div class="mini-progress"><span style="width:' + report.routine + '%"></span></div><small>' + report.checksDone + '/' + report.checksDue + ' Lesson Checks · ' + report.homeworkDone + '/' + report.homeworkDue + ' TPCs</small></div><button class="button button-small" type="button" data-route="grades"><i data-lucide="arrow-right"></i>Ver notas</button></article>';
+    return '<article class="card span-5 daily-report-card ' + (report.complete ? "is-complete" : "") + '"><div class="card-title-row"><div><p class="card-label">Report Card · Hoje</p><h3>O teu dia escolar</h3></div><span class="badge ' + (report.complete ? "badge-mint" : "badge-yellow") + '">' + status + '</span></div><div class="report-grade"><strong>' + grade + '</strong><span>/20<br>nota académica</span></div><div class="report-subjects">' + subjectRows + '</div><div class="report-routine"><span><strong>' + report.routine + '%</strong> rotina escolar</span><div class="mini-progress"><span style="width:' + report.routine + '%"></span></div><small>' + report.checksDone + '/' + report.checksDue + ' Quizzes da aula · ' + report.homeworkDone + '/' + report.homeworkDue + ' TPCs</small></div><button class="button button-small" type="button" data-route="grades"><i data-lucide="arrow-right"></i>Ver notas</button></article>';
   }
 
   function renderHome() {
@@ -1744,7 +1957,8 @@
     var currentMinute = nowMinutes(context.now);
     var completedClasses = blocks.filter(function (block) { return block.endMin < currentMinute; }).length;
     var endedLessons = blocks.filter(function (block) { return block.lesson && block.endMin < currentMinute; });
-    var completedChecks = endedLessons.filter(function (block) { return lessonIsBeOnline(block.lesson); }).length;
+    var configuredEndedLessons = endedLessons.filter(function (block) { return !!configuredQuizForLesson(block.lesson.id); });
+    var completedChecks = configuredEndedLessons.filter(function (block) { return lessonIsBeOnline(block.lesson); }).length;
     var tasks = context.tasks;
     var afterSchoolItems = context.pendingChecks.map(renderLessonCheckRow).join("");
     var homeworkList = tasks.overdue.concat(tasks.homeworkPending).filter(function (task, index, array) {
@@ -1752,7 +1966,7 @@
     }).slice(0, 4);
     afterSchoolItems += homeworkList.map(renderTaskRow).join("");
     if (!afterSchoolItems) {
-      afterSchoolItems = emptyState("check-check", "Nada pendente depois das aulas", "Quando houver Lesson Checks ou TPCs, aparecem aqui pela ordem certa.", "add-task", "Adicionar TPC");
+      afterSchoolItems = emptyState("check-check", "Nada pendente depois das aulas", "Quando houver Quizzes da aula ou TPCs, aparecem aqui pela ordem certa.", "add-task", "Adicionar TPC");
     }
 
     var nextAssessment = semesterItems("assessments").filter(function (item) {
@@ -1766,14 +1980,14 @@
       : emptyState("calendar-check", "Sem avaliações próximas", "Quando adicionares uma avaliação, a Home liga-a ao teu plano diário.", "add-assessment", "Adicionar avaliação");
 
     var classesStepStatus = !blocks.length ? "" : completedClasses >= blocks.length ? "is-done" : context.current ? "is-active" : completedClasses ? "is-active" : "";
-    var checksStepStatus = !endedLessons.length ? "" : completedChecks >= endedLessons.length ? "is-done" : context.pendingChecks.length ? "is-active" : "";
+    var checksStepStatus = !configuredEndedLessons.length ? "" : completedChecks >= configuredEndedLessons.length ? "is-done" : context.pendingChecks.length ? "is-active" : "";
     var tpcDone = tasks.homeworkDone.length;
     var tpcTotal = tasks.homeworkDue.length;
     var tpcStepStatus = !tpcTotal ? (context.phase === "complete" ? "is-done" : "") : tpcDone >= tpcTotal ? "is-done" : (context.phase === "homework" ? "is-active" : "");
     var reportStatus = report.complete && blocks.length ? "is-done" : context.phase === "complete" ? "is-active" : "";
 
     var timeline = renderHomeStep("graduation-cap", "Aulas", blocks.length ? completedClasses + "/" + blocks.length + " concluídas" : "Sem aulas hoje", classesStepStatus)
-      + renderHomeStep("book-check", "Lesson Checks", endedLessons.length ? completedChecks + "/" + endedLessons.length + " feitos" : "Aparecem no fim da aula", checksStepStatus)
+      + renderHomeStep("check-check", "Quizzes da aula", configuredEndedLessons.length ? completedChecks + "/" + configuredEndedLessons.length + " feitos" : "Configura-os dentro de cada aula", checksStepStatus)
       + renderHomeStep("notebook-pen", "TPC", tpcTotal ? tpcDone + "/" + tpcTotal + " concluídos" : "Sem TPC para hoje", tpcStepStatus)
       + renderHomeStep("award", "Report Card", report.complete && blocks.length ? "Dia fechado" : "Atualiza ao longo do dia", reportStatus);
 
@@ -1782,7 +1996,7 @@
     return renderHomeDebugBar() + hero
       + '<div class="bento-grid home-school-grid" style="margin-top:15px">'
       + '<article class="card span-5 school-path-card"><div class="card-title-row"><div><p class="card-label">O teu dia</p><h3>Da aula ao fim do dia</h3><p class="card-subtitle">A Home muda o próximo passo à medida que vais avançando.</p></div><span class="metric-icon"><i data-lucide="route"></i></span></div><div class="school-steps">' + timeline + "</div></article>"
-      + '<article class="card span-7 after-school-card"><div class="card-title-row"><div><p class="card-label">A seguir</p><h3>Lesson Checks e TPC</h3><p class="card-subtitle">Primeiro verificas o que aprendeste. Depois aplicas em casa.</p></div><button class="button button-small" type="button" data-action="add-task"><i data-lucide="plus"></i>TPC</button></div><div class="list-stack after-school-list">' + afterSchoolItems + "</div></article>"
+      + '<article class="card span-7 after-school-card"><div class="card-title-row"><div><p class="card-label">A seguir</p><h3>Quizzes da aula e TPC</h3><p class="card-subtitle">Primeiro verificas o que aprendeste. Depois aplicas em casa.</p></div><button class="button button-small" type="button" data-action="add-task"><i data-lucide="plus"></i>TPC</button></div><div class="list-stack after-school-list">' + afterSchoolItems + "</div></article>"
       + renderDailyReportCard(report, blocks)
       + '<article class="card span-7 next-date-card"><div class="card-title-row"><div><p class="card-label">No horizonte</p><h3>O que merece atenção</h3></div><button class="button button-small" type="button" data-route="planner"><i data-lucide="calendar-days"></i>Calendário</button></div><div style="margin-top:15px">' + nextAssessmentHtml + '</div><div class="home-mini-stats"><span><strong>' + tasks.overdue.length + '</strong> em atraso</span><span><strong>' + semesterItems("questions").length + '</strong> perguntas antigas</span><span><strong>' + overallProgress() + '%</strong> matéria dominada</span></div></article>'
       + "</div>";
@@ -1842,7 +2056,7 @@
 
   function courseTabs(course, active) {
     var tabs = [
-      ["overview", "Resumo"], ["lessons", "Aulas"], ["materials", "Materiais"], ["assessments", "Avaliações"],
+      ["overview", "Resumo"], ["lessons", "Aulas"], ["notebook", "Caderno"], ["materials", "Materiais"], ["assessments", "Avaliações"],
       ["questions", "Perguntas anteriores"], ["quizzes", "Quizzes"], ["grades", "Notas"]
     ];
     return '<div class="tabbar" role="tablist">' + tabs.map(function (tab) {
@@ -1873,6 +2087,7 @@
 
   function renderCourseTab(course, tab, archived) {
     if (tab === "lessons") return renderCourseLessons(course, archived);
+    if (tab === "notebook") return renderCourseNotebook(course, archived);
     if (tab === "materials") return renderCourseMaterials(course, archived);
     if (tab === "assessments") return renderCourseAssessments(course, archived);
     if (tab === "questions") return renderCourseQuestions(course, archived);
@@ -2148,7 +2363,7 @@
     var icon = kind === "slides" ? "presentation" : kind === "notes" ? "notebook-pen" : "file-text";
     var synced = !!(material.remoteFile && material.remoteFile.path);
     var aiReady = isPptxMaterial(material) && asArray(material.slides).length && lesson;
-    return '<article class="material-card"><div class="material-preview"><i data-lucide="' + icon + '"></i>' + materialYearBadge(material, course) + '</div><h4>' + esc(material.title) + '</h4><p>' + esc(lesson ? lesson.title : "Biblioteca da cadeira") + (material.fileName ? " · " + esc(material.fileName) : "") + '</p><div class="material-actions"><span class="badge ' + (synced ? 'badge-mint' : 'badge-yellow') + '">' + (synced ? 'Sincronizado' : 'Local') + '</span><span class="list-actions">' + (aiReady && !archived ? '<button class="row-button row-button-ai" type="button" data-action="lesson-ai" data-output="quiz" data-lesson="' + attr(lesson.id) + '" data-material="' + attr(material.id) + '" aria-label="Criar quiz com IA"><i data-lucide="sparkles"></i></button>' : '') + (!synced && material.blobId && !archived ? '<button class="row-button" type="button" data-action="sync-material" data-id="' + attr(material.id) + '" aria-label="Sincronizar ficheiro com o Git"><i data-lucide="cloud-upload"></i></button>' : '') + '<button class="row-button" type="button" data-action="open-material" data-id="' + attr(material.id) + '" aria-label="Abrir material"><i data-lucide="eye"></i></button>' + (!archived ? '<button class="row-button" type="button" data-action="delete-entity" data-kind="materials" data-id="' + attr(material.id) + '" aria-label="Remover material"><i data-lucide="trash-2"></i></button>' : "") + '</span></div>' + (aiReady ? '<small class="material-ai-ready"><i data-lucide="brain"></i>' + asArray(material.slides).length + ' slides prontos para IA</small>' : '') + '</article>';
+    return '<article class="material-card"><div class="material-preview"><i data-lucide="' + icon + '"></i>' + materialYearBadge(material, course) + '</div><h4>' + esc(material.title) + '</h4><p>' + esc(lesson ? lesson.title : "Biblioteca da cadeira") + (material.fileName ? " · " + esc(material.fileName) : "") + '</p><div class="material-actions"><span class="badge ' + (synced ? 'badge-mint' : 'badge-yellow') + '">' + (synced ? 'Sincronizado' : 'Local') + '</span><span class="list-actions">' + (aiReady && !archived ? '<button class="row-button row-button-ai" type="button" data-action="configure-lesson-content" data-kind="quiz" data-lesson="' + attr(lesson.id) + '" aria-label="Configurar quiz da aula"><i data-lucide="sparkles"></i></button>' : '') + (!synced && material.blobId && !archived ? '<button class="row-button" type="button" data-action="sync-material" data-id="' + attr(material.id) + '" aria-label="Sincronizar ficheiro com o Git"><i data-lucide="cloud-upload"></i></button>' : '') + '<button class="row-button" type="button" data-action="open-material" data-id="' + attr(material.id) + '" aria-label="Abrir material"><i data-lucide="eye"></i></button>' + (!archived ? '<button class="row-button" type="button" data-action="delete-entity" data-kind="materials" data-id="' + attr(material.id) + '" aria-label="Remover material"><i data-lucide="trash-2"></i></button>' : "") + '</span></div>' + (aiReady ? '<small class="material-ai-ready"><i data-lucide="brain"></i>' + asArray(material.slides).length + ' slides prontos para IA</small>' : '') + '</article>';
   }
 
   function renderCourseMaterials(course, archived) {
@@ -2216,10 +2431,16 @@
     var html = quizzes.map(function (quiz) {
       var lesson = lessonById(quiz.lessonId);
       var hasPast = lesson && pastQuestionsForLesson(lesson.id).length;
-      var origin = quiz.generatedFromPastQuestions ? "Perguntas anteriores" : "Manual";
-      return '<article class="card span-4"><div class="card-title-row"><div><div class="question-meta"><span class="badge badge-violet">' + asArray(quiz.questions).length + ' pergunta(s)</span><span class="badge">' + origin + '</span></div><h3 style="margin-top:11px">' + esc(quiz.title) + '</h3><p class="card-subtitle">' + esc(lesson ? lesson.title : "Quiz geral da cadeira") + '</p></div><span class="metric-icon"><i data-lucide="sparkles"></i></span></div><div class="live-actions" style="margin-top:21px"><button class="button button-dark" type="button" data-action="start-quiz" data-id="' + attr(quiz.id) + '"><i data-lucide="play"></i>Começar</button>' + (!archived ? '<button class="button" type="button" data-action="add-quiz-question" data-id="' + attr(quiz.id) + '"><i data-lucide="plus"></i>Manual</button>' + (hasPast ? '<button class="button" type="button" data-action="add-past-to-quiz" data-id="' + attr(quiz.id) + '"><i data-lucide="history"></i>Anteriores</button>' : '') + '<button class="button button-danger" type="button" data-action="delete-entity" data-kind="quizzes" data-id="' + attr(quiz.id) + '"><i data-lucide="trash-2"></i></button>' : "") + "</div></article>";
+      var origin = quiz.configuredFromPrompt ? "Prompt IA" : quiz.generatedFromPastQuestions ? "Perguntas anteriores" : "Manual";
+      var actions = '<button class="button button-dark" type="button" data-action="start-quiz" data-id="' + attr(quiz.id) + '"><i data-lucide="play"></i>Começar</button>';
+      if (lesson) {
+        actions = '<button class="button" type="button" data-action="view-lesson-quiz" data-lesson="' + attr(lesson.id) + '"><i data-lucide="eye"></i>Ver</button>' + actions;
+      } else if (!archived) {
+        actions += '<button class="button" type="button" data-action="add-quiz-question" data-id="' + attr(quiz.id) + '"><i data-lucide="plus"></i>Manual</button>' + (hasPast ? '<button class="button" type="button" data-action="add-past-to-quiz" data-id="' + attr(quiz.id) + '"><i data-lucide="history"></i>Anteriores</button>' : '') + '<button class="button button-danger" type="button" data-action="delete-entity" data-kind="quizzes" data-id="' + attr(quiz.id) + '"><i data-lucide="trash-2"></i></button>';
+      }
+      return '<article class="card span-4"><div class="card-title-row"><div><div class="question-meta"><span class="badge badge-violet">' + asArray(quiz.questions).length + ' pergunta(s)</span><span class="badge">' + origin + '</span>' + (lesson ? '<span class="badge badge-mint"><i data-lucide="lock-keyhole"></i> Aula</span>' : '') + '</div><h3 style="margin-top:11px">' + esc(quiz.title) + '</h3><p class="card-subtitle">' + esc(lesson ? lesson.title : "Quiz geral da cadeira") + '</p></div><span class="metric-icon"><i data-lucide="sparkles"></i></span></div><div class="live-actions" style="margin-top:21px">' + actions + '</div></article>';
     }).join("");
-    return '<div class="page-head"><div><h2>Quizzes da cadeira</h2><p>Cria perguntas manualmente ou reutiliza as perguntas reais de testes anteriores ligadas a cada aula.</p></div>' + (!archived ? '<div class="page-actions"><button class="button button-dark" type="button" data-action="add-quiz" data-course="' + attr(course.id) + '"><i data-lucide="plus"></i>Novo quiz</button></div>' : "") + '</div><div class="bento-grid">' + (quizzes.length ? html : '<div class="span-12">' + emptyState("sparkles", "Ainda não há quizzes", "Cria um quiz normal ou gera-o a partir do banco de perguntas anteriores de uma aula.", "add-quiz", "Criar quiz") + "</div>") + "</div>";
+    return '<div class="page-head"><div><h2>Quizzes da cadeira</h2><p>Os quizzes associados a aulas ficam bloqueados depois de configurados. Os quizzes gerais continuam editáveis.</p></div>' + (!archived ? '<div class="page-actions"><button class="button button-dark" type="button" data-action="add-quiz" data-course="' + attr(course.id) + '"><i data-lucide="plus"></i>Novo quiz geral</button></div>' : "") + '</div><div class="bento-grid">' + (quizzes.length ? html : '<div class="span-12">' + emptyState("sparkles", "Ainda não há quizzes", "Configura um quiz em cada aula ou cria um quiz geral para a cadeira.", "add-quiz", "Criar quiz geral") + "</div>") + "</div>";
   }
 
   function renderCourseGrades(course, archived) {
@@ -2251,6 +2472,263 @@
     return '<div class="page-head"><div><h2>Notas e cálculo</h2><p>Cada nota fica ligada à avaliação de origem e respeita mínimos, substituições e regras de defesa configuradas.</p></div>' + (!archived ? '<div class="page-actions"><button class="button button-dark" type="button" data-action="add-grade" data-course="' + attr(course.id) + '"><i data-lucide="plus"></i>Adicionar nota</button></div>' : "") + '</div>' + alerts + '<div class="bento-grid"><article class="card card-yellow span-4 metric-card"><div class="metric-top"><p class="card-label">Média atual</p><span class="metric-icon"><i data-lucide="calculator"></i></span></div><div><p class="metric-value">' + (avg.value == null ? "—" : round(avg.value, 1)) + '</p><p class="metric-caption">' + avg.knownWeight + '% da avaliação com nota</p></div></article><article class="card span-8"><p class="card-label">Componentes</p><div class="evaluation-grid">' + (componentsHtml || '<div class="form-note">Configura primeiro o método de avaliação.</div>') + '</div></article><article class="card span-12"><div class="card-title-row"><div><h3>Todas as notas</h3></div></div>' + (grades.length ? '<div style="overflow:auto"><table class="grade-table"><thead><tr><th>Avaliação ou aula</th><th>Data</th><th>Notas</th><th>Valor</th><th></th></tr></thead><tbody>' + rows + "</tbody></table></div>" : emptyState("chart-no-axes-combined", "Sem notas registadas", "Adiciona notas para calcular a média da cadeira e a média ECTS.", "add-grade", "Adicionar nota")) + "</article></div>";
   }
 
+
+  function lessonSlides(lessonId) {
+    return state.materials.filter(function (material) {
+      return material.lessonId === lessonId && (material.kind === "slides" || /\.pptx$/i.test(material.fileName || material.title || ""));
+    });
+  }
+
+  function lessonBuilderLabel(kind) {
+    if (kind === "quiz") return "quiz da aula";
+    if (kind === "homework") return "TPC";
+    return "apontamentos";
+  }
+
+  function lessonBuilderSourceText(lesson, materialIds, includePast) {
+    var materials = lessonSlides(lesson.id).filter(function (material) { return materialIds.indexOf(material.id) >= 0; });
+    var chunks = materials.map(function (material) {
+      var slides = asArray(material.slides).slice(0, 120).map(function (slide) {
+        return '[Slide ' + (slide.number || "?") + '] ' + [slide.title, slide.text].filter(Boolean).join(" — ");
+      }).filter(Boolean).join("\n");
+      return 'FICHEIRO: ' + (material.fileName || material.title || "Slides") + '\n' + (slides || "O texto dos slides não está extraído; analisa o ficheiro PPTX anexado.");
+    });
+    if (includePast) {
+      var past = pastQuestionsForLesson(lesson.id).map(function (question) {
+        return '- ' + question.prompt + (question.answer ? '\n  Resposta guardada: ' + question.answer : "");
+      });
+      if (past.length) chunks.push('PERGUNTAS DE ANOS ANTERIORES:\n' + past.join("\n"));
+    }
+    return chunks.join("\n\n").slice(0, 30000);
+  }
+
+
+  function attachSlideMaterialReferences(value, materials) {
+    materials = asArray(materials);
+    return normalizeContentBlocks(value).map(function (sourceBlock) {
+      var block = Object.assign({}, sourceBlock);
+      if (String(block.type || "").toLowerCase() === "slide-image" && !block.materialId && materials.length) {
+        var requested = String(block.sourceFile || block.fileName || "").trim().toLowerCase();
+        var match = requested ? materials.find(function (material) {
+          return [material.fileName, material.title].some(function (name) {
+            var normalized = String(name || "").trim().toLowerCase();
+            return normalized && (normalized === requested || normalized.indexOf(requested) >= 0 || requested.indexOf(normalized) >= 0);
+          });
+        }) : null;
+        block.materialId = (match || materials[0]).id;
+      }
+      if (String(block.type || "").toLowerCase() === "list") {
+        block.items = asArray(block.items).map(function (item) { return attachSlideMaterialReferences(item, materials); });
+      }
+      return block;
+    });
+  }
+
+  function lessonBuilderSchema(kind, lesson) {
+    var commonBlocks = '[{"type":"text","text":"..."},{"type":"latex","latex":"\\\\frac{a}{b}","display":true},{"type":"code","language":"python","code":"..."},{"type":"svg","svg":"<svg viewBox=\\"0 0 640 360\\">...</svg>","alt":"..."},{"type":"slide-image","sourceFile":"nome-do-ficheiro.pptx","slideNumber":12,"description":"imagem ou diagrama exato a usar","alt":"..."}]';
+    if (kind === "quiz") {
+      return '{\n  "title": "Quiz da aula · ' + lesson.title.replace(/"/g, "\\\"") + '",\n  "questions": [\n    {\n      "promptBlocks": ' + commonBlocks + ',\n      "options": [' + commonBlocks + ', ' + commonBlocks + ', ' + commonBlocks + ', ' + commonBlocks + '],\n      "correctIndex": 0,\n      "explanationBlocks": ' + commonBlocks + ',\n      "sourceSlides": [1, 2],\n      "difficulty": "medium"\n    }\n  ]\n}';
+    }
+    if (kind === "homework") {
+      return '{\n  "title": "TPC · ' + lesson.title.replace(/"/g, "\\\"") + '",\n  "estimatedMinutes": 30,\n  "instructionsBlocks": ' + commonBlocks + ',\n  "solutionBlocks": ' + commonBlocks + ',\n  "checklist": ["Passo 1", "Passo 2"]\n}';
+    }
+    return '{\n  "title": "Apontamentos · ' + lesson.title.replace(/"/g, "\\\"") + '",\n  "paper": "lined",\n  "blocks": ' + commonBlocks + '\n}';
+  }
+
+  function buildLessonAIPrompt(lesson, kind, materialIds, includePast) {
+    var course = courseById(lesson.courseId);
+    var sourceText = lessonBuilderSourceText(lesson, materialIds, includePast);
+    var purpose = kind === "quiz"
+      ? "Cria um quiz curto para confirmar imediatamente o que foi aprendido nesta aula. As perguntas devem ser claras, úteis e baseadas exclusivamente nas fontes."
+      : kind === "homework"
+        ? "Cria um TPC para fazer em casa depois das aulas. Não repitas simplesmente o quiz: usa aplicação, prática, exercícios e consolidação."
+        : "Cria apontamentos completos, bem estruturados e úteis para revisão, sem inventar matéria que não esteja nas fontes.";
+    return [
+      "CONTEXTO",
+      "Estou a configurar conteúdo para a app Twenty, um sistema académico pessoal.",
+      "Cadeira: " + (course ? course.name : "Cadeira"),
+      "Aula: " + lesson.title,
+      "Data: " + (lesson.date || "não indicada"),
+      "Tópicos: " + (lesson.topics || "não indicados"),
+      "",
+      "OBJETIVO",
+      purpose,
+      "",
+      "REGRAS DE CONTEÚDO",
+      "- Devolve APENAS JSON válido, sem texto antes ou depois e sem blocos markdown.",
+      "- Português de Portugal.",
+      "- Usa texto normal sempre que for suficiente.",
+      "- Para fórmulas, usa blocos type=latex e escreve LaTeX sem delimitadores $, $$, \\( ou \\[. Exemplo: \\\\frac{v^2}{2a}.",
+      "- Para código, usa type=code com language e code. O código será mostrado numa interface estilo IDE.",
+      "- Para diagramas simples, prefere type=svg. Usa SVG puro com viewBox e sem JavaScript, scripts, foreignObject ou ligações externas.",
+      "- Se uma pergunta ou resposta depender de uma imagem específica dos slides, usa type=slide-image com sourceFile, slideNumber, description e alt. Só pede imagens quando forem realmente necessárias, por exemplo gráficos, circuitos, geometria, física, matemática visual ou interpretação de diagramas.",
+      "- Uma resposta, opção ou explicação pode ser composta por texto, imagem pedida, SVG, LaTeX ou código, conforme o conteúdo exigir.",
+      "- Não inventes imagens que não existem nos slides; quando necessário, descreve exatamente que zona/diagrama deve aparecer.",
+      kind === "quiz" ? "- Cria entre 5 e 10 perguntas. Usa quatro opções por pergunta e um único correctIndex." : "",
+      kind === "homework" ? "- O TPC deve ser diferente do quiz da aula e adequado para fazer em casa. Inclui solução ou critérios de correção." : "",
+      kind === "notes" ? "- Organiza os apontamentos por secções e usa fórmulas, código ou diagramas apenas quando melhorarem realmente a compreensão." : "",
+      "",
+      "FORMATO EXATO ESPERADO PELA TWENTY",
+      lessonBuilderSchema(kind, lesson),
+      "",
+      "FONTES",
+      sourceText || "Não existe texto extraído. Analisa o PowerPoint anexado à conversa.",
+    ].filter(function (line) { return line !== "" || true; }).join("\n");
+  }
+
+  function lessonBuilderMaterialChoices(lesson) {
+    var materials = lessonSlides(lesson.id);
+    if (!materials.length) return '<div class="builder-empty"><i data-lucide="presentation"></i><p><strong>Sem PowerPoint nesta aula</strong><small>Carrega primeiro os slides. Depois volta aqui para criar o prompt.</small></p><button class="button button-small" type="button" data-action="add-material" data-course="' + attr(lesson.courseId) + '" data-lesson="' + attr(lesson.id) + '"><i data-lucide="file-up"></i>Carregar slides</button></div>';
+    return '<div class="builder-source-list">' + materials.map(function (material) {
+      return '<label class="builder-source"><input type="checkbox" name="materialIds" value="' + attr(material.id) + '" checked><span class="list-icon"><i data-lucide="presentation"></i></span><span><strong>' + esc(material.title || material.fileName || "PowerPoint") + '</strong><small>' + (material.slideCount || asArray(material.slides).length || 0) + ' slides · ' + (material.remoteFile ? "sincronizado" : "local") + '</small></span></label>';
+    }).join("") + '</div>';
+  }
+
+  function openLessonBuilder(lessonId, kind) {
+    var lesson = lessonById(lessonId);
+    if (!lesson) return;
+    if (kind === "quiz" && configuredQuizForLesson(lesson.id)) { viewLessonQuiz(lesson.id); return; }
+    if (kind === "homework" && homeworkForLesson(lesson.id)) { viewLessonHomework(homeworkForLesson(lesson.id).id); return; }
+    var materials = lessonSlides(lesson.id);
+    var ids = materials.map(function (material) { return material.id; });
+    var includePast = pastQuestionsForLesson(lesson.id).length > 0;
+    var prompt = buildLessonAIPrompt(lesson, kind, ids, includePast);
+    var body = '<form id="lessonBuilderForm" data-kind="' + attr(kind) + '" data-lesson="' + attr(lesson.id) + '"><div class="builder-intro"><span class="metric-icon"><i data-lucide="' + (kind === "quiz" ? "check-check" : kind === "homework" ? "notebook-pen" : "book-open-text") + '"></i></span><div><p class="card-label">Configurar ' + esc(lessonBuilderLabel(kind)) + '</p><h3>' + esc(lesson.title) + '</h3><p>Escolhe as fontes, copia o prompt para a IA juntamente com o PowerPoint e cola aqui o JSON devolvido.</p></div></div><div class="section-heading"><div><h3>Slides da aula</h3><p>O prompt inclui o texto extraído e identifica os ficheiros que deves anexar à IA.</p></div></div>' + lessonBuilderMaterialChoices(lesson) + '<label class="builder-past-toggle"><input type="checkbox" name="includePast" ' + (includePast ? "checked" : "") + '><span><strong>Incluir perguntas de anos anteriores</strong><small>' + pastQuestionsForLesson(lesson.id).length + ' pergunta(s) associada(s) a esta aula</small></span></label><div class="builder-prompt-head"><div><h3>Prompt para a IA</h3><p>O formato inclui texto, imagens dos slides, SVG, LaTeX e código.</p></div><button class="button button-small" type="button" data-action="copy-lesson-builder-prompt"><i data-lucide="copy"></i>Copiar prompt</button></div><textarea id="lessonBuilderPrompt" class="builder-prompt" readonly>' + esc(prompt) + '</textarea><div class="builder-prompt-head"><div><h3>Resposta da IA</h3><p>Cola apenas o JSON. A Twenty valida antes de guardar.</p></div><span class="badge badge-violet">JSON</span></div><textarea id="lessonBuilderResponse" class="builder-response" placeholder="{&#10;  &quot;title&quot;: &quot;...&quot;&#10;}"></textarea><div class="form-error" hidden></div></form>';
+    openModal("Configurar " + lessonBuilderLabel(kind), body, { className: "modal-builder", footer: '<footer class="modal-foot"><button class="button" type="button" data-action="close-modal">Cancelar</button><button class="button button-dark" type="button" data-action="import-lesson-builder"><i data-lucide="check"></i>Criar na Twenty</button></footer>' });
+  }
+
+  function refreshLessonBuilderPrompt() {
+    var form = modalRoot.querySelector("#lessonBuilderForm");
+    if (!form) return;
+    var lesson = lessonById(form.dataset.lesson);
+    if (!lesson) return;
+    var ids = Array.from(form.querySelectorAll('[name="materialIds"]:checked')).map(function (input) { return input.value; });
+    var includePast = !!form.querySelector('[name="includePast"]:checked');
+    var target = form.querySelector("#lessonBuilderPrompt");
+    if (target) target.value = buildLessonAIPrompt(lesson, form.dataset.kind, ids, includePast);
+  }
+
+  function normalizeAIQuizQuestion(question, materials) {
+    var promptBlocks = attachSlideMaterialReferences(question.promptBlocks || question.prompt || "", materials);
+    var optionBlocks = asArray(question.options).map(function (option) { return attachSlideMaterialReferences(option, materials); });
+    if (!promptBlocks.length) throw new Error("Uma pergunta do quiz não tem enunciado.");
+    if (optionBlocks.length < 2) throw new Error("Cada pergunta do quiz precisa de pelo menos duas opções.");
+    var correctIndex = Number(question.correctIndex != null ? question.correctIndex : question.answerIndex);
+    if (!Number.isInteger(correctIndex) || correctIndex < 0 || correctIndex >= optionBlocks.length) throw new Error("Uma pergunta tem correctIndex inválido.");
+    return {
+      id: uid("quizq"), mode: "multiple-choice", promptBlocks: promptBlocks, prompt: contentBlocksPlainText(promptBlocks),
+      optionBlocks: optionBlocks, options: optionBlocks.map(contentBlocksPlainText), answerIndex: correctIndex,
+      explanationBlocks: attachSlideMaterialReferences(question.explanationBlocks || question.explanation || "", materials),
+      explanation: contentBlocksPlainText(question.explanationBlocks || question.explanation || ""),
+      sourceSlides: asArray(question.sourceSlides).map(Number).filter(Boolean), difficulty: question.difficulty || "auto", images: []
+    };
+  }
+
+  async function importLessonBuilder() {
+    var form = modalRoot.querySelector("#lessonBuilderForm");
+    if (!form) return;
+    var errorBox = form.querySelector(".form-error");
+    try {
+      var lesson = lessonById(form.dataset.lesson);
+      if (!lesson) throw new Error("Aula não encontrada.");
+      var payload = parseJSONReply(form.querySelector("#lessonBuilderResponse").value);
+      var kind = form.dataset.kind;
+      var selectedMaterialIds = Array.from(form.querySelectorAll('[name="materialIds"]:checked')).map(function (input) { return input.value; });
+      var selectedMaterials = lessonSlides(lesson.id).filter(function (material) { return selectedMaterialIds.indexOf(material.id) >= 0; });
+      if (kind === "quiz") {
+        if (configuredQuizForLesson(lesson.id)) throw new Error("Esta aula já tem um quiz configurado.");
+        var questions = asArray(payload.questions).map(function (question) { return normalizeAIQuizQuestion(question, selectedMaterials); });
+        if (!questions.length) throw new Error("O JSON não contém perguntas.");
+        state.quizzes.push({ id: uid("quiz"), semesterId: lesson.semesterId, courseId: lesson.courseId, lessonId: lesson.id, title: String(payload.title || "Quiz da aula · " + lesson.title), questions: questions, configuredFromPrompt: true, lockedContent: true, createdAt: new Date().toISOString(), lastScore: null });
+      } else if (kind === "homework") {
+        if (homeworkForLesson(lesson.id)) throw new Error("Esta aula já tem um TPC configurado.");
+        var instructions = attachSlideMaterialReferences(payload.instructionsBlocks || payload.contentBlocks || payload.instructions || "", selectedMaterials);
+        if (!instructions.length) throw new Error("O JSON não contém instruções para o TPC.");
+        state.tasks.push({ id: uid("task"), semesterId: lesson.semesterId, courseId: lesson.courseId, lessonId: lesson.id, title: String(payload.title || "TPC · " + lesson.title), type: "homework", dueDate: lesson.date || todayISO(), dueTime: "20:30", priority: "normal", done: false, estimatedMinutes: clamp(payload.estimatedMinutes || 30, 5, 240), contentBlocks: instructions, solutionBlocks: attachSlideMaterialReferences(payload.solutionBlocks || payload.solution || "", selectedMaterials), checklist: asArray(payload.checklist).map(String).filter(Boolean), configuredFromPrompt: true, lockedContent: true, createdAt: new Date().toISOString() });
+      } else {
+        var blocks = attachSlideMaterialReferences(payload.blocks || payload.notesBlocks || payload.contentBlocks || payload.notes || "", selectedMaterials);
+        if (!blocks.length) throw new Error("O JSON não contém apontamentos.");
+        lesson.notesHtml = sanitizeNotebookHTML(blocksToNotebookHTML(blocks));
+        lesson.notesPaper = ["lined", "grid", "blank"].indexOf(payload.paper) >= 0 ? payload.paper : (lesson.notesPaper || "lined");
+        lesson.notesUpdatedAt = new Date().toISOString();
+      }
+      ensureBeOnlineTasks();
+      await save(true);
+      closeModal();
+      render();
+      toast((kind === "quiz" ? "Quiz da aula" : kind === "homework" ? "TPC" : "Apontamentos") + " criado(s) e sincronizado(s).");
+    } catch (error) {
+      if (errorBox) { errorBox.hidden = false; errorBox.textContent = error.message; }
+      else toast(error.message, "error");
+    }
+  }
+
+  function viewLessonQuiz(lessonId) {
+    var quiz = configuredQuizForLesson(lessonId);
+    var lesson = lessonById(lessonId);
+    if (!quiz || !lesson) return;
+    var body = '<div class="view-only-banner"><i data-lucide="lock-keyhole"></i><span><strong>Conteúdo fechado</strong><small>Há apenas um quiz por aula. Podes consultá-lo e fazê-lo, mas não editá-lo.</small></span></div><div class="quiz-preview-list">' + asArray(quiz.questions).map(function (question, index) {
+      var options = asArray(question.optionBlocks).length ? question.optionBlocks : asArray(question.options);
+      return '<article class="quiz-preview-card"><p class="card-label">Pergunta ' + (index + 1) + '</p>' + renderContentBlocks(question.promptBlocks || question.prompt) + '<div class="quiz-preview-options">' + options.map(function (option, optionIndex) { return '<div class="quiz-preview-option ' + (optionIndex === Number(question.answerIndex) ? "is-correct" : "") + '"><span>' + String.fromCharCode(65 + optionIndex) + '</span>' + renderQuizOptionContent(option) + '</div>'; }).join("") + '</div><details><summary>Ver explicação</summary>' + renderContentBlocks(question.explanationBlocks || question.explanation) + '</details></article>';
+    }).join("") + '</div>';
+    openModal("Quiz da aula", body, { className: "modal-wide", footer: '<footer class="modal-foot"><button class="button" type="button" data-action="close-modal">Fechar</button><button class="button button-dark" type="button" data-action="start-quiz" data-id="' + attr(quiz.id) + '"><i data-lucide="play"></i>Fazer quiz</button></footer>' });
+  }
+
+  function viewLessonHomework(taskId) {
+    var task = state.tasks.find(function (item) { return item.id === taskId; });
+    if (!task) return;
+    var lesson = lessonById(task.lessonId);
+    var checklist = asArray(task.checklist).length ? '<div class="homework-checklist"><p class="card-label">Checklist</p>' + task.checklist.map(function (item) { return '<span><i data-lucide="square"></i>' + esc(item) + '</span>'; }).join("") + '</div>' : '';
+    var solution = asArray(task.solutionBlocks).length ? '<details class="homework-solution"><summary>Ver solução / critérios de correção</summary>' + renderContentBlocks(task.solutionBlocks) + '</details>' : '';
+    var body = '<div class="view-only-banner"><i data-lucide="lock-keyhole"></i><span><strong>TPC da aula</strong><small>O conteúdo fica em modo de visualização depois de criado.</small></span></div><div class="question-meta"><span class="badge badge-violet">' + esc(task.estimatedMinutes || 30) + ' min</span><span class="badge">' + esc(relativeDate(task.dueDate)) + '</span></div><h3 style="margin:16px 0 8px">' + esc(task.title) + '</h3>' + renderContentBlocks(task.contentBlocks) + checklist + solution;
+    openModal("TPC", body, { className: "modal-wide", footer: '<footer class="modal-foot"><button class="button" type="button" data-action="close-modal">Fechar</button><button class="button ' + (task.done ? "button" : "button-dark") + '" type="button" data-action="toggle-task" data-id="' + attr(task.id) + '"><i data-lucide="check"></i>' + (task.done ? "Reabrir" : "Marcar concluído") + '</button></footer>' });
+  }
+
+  function notebookPaperLabel(value) {
+    return value === "grid" ? "Quadriculado" : value === "blank" ? "Branco" : "Pautado";
+  }
+
+  function renderNotebookPage(lesson, compact) {
+    var html = lesson.notesHtml || (lesson.notes ? '<p>' + nl2br(lesson.notes) + '</p>' : '');
+    if (!html && asArray(lesson.aiNotes).length) html = '<div class="lesson-ai-notes">' + lesson.aiNotes.map(renderAINote).join("") + '</div>';
+    if (!html) html = '<p class="notebook-placeholder">Ainda não há apontamentos nesta aula.</p>';
+    return '<div class="notebook-page paper-' + attr(lesson.notesPaper || "lined") + ' ' + (compact ? "is-compact" : "") + '"><div class="notebook-content">' + html + '</div></div>';
+  }
+
+  function openNotebookEditor(lessonId) {
+    var lesson = lessonById(lessonId);
+    if (!lesson) return;
+    var html = lesson.notesHtml || (lesson.notes ? '<p>' + nl2br(lesson.notes) + '</p>' : '<p><br></p>');
+    var toolbar = '<div class="notebook-toolbar" role="toolbar" aria-label="Formatar apontamentos"><button type="button" data-action="notebook-command" data-command="bold" title="Negrito"><i data-lucide="bold"></i></button><button type="button" data-action="notebook-command" data-command="italic" title="Itálico"><i data-lucide="italic"></i></button><button type="button" data-action="notebook-command" data-command="underline" title="Sublinhar"><i data-lucide="underline"></i></button><button type="button" data-action="notebook-command" data-command="strikeThrough" title="Rasurar"><i data-lucide="strikethrough"></i></button><span></span><button type="button" data-action="notebook-block" data-block="h2">H2</button><button type="button" data-action="notebook-block" data-block="h3">H3</button><button type="button" data-action="notebook-command" data-command="insertUnorderedList" title="Lista"><i data-lucide="list"></i></button><button type="button" data-action="notebook-command" data-command="insertOrderedList" title="Lista numerada"><i data-lucide="list-ordered"></i></button><button type="button" data-action="notebook-command" data-command="formatBlock" data-value="blockquote" title="Citação"><i data-lucide="quote"></i></button></div>';
+    var body = '<form id="notebookForm" data-lesson="' + attr(lesson.id) + '"><div class="notebook-settings"><label>Folha<select id="notebookPaper"><option value="lined" ' + (lesson.notesPaper === "lined" ? "selected" : "") + '>Pautado</option><option value="grid" ' + (lesson.notesPaper === "grid" ? "selected" : "") + '>Quadriculado</option><option value="blank" ' + (lesson.notesPaper === "blank" ? "selected" : "") + '>Branco</option></select></label><label>Fonte<select disabled><option>Fonte da Twenty</option></select></label></div>' + toolbar + '<div id="notebookEditor" class="notebook-page notebook-editor paper-' + attr(lesson.notesPaper || "lined") + '" contenteditable="true" spellcheck="true">' + html + '</div><div class="form-note">Podes usar negrito, itálico, sublinhado, listas e títulos. Fórmulas, código, SVG e referências a imagens podem ser importados através do prompt de apontamentos.</div></form>';
+    openModal("Apontamentos da aula", body, { className: "modal-notebook", footer: '<footer class="modal-foot"><button class="button" type="button" data-action="close-modal">Cancelar</button><button class="button button-dark" type="button" data-action="save-notebook"><i data-lucide="check"></i>Guardar apontamentos</button></footer>' });
+  }
+
+  async function saveNotebook() {
+    var form = modalRoot.querySelector("#notebookForm");
+    if (!form) return;
+    var lesson = lessonById(form.dataset.lesson);
+    if (!lesson) return;
+    var editor = form.querySelector("#notebookEditor");
+    var paper = form.querySelector("#notebookPaper");
+    lesson.notesHtml = sanitizeNotebookHTML(editor ? editor.innerHTML : "");
+    lesson.notes = contentBlocksPlainText([{ type: "text", text: editor ? editor.innerText : "" }]);
+    lesson.notesPaper = paper && ["lined", "grid", "blank"].indexOf(paper.value) >= 0 ? paper.value : "lined";
+    lesson.notesUpdatedAt = new Date().toISOString();
+    await save(true);
+    closeModal();
+    render();
+    toast("Apontamentos guardados.");
+  }
+
+  function renderCourseNotebook(course, archived) {
+    var lessons = state.lessons.filter(function (lesson) { return lesson.courseId === course.id; }).sort(function (a, b) { return String(a.date || "").localeCompare(String(b.date || "")) || String(a.start || "").localeCompare(String(b.start || "")); });
+    var pages = lessons.map(function (lesson, index) {
+      return '<article class="course-notebook-entry"><header><div><p class="card-label">Aula ' + (index + 1) + ' · ' + esc(formatDate(lesson.date)) + '</p><h3>' + esc(lesson.title) + '</h3><small>' + esc([lesson.start, lesson.room].filter(Boolean).join(" · ")) + '</small></div><div class="list-actions"><span class="badge">' + esc(notebookPaperLabel(lesson.notesPaper)) + '</span><button class="button button-small" type="button" data-route="lesson" data-id="' + attr(lesson.id) + '"><i data-lucide="arrow-right"></i>Abrir aula</button></div></header>' + renderNotebookPage(lesson, true) + '</article>';
+    }).join("");
+    return '<div class="page-head"><div><h2>Caderno da cadeira</h2><p>Todos os apontamentos, aula a aula e pela ordem em que aconteceram.</p></div></div><div class="course-notebook">' + (pages || emptyState("notebook", "Caderno vazio", "Escreve apontamentos dentro de uma aula para os veres aqui.", null)) + '</div>';
+  }
+
   function renderLesson(id) {
     var lesson = lessonById(id);
     if (!lesson) {
@@ -2263,26 +2741,23 @@
     setHeader(lesson.title, course ? course.name : "Aula");
     var materials = state.materials.filter(function (item) { return item.lessonId === lesson.id; });
     var questions = pastQuestionsForLesson(lesson.id);
-    var quizzes = state.quizzes.filter(function (item) { return item.lessonId === lesson.id; });
-    var aiSources = lessonAIAvailableLessons(lesson.courseId);
-    var canGenerateAI = aiSources.length > 0;
+    var quiz = configuredQuizForLesson(lesson.id);
+    var homework = homeworkForLesson(lesson.id);
     var onlineComplete = lessonIsBeOnline(lesson);
     var lessonEnded = lessonHasEnded(lesson);
     var currentMaterials = materials.filter(function (item) { return !semester || !item.academicYear || item.academicYear === semester.academicYear; });
     var oldMaterials = materials.filter(function (item) { return semester && item.academicYear && item.academicYear !== semester.academicYear; });
     var materialsHtml = materials.length ? '<div class="material-grid">' + currentMaterials.concat(oldMaterials).map(function (item) { return renderMaterialCard(item, course || { semesterId: null }, archived); }).join("") + '</div>' : emptyState("file-up", "Ainda sem material", "Carrega os slides ou PDF desta aula. O ficheiro ficará sincronizado.", "add-material", "Carregar material");
     var questionsHtml = questions.length ? questions.map(function (item) { return renderQuestionCard(item, archived); }).join("") : emptyState("message-circle-question", "Sem perguntas anteriores", "Associa perguntas de testes antigos a esta aula.", "add-question", "Associar pergunta");
-    var quizHtml = quizzes.length ? quizzes.map(function (quiz) {
-      var origin = quiz.generatedByAI ? "IA" : quiz.generatedFromPastQuestions ? "perguntas anteriores" : "manual";
-      return '<div class="list-row quiz-list-row"><span class="list-icon"><i data-lucide="sparkles"></i></span><span class="list-content"><strong>' + esc(quiz.title) + '</strong><small>' + asArray(quiz.questions).length + ' pergunta(s) · ' + origin + (quiz.lastScore != null ? ' · ' + quiz.lastScore + '%' : '') + '</small></span><div class="list-actions"><button class="button button-dark button-small" type="button" data-action="start-quiz" data-id="' + attr(quiz.id) + '"><i data-lucide="play"></i>Começar</button></div></div>';
-    }).join("") : emptyState("sparkles", "Quiz por criar", canGenerateAI ? "Gera um quiz com os slides de uma ou várias aulas." : "Carrega um PowerPoint e gera o quiz com IA.", "lesson-ai", "Gerar com IA");
-    var generatedNotes = asArray(lesson.aiNotes);
-    var generatedNotesHtml = generatedNotes.length ? '<div class="lesson-ai-notes">' + generatedNotes.map(renderAINote).join("") + '</div>' : '';
-    var statusLabel = onlineComplete ? "Revista" : lessonEnded ? "Por rever" : "Preparada";
-    var statusCopy = onlineComplete ? "Quiz concluído. Esta aula continua disponível para praticares." : lessonEnded ? "Faz um quiz curto para não deixares a matéria acumular." : "Quando a aula terminar, faz o quiz para confirmares o que percebeste.";
-    var aiQuizButton = !archived ? '<button class="button button-violet button-small" type="button" data-action="lesson-ai" data-output="quiz" data-lesson="' + attr(lesson.id) + '"><i data-lucide="sparkles"></i>Gerar com IA</button>' : '';
-    var aiNotesButton = !archived ? '<button class="button button-violet button-small" type="button" data-action="lesson-ai" data-output="notes" data-lesson="' + attr(lesson.id) + '"><i data-lucide="sparkles"></i>Gerar com IA</button>' : '';
-    return '<div class="page-head"><div><button class="button button-ghost button-small" type="button" data-route="course" data-id="' + attr(lesson.courseId) + '"><i data-lucide="arrow-left"></i>' + esc(course ? course.code || course.name : "Cadeira") + '</button><h2 style="margin-top:11px">' + esc(lesson.title) + '</h2><p>' + formatLongDate(lesson.date) + (lesson.start ? ' · ' + esc(lesson.start) + '–' + esc(lesson.end || '') : '') + ' · ' + esc(lessonTypeLabel(lesson.type)) + (lesson.room ? ' · ' + esc(lesson.room) : '') + '</p></div><div class="page-actions">' + (!archived ? '<button class="button" type="button" data-action="edit-lesson" data-id="' + attr(lesson.id) + '"><i data-lucide="pencil"></i>Editar aula</button><button class="button ' + (lesson.mastered ? 'button-yellow' : 'button-dark') + '" type="button" data-action="toggle-mastery" data-id="' + attr(lesson.id) + '"><i data-lucide="badge-check"></i>' + (lesson.mastered ? 'Dominada' : 'Marcar dominada') + '</button>' : '') + '</div></div><div class="bento-grid"><article class="card course-hero span-12" style="--course-color:' + safeColor(course && course.color) + ';min-height:220px"><div class="course-hero-copy"><span class="badge badge-dark">' + esc(lesson.type || 'Aula') + '</span><h2>' + esc(lesson.title) + '</h2><p>' + esc(lesson.topics || 'Adiciona os tópicos dados nesta aula.') + '</p></div><div class="course-score"><strong>' + (lesson.mastered ? '✓' : questions.length) + '</strong><span>' + (lesson.mastered ? 'matéria dominada' : 'perguntas antigas') + '</span></div></article><article class="card span-12 beonline-lesson-card ' + (onlineComplete ? 'is-online' : '') + '"><div class="beonline-lesson-copy"><span class="badge ' + (onlineComplete ? 'badge-mint' : lessonEnded ? 'badge-danger' : 'badge-violet') + '">' + statusLabel + '</span><h3>Revisão da aula</h3><p>' + esc(statusCopy) + '</p></div></article><article class="card span-12"><div class="card-title-row"><div><h3>Slides e PDFs</h3><p class="card-subtitle">Os ficheiros são enviados para o Git e ficam disponíveis nos teus dispositivos.</p></div>' + (!archived ? '<button class="button button-small" type="button" data-action="add-material" data-course="' + attr(lesson.courseId) + '" data-lesson="' + attr(lesson.id) + '"><i data-lucide="file-up"></i>Carregar</button>' : '') + '</div><div style="margin-top:15px">' + materialsHtml + '</div></article><article class="card span-7"><div class="card-title-row"><div><h3>Perguntas de testes anteriores</h3></div><div class="list-actions">' + (!archived ? '<button class="button button-small" type="button" data-action="add-question" data-course="' + attr(lesson.courseId) + '" data-lesson="' + attr(lesson.id) + '"><i data-lucide="plus"></i>Pergunta</button>' : '') + '</div></div><div style="margin-top:15px">' + questionsHtml + '</div></article><article class="card span-5"><div class="card-title-row"><div><h3>Quiz da aula</h3></div><div class="list-actions">' + aiQuizButton + (!archived ? '<button class="button button-small" type="button" data-action="add-quiz" data-course="' + attr(lesson.courseId) + '" data-lesson="' + attr(lesson.id) + '"><i data-lucide="plus"></i>Manual</button>' : '') + '</div></div><div class="list-stack">' + quizHtml + '</div></article><article class="card span-12"><div class="card-title-row"><div><h3>Apontamentos</h3><p class="card-subtitle">Podes combinar slides de várias aulas e incluir perguntas antigas.</p></div><div class="list-actions">' + aiNotesButton + (!archived ? '<button class="button button-small" type="button" data-action="edit-lesson-notes" data-id="' + attr(lesson.id) + '"><i data-lucide="pencil"></i>Editar manual</button>' : '') + '</div></div>' + generatedNotesHtml + '<div class="form-note" style="margin-top:15px">' + (lesson.notes ? nl2br(lesson.notes) : 'Ainda não escreveste apontamentos manuais nesta aula.') + '</div></article></div>';
+    var quizHtml = quiz
+      ? '<div class="lesson-configured-card"><span class="list-icon yellow"><i data-lucide="check-check"></i></span><div><strong>' + esc(quiz.title) + '</strong><small>' + asArray(quiz.questions).length + ' perguntas' + (quiz.lastScore != null ? ' · último resultado ' + quiz.lastScore + '%' : '') + ' · conteúdo fechado</small></div><div class="list-actions"><button class="button button-small" type="button" data-action="view-lesson-quiz" data-lesson="' + attr(lesson.id) + '"><i data-lucide="eye"></i>Ver</button><button class="button button-dark button-small" type="button" data-action="start-quiz" data-id="' + attr(quiz.id) + '"><i data-lucide="play"></i>Fazer</button></div></div>'
+      : '<div class="lesson-unconfigured"><span class="metric-icon"><i data-lucide="check-check"></i></span><div><strong>Quiz ainda não configurado</strong><small>Escolhe os slides, copia o prompt para a IA e cola o JSON devolvido.</small></div><button class="button button-dark button-small" type="button" data-action="configure-lesson-content" data-kind="quiz" data-lesson="' + attr(lesson.id) + '"><i data-lucide="wand-sparkles"></i>✅ Configurar quiz</button></div>';
+    var homeworkHtml = homework
+      ? '<div class="lesson-configured-card"><span class="list-icon orange"><i data-lucide="notebook-pen"></i></span><div><strong>' + esc(homework.title) + '</strong><small>' + (homework.estimatedMinutes || 30) + ' min · ' + (homework.done ? 'concluído' : 'por fazer') + ' · conteúdo fechado</small></div><div class="list-actions"><button class="button button-small" type="button" data-action="view-lesson-homework" data-id="' + attr(homework.id) + '"><i data-lucide="eye"></i>Ver</button><button class="button ' + (homework.done ? "button" : "button-dark") + ' button-small" type="button" data-action="toggle-task" data-id="' + attr(homework.id) + '"><i data-lucide="check"></i>' + (homework.done ? 'Reabrir' : 'Concluir') + '</button></div></div>'
+      : '<div class="lesson-unconfigured"><span class="metric-icon"><i data-lucide="notebook-pen"></i></span><div><strong>TPC ainda não configurado</strong><small>O TPC é separado do quiz e pensado para fazer em casa.</small></div><button class="button button-dark button-small" type="button" data-action="configure-lesson-content" data-kind="homework" data-lesson="' + attr(lesson.id) + '"><i data-lucide="wand-sparkles"></i>✅ Configurar TPC</button></div>';
+    var statusLabel = onlineComplete ? "Quiz feito" : quiz && lessonEnded ? "Quiz pendente" : quiz ? "Quiz preparado" : "Sem quiz";
+    var statusCopy = onlineComplete ? "O quiz desta aula já foi concluído e não volta a aparecer como pendente." : quiz && lessonEnded ? "O quiz está pronto para fazer." : quiz ? "Quando a aula estiver a terminar, a Home pode sugerir este quiz." : "O quiz só aparece na Home depois de o configurares.";
+    return '<div class="page-head"><div><button class="button button-ghost button-small" type="button" data-route="course" data-id="' + attr(lesson.courseId) + '"><i data-lucide="arrow-left"></i>' + esc(course ? course.code || course.name : "Cadeira") + '</button><h2 style="margin-top:11px">' + esc(lesson.title) + '</h2><p>' + formatLongDate(lesson.date) + (lesson.start ? ' · ' + esc(lesson.start) + '–' + esc(lesson.end || '') : '') + ' · ' + esc(lessonTypeLabel(lesson.type)) + (lesson.room ? ' · ' + esc(lesson.room) : '') + '</p></div><div class="page-actions">' + (!archived ? '<button class="button" type="button" data-action="edit-lesson" data-id="' + attr(lesson.id) + '"><i data-lucide="pencil"></i>Editar aula</button><button class="button ' + (lesson.mastered ? 'button-yellow' : 'button-dark') + '" type="button" data-action="toggle-mastery" data-id="' + attr(lesson.id) + '"><i data-lucide="badge-check"></i>' + (lesson.mastered ? 'Dominada' : 'Marcar dominada') + '</button>' : '') + '</div></div><div class="bento-grid"><article class="card course-hero span-12" style="--course-color:' + safeColor(course && course.color) + ';min-height:220px"><div class="course-hero-copy"><span class="badge badge-dark">' + esc(lesson.type || 'Aula') + '</span><h2>' + esc(lesson.title) + '</h2><p>' + esc(lesson.topics || 'Adiciona os tópicos dados nesta aula.') + '</p></div><div class="course-score"><strong>' + (lesson.mastered ? '✓' : questions.length) + '</strong><span>' + (lesson.mastered ? 'matéria dominada' : 'perguntas antigas') + '</span></div></article><article class="card span-12 beonline-lesson-card ' + (onlineComplete ? 'is-online' : '') + '"><div class="beonline-lesson-copy"><span class="badge ' + (onlineComplete ? 'badge-mint' : quiz && lessonEnded ? 'badge-danger' : 'badge-violet') + '">' + statusLabel + '</span><h3>Quiz da aula</h3><p>' + esc(statusCopy) + '</p></div></article><article class="card span-12"><div class="card-title-row"><div><h3>Slides e PDFs</h3><p class="card-subtitle">Os ficheiros são enviados para o Git e ficam disponíveis nos teus dispositivos.</p></div>' + (!archived ? '<button class="button button-small" type="button" data-action="add-material" data-course="' + attr(lesson.courseId) + '" data-lesson="' + attr(lesson.id) + '"><i data-lucide="file-up"></i>Carregar</button>' : '') + '</div><div style="margin-top:15px">' + materialsHtml + '</div></article><article class="card span-7"><div class="card-title-row"><div><h3>Perguntas de anos anteriores</h3></div><div class="list-actions">' + (!archived ? '<button class="button button-small" type="button" data-action="add-question" data-course="' + attr(lesson.courseId) + '" data-lesson="' + attr(lesson.id) + '"><i data-lucide="plus"></i>Pergunta</button>' : '') + '</div></div><div style="margin-top:15px">' + questionsHtml + '</div></article><article class="card span-5 lesson-config-card"><div class="card-title-row"><div><h3>✅ Quiz da aula</h3><p class="card-subtitle">Um por aula. Depois de criado, fica em visualização.</p></div></div>' + quizHtml + '</article><article class="card span-12 lesson-config-card"><div class="card-title-row"><div><h3>✅ TPC da aula</h3><p class="card-subtitle">Aplicação e prática para fazer em casa, separada do quiz.</p></div></div>' + homeworkHtml + '</article><article class="card span-12 notebook-card"><div class="card-title-row"><div><h3>Apontamentos</h3><p class="card-subtitle">Escreve como num caderno ou gera conteúdo com um prompt estruturado.</p></div><div class="list-actions">' + (!archived ? '<button class="button button-small" type="button" data-action="configure-lesson-content" data-kind="notes" data-lesson="' + attr(lesson.id) + '"><i data-lucide="wand-sparkles"></i>Gerar por prompt</button><button class="button button-dark button-small" type="button" data-action="open-notebook-editor" data-lesson="' + attr(lesson.id) + '"><i data-lucide="pencil"></i>Escrever</button>' : '') + '</div></div><div style="margin-top:15px">' + renderNotebookPage(lesson, false) + '</div><div class="notebook-meta"><span><i data-lucide="notebook"></i>' + esc(notebookPaperLabel(lesson.notesPaper)) + '</span><button class="button button-small" type="button" data-action="course-tab" data-id="' + attr(lesson.courseId) + '" data-tab="notebook"><i data-lucide="library-big"></i>Ver caderno da cadeira</button></div></article></div>';
   }
 
   function plannerModeControl(active) {
@@ -3361,6 +3836,7 @@
     document.body.style.overflow = "hidden";
     refreshIcons(modalRoot);
     hydrateLocalImages(modalRoot);
+    typesetMath(modalRoot);
     var first = modalRoot.querySelector("input:not([type=hidden]), select, textarea, button");
     if (first) setTimeout(function () { first.focus(); }, 30);
   }
@@ -4148,7 +4624,10 @@
           url: uploadedMaterial ? "" : url, fileName: uploadedMaterial ? file.name : url.split("/").pop(), mimeType: uploadedMaterial ? file.type : "", uploadedAt: new Date().toISOString()
         });
       } else if (type === "task") {
-        state.tasks.push({ id: uid("task"), semesterId: state.currentSemesterId, courseId: data.get("courseId") || null, lessonId: data.get("lessonId") || null, title: String(data.get("title") || "").trim(), type: data.get("taskType") || "homework", dueDate: data.get("dueDate") || "", dueTime: data.get("dueTime") || "", priority: data.get("priority") || "normal", done: false, createdAt: new Date().toISOString() });
+        var taskLessonId = data.get("lessonId") || null;
+        var taskTypeValue = data.get("taskType") || "homework";
+        if (taskLessonId && (taskTypeValue === "homework" || taskTypeValue === "tpc") && homeworkForLesson(taskLessonId)) throw new Error("Esta aula já tem um TPC configurado.");
+        state.tasks.push({ id: uid("task"), semesterId: state.currentSemesterId, courseId: data.get("courseId") || null, lessonId: taskLessonId, title: String(data.get("title") || "").trim(), type: taskTypeValue, dueDate: data.get("dueDate") || "", dueTime: data.get("dueTime") || "", priority: data.get("priority") || "normal", done: false, createdAt: new Date().toISOString() });
       } else if (type === "assessment") {
         var assessmentCourse = courseById(data.get("courseId"));
         if (!assessmentCourse) throw new Error("Escolhe uma cadeira.");
@@ -4224,6 +4703,7 @@
           if (!quizCourse) throw new Error("Escolhe uma cadeira.");
           var quizLesson = lessonById(data.get("lessonId"));
           if (quizLesson && quizLesson.courseId !== quizCourse.id) quizLesson = null;
+          if (quizLesson && configuredQuizForLesson(quizLesson.id)) throw new Error("Esta aula já tem um quiz configurado.");
           var selectedPastIds = data.getAll("pastQuestionIds");
           var selectedPast = quizLesson ? pastQuestionsForLesson(quizLesson.id).filter(function (question) { return selectedPastIds.indexOf(question.id) >= 0; }) : [];
           var quizQuestions = (questionData ? [questionData] : []).concat(selectedPast.map(quizQuestionFromPast));
@@ -4357,6 +4837,7 @@
         var lessonNotes = lessonById(id);
         if (!lessonNotes) throw new Error("Aula não encontrada.");
         lessonNotes.notes = String(data.get("notes") || "").trim();
+        lessonNotes.notesHtml = sanitizeNotebookHTML("<p>" + nl2br(lessonNotes.notes) + "</p>");
       } else {
         throw new Error("Tipo de formulário desconhecido.");
       }
@@ -4729,8 +5210,9 @@
         footer = '<footer class="modal-foot"><button class="button" type="button" data-action="close-modal">Sair</button><button class="button button-dark" type="button" data-action="quiz-reveal"><i data-lucide="eye"></i>Revelar resposta</button></footer>';
       }
     } else {
-      body = progress + '<h3 class="quiz-question">' + esc(question.prompt) + '</h3>' + renderImageGallery(question.images, "question", { ownerId: question.sourceQuestionId || "" }) + '<div class="quiz-options">' + asArray(question.options).map(function (option, index) {
-        return '<button class="quiz-option ' + (selected === index ? "is-selected" : "") + '" type="button" data-action="quiz-answer" data-index="' + index + '"><span>' + String.fromCharCode(65 + index) + '</span>' + esc(option) + "</button>";
+      var quizOptions = asArray(question.optionBlocks).length ? question.optionBlocks : asArray(question.options);
+      body = progress + '<div class="quiz-question">' + renderContentBlocks(question.promptBlocks || question.prompt) + '</div>' + renderImageGallery(question.images, "question", { ownerId: question.sourceQuestionId || "" }) + '<div class="quiz-options">' + quizOptions.map(function (option, index) {
+        return '<button class="quiz-option ' + (selected === index ? "is-selected" : "") + '" type="button" data-action="quiz-answer" data-index="' + index + '"><span>' + String.fromCharCode(65 + index) + '</span>' + renderQuizOptionContent(option) + "</button>";
       }).join("") + '</div><div id="quizFeedback"></div>';
       footer = '<footer class="modal-foot"><button class="button" type="button" data-action="close-modal">Sair</button><button class="button button-dark" type="button" data-action="quiz-next" ' + (selected == null ? "disabled" : "") + '>' + (quizRuntime.index === questions.length - 1 ? "Terminar" : "Seguinte") + '<i data-lucide="arrow-right"></i></button></footer>';
     }
@@ -4751,6 +5233,7 @@
     ensureBeOnlineTasks();
     await save(true);
     quizRuntime = null;
+    render();
     var closesLesson = !!quiz.lessonId;
     var resultCopy = closesLesson
       ? (score === 100 ? "Aula acompanhada. Mantiveste-te em linha e sem matéria acumulada." : score >= 70 ? "Aula acompanhada. Anota o que falhou e esclarece as dúvidas cedo." : "Aula acompanhada, mas merece revisão: volta aos slides e leva as dúvidas ao professor.")
@@ -4779,6 +5262,7 @@
   function showTaskDetail(id) {
     var task = state.tasks.find(function (item) { return item.id === id; });
     if (!task) return;
+    if ((task.type === "homework" || task.type === "tpc") && asArray(task.contentBlocks).length) { viewLessonHomework(task.id); return; }
     var course = courseById(task.courseId);
     var body = '<div class="question-meta"><span class="badge badge-violet">Tarefa</span><span class="badge">' + esc(relativeDate(task.dueDate)) + '</span></div><h3 style="margin:16px 0 5px">' + esc(task.title) + '</h3><p class="card-subtitle">' + esc(course ? course.name : "Pessoal") + (task.dueTime ? ' · ' + esc(task.dueTime) : '') + '</p><div class="list-actions" style="margin-top:15px">' + (task.lessonId ? '<button class="button button-dark" type="button" data-route="lesson" data-id="' + attr(task.lessonId) + '"><i data-lucide="arrow-right"></i>Abrir aula</button>' : '') + '<button class="button" type="button" data-action="toggle-task" data-id="' + attr(task.id) + '"><i data-lucide="check"></i>' + (task.done ? "Reabrir" : "Concluir") + '</button></div>';
     openModal("Detalhes da tarefa", body);
@@ -4811,9 +5295,9 @@
     return [
       { route: "settings", selector: ".page-head", page: "Admin", title: "Admin e dados", copy: "É aqui que configuras o semestre, geres os dados locais e inicias ações administrativas." },
       { route: "settings", selector: ".settings-grid", page: "Admin", title: "Configuração do sistema", copy: "Cada cartão trata de uma área: perfil, semestre, JSON, atividade simulada, armazenamento e segurança." },
-      { route: "home", selector: ".school-now-card", page: "Hoje", title: "O que está a acontecer agora", copy: "A Home escolhe um próximo passo: preparar, acompanhar a aula, fazer o Lesson Check, tratar do TPC ou fechar o dia." },
-      { route: "home", selector: ".after-school-card", page: "Hoje", title: "Lesson Checks antes do TPC", copy: "A verificação rápida fecha cada aula. O trabalho de casa fica separado para a sessão depois das aulas." },
-      { route: "home", selector: ".daily-report-card", page: "Hoje", title: "Report Card diário", copy: "A nota académica vem dos Lesson Checks e a rotina mostra o trabalho escolar concluído." },
+      { route: "home", selector: ".school-now-card", page: "Hoje", title: "O que está a acontecer agora", copy: "A Home escolhe um próximo passo: preparar, acompanhar a aula, fazer o Quiz da aula, tratar do TPC ou fechar o dia." },
+      { route: "home", selector: ".after-school-card", page: "Hoje", title: "Quizzes da aula antes do TPC", copy: "A verificação rápida fecha cada aula. O trabalho de casa fica separado para a sessão depois das aulas." },
+      { route: "home", selector: ".daily-report-card", page: "Hoje", title: "Report Card diário", copy: "A nota académica vem dos Quizzes da aula e a rotina mostra o trabalho escolar concluído." },
       { route: "courses", selector: ".course-grid, .empty-state", page: "Cadeiras", title: "Cadeiras do semestre", copy: "Abre uma cadeira para consultar aulas, materiais, avaliações, perguntas, quizzes e notas." },
       { route: "planner", plannerMode: "calendar", selector: ".planner-mode-control", page: "Calendário", title: "Horário ou calendário", copy: "O Horário guarda os blocos recorrentes. O Calendário combina aulas, testes, eventos e tarefas com data." },
       { route: "planner", plannerMode: "calendar", selector: ".calendar-view-control", page: "Calendário", title: "Quatro vistas", copy: "Alterna entre Dia, 3 dias, Semana e Mês. As setas avançam exatamente o intervalo selecionado." },
@@ -5258,6 +5742,27 @@
       await deleteAIProject(button.dataset.id);
     } else if (action === "sync-material") {
       await syncExistingMaterial(button.dataset.id);
+    } else if (action === "configure-lesson-content") {
+      openLessonBuilder(button.dataset.lesson || route.id, button.dataset.kind || "quiz");
+    } else if (action === "copy-lesson-builder-prompt") {
+      var promptArea = modalRoot.querySelector("#lessonBuilderPrompt");
+      if (promptArea) { await copyText(promptArea.value); toast("Prompt copiado."); }
+    } else if (action === "import-lesson-builder") {
+      await importLessonBuilder();
+    } else if (action === "view-lesson-quiz") {
+      viewLessonQuiz(button.dataset.lesson || route.id);
+    } else if (action === "view-lesson-homework") {
+      viewLessonHomework(button.dataset.id);
+    } else if (action === "open-notebook-editor") {
+      openNotebookEditor(button.dataset.lesson || route.id);
+    } else if (action === "save-notebook") {
+      await saveNotebook();
+    } else if (action === "notebook-command") {
+      var noteEditor = modalRoot.querySelector("#notebookEditor");
+      if (noteEditor) { noteEditor.focus(); document.execCommand(button.dataset.command, false, button.dataset.value || null); }
+    } else if (action === "notebook-block") {
+      var blockEditor = modalRoot.querySelector("#notebookEditor");
+      if (blockEditor) { blockEditor.focus(); document.execCommand("formatBlock", false, button.dataset.block || "p"); }
     } else if (action === "lesson-ai") {
       openLessonAIModal(button.dataset.lesson || route.id, button.dataset.output || "quiz", button.dataset.material || "");
     } else if (action === "run-lesson-ai") {
@@ -5286,9 +5791,21 @@
     } else if (action === "generate-past-quiz") {
       await generateQuizFromPast(button.dataset.lesson || "", true);
     } else if (action === "add-past-to-quiz") {
-      openPastQuestionPicker(button.dataset.id);
+      var pastTargetQuiz = state.quizzes.find(function (item) { return item.id === button.dataset.id; });
+      if (pastTargetQuiz && (pastTargetQuiz.lessonId || pastTargetQuiz.lockedContent)) {
+        if (pastTargetQuiz.lessonId) viewLessonQuiz(pastTargetQuiz.lessonId);
+        toast("O quiz desta aula está bloqueado depois de configurado.");
+      } else {
+        openPastQuestionPicker(button.dataset.id);
+      }
     } else if (action === "add-quiz-question") {
-      openEntityForm("quiz-question", { quizId: button.dataset.id });
+      var manualTargetQuiz = state.quizzes.find(function (item) { return item.id === button.dataset.id; });
+      if (manualTargetQuiz && (manualTargetQuiz.lessonId || manualTargetQuiz.lockedContent)) {
+        if (manualTargetQuiz.lessonId) viewLessonQuiz(manualTargetQuiz.lessonId);
+        toast("O quiz desta aula está bloqueado depois de configurado.");
+      } else {
+        openEntityForm("quiz-question", { quizId: button.dataset.id });
+      }
     } else if (action === "add-grade") {
       openEntityForm("grade", { courseId: button.dataset.course || "", assessmentId: button.dataset.assessment || "", lessonId: button.dataset.lesson || "" });
     } else if (action === "grade-simulator") {
@@ -5329,6 +5846,7 @@
       } else if (task) {
         task.done = !task.done;
         await save(true);
+        closeModal();
         render();
         toast(task.done ? "Tarefa concluída." : "Tarefa reaberta.");
       }
@@ -5725,6 +6243,14 @@
     block.end = minutesToTime(newEnd);
     save(true).then(render);
   });
+
+  modalRoot.addEventListener("paste", function (event) {
+    var editor = event.target.closest("#notebookEditor");
+    if (!editor) return;
+    event.preventDefault();
+    var value = (event.clipboardData || window.clipboardData).getData("text/plain");
+    document.execCommand("insertText", false, value);
+  });
   modalRoot.addEventListener("submit", function (event) {
     if (event.target.id === "pastQuestionForm") {
       handlePastQuestionSubmit(event).catch(function (error) { console.error(error); setFormError(event.target, "Não foi possível guardar as perguntas."); });
@@ -5742,6 +6268,16 @@
     if (evaluationForm && event.target.matches('[data-role="component-weight"]')) updateEvaluationBuilderSummary(evaluationForm);
   });
   modalRoot.addEventListener("change", function (event) {
+    var builderForm = event.target.closest("#lessonBuilderForm");
+    if (builderForm && event.target.matches('[name="materialIds"], [name="includePast"]')) {
+      refreshLessonBuilderPrompt();
+      return;
+    }
+    if (event.target.matches("#notebookPaper")) {
+      var notebookEditor = modalRoot.querySelector("#notebookEditor");
+      if (notebookEditor) notebookEditor.className = "notebook-page notebook-editor paper-" + event.target.value;
+      return;
+    }
     var simulatorForm = event.target.closest("#gradeSimulatorForm");
     if (simulatorForm && event.target.matches('[data-role="simulator-course"]')) {
       var simulatorFields = simulatorForm.querySelector("#gradeSimulatorFields");
@@ -5863,6 +6399,10 @@
 
   window.addEventListener("twenty:sync-status", function () {
     updateSyncActivityFromStatus(Sync ? Sync.getStatus() : null);
+  });
+  document.addEventListener("twenty:math-ready", function () {
+    typesetMath(view);
+    typesetMath(modalRoot);
   });
   document.addEventListener("visibilitychange", function () {
     if (!document.hidden && !(homeDebug && homeDebug.active) && Sync && state && Sync.getStatus().configured) Sync.checkForUpdates({ force: true }).catch(function () {});
