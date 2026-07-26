@@ -50,9 +50,6 @@
   var homeworkClockTimer = null;
   var homeworkSessionRuntime = null;
   var homeDebug = null;
-  // Guarda conclusões da sessão imediatamente, incluindo durante o tutorial/debug.
-  // É uma proteção extra contra normalizações ou estados antigos voltarem a marcar o quiz como pendente.
-  var sessionCompletedLessonQuizIds = new Set();
   var COLORS = ["#a99df7", "#ff92ae", "#ffad72", "#79cdb8", "#80bee8", "#f3e873", "#cab6ea", "#87d7df"];
   var WEEKDAYS = ["Domingo", "Segunda", "Terça", "Quarta", "Quinta", "Sexta", "Sábado"];
   var SHORT_WEEKDAYS = ["Dom", "Seg", "Ter", "Qua", "Qui", "Sex", "Sáb"];
@@ -646,7 +643,7 @@
 
   function defaultState() {
     return {
-      schemaVersion: 7,
+      schemaVersion: 6,
       meta: {
         revision: 0,
         updatedAt: "",
@@ -655,8 +652,7 @@
         externalRevision: 0,
         source: "device",
         completedLessonQuizIds: [],
-        completedHomeworkIds: [],
-        completedHomeworkLessonIds: []
+        completedHomeworkIds: []
       },
       profile: {
         name: "",
@@ -707,11 +703,10 @@
   function normalizeState(input) {
     var base = defaultState();
     var source = input && typeof input === "object" ? input : {};
-    base.schemaVersion = Math.max(7, Number(source.schemaVersion) || 0);
+    base.schemaVersion = Math.max(6, Number(source.schemaVersion) || 0);
     base.meta = Object.assign(base.meta, source.meta || {});
     base.meta.completedLessonQuizIds = Array.from(new Set(asArray(base.meta.completedLessonQuizIds).map(String).filter(Boolean)));
     base.meta.completedHomeworkIds = Array.from(new Set(asArray(base.meta.completedHomeworkIds).map(String).filter(Boolean)));
-    base.meta.completedHomeworkLessonIds = Array.from(new Set(asArray(base.meta.completedHomeworkLessonIds).map(String).filter(Boolean)));
     base.profile = Object.assign(base.profile, source.profile || {});
     base.settings = Object.assign(base.settings, source.settings || {});
     if (["day", "three", "week", "month"].indexOf(base.settings.calendarView) < 0) base.settings.calendarView = "month";
@@ -773,57 +768,12 @@
         };
       });
       task.completedAt = task.completedAt || "";
-      var isHomework = task.type === "homework" || task.type === "tpc";
-      var homeworkLessonId = task.lessonId != null && task.lessonId !== "" ? String(task.lessonId) : "";
-      var completedByLesson = isHomework && homeworkLessonId && base.meta.completedHomeworkLessonIds.indexOf(homeworkLessonId) >= 0;
-      task.completedOnce = !!(task.completedOnce || task.done || task.completedAt || base.meta.completedHomeworkIds.indexOf(String(task.id)) >= 0 || completedByLesson);
-      if (task.completedOnce && isHomework) task.done = true;
-      if (isHomework && task.completedOnce && base.meta.completedHomeworkIds.indexOf(String(task.id)) < 0) base.meta.completedHomeworkIds.push(String(task.id));
-      if (isHomework && task.completedOnce && homeworkLessonId && base.meta.completedHomeworkLessonIds.indexOf(homeworkLessonId) < 0) base.meta.completedHomeworkLessonIds.push(homeworkLessonId);
+      task.completedOnce = !!(task.completedOnce || task.done || task.completedAt || base.meta.completedHomeworkIds.indexOf(String(task.id)) >= 0);
+      if (task.completedOnce && (task.type === "homework" || task.type === "tpc")) task.done = true;
+      if ((task.type === "homework" || task.type === "tpc") && task.completedOnce && base.meta.completedHomeworkIds.indexOf(String(task.id)) < 0) base.meta.completedHomeworkIds.push(String(task.id));
       task.actualSeconds = Math.max(0, Number(task.actualSeconds) || 0);
       return task;
     });
-
-    // Há apenas um TPC por aula. Versões antigas podiam criar duplicados;
-    // aqui fundimos esses registos e preservamos sempre o estado concluído.
-    var homeworkTaskIndexByLesson = new Map();
-    var normalizedTasks = [];
-    function homeworkTaskRichness(task) {
-      return (task.lockedContent ? 20 : 0) + (task.configuredFromPrompt ? 20 : 0) +
-        asArray(task.contentBlocks).length * 4 + asArray(task.checklist).length * 2 +
-        asArray(task.extraTasks).length * 2 + (task.title ? 1 : 0);
-    }
-    base.tasks.forEach(function (task) {
-      var isHomework = task.type === "homework" || task.type === "tpc";
-      var lessonKey = isHomework && task.lessonId != null && task.lessonId !== "" ? String(task.lessonId) : "";
-      if (!lessonKey) {
-        normalizedTasks.push(task);
-        return;
-      }
-      if (!homeworkTaskIndexByLesson.has(lessonKey)) {
-        homeworkTaskIndexByLesson.set(lessonKey, normalizedTasks.length);
-        normalizedTasks.push(task);
-        return;
-      }
-      var index = homeworkTaskIndexByLesson.get(lessonKey);
-      var existing = normalizedTasks[index];
-      var preferred = homeworkTaskRichness(task) > homeworkTaskRichness(existing) ? task : existing;
-      var other = preferred === task ? existing : task;
-      var completed = !!(existing.done || existing.completedOnce || existing.completedAt || task.done || task.completedOnce || task.completedAt || base.meta.completedHomeworkLessonIds.indexOf(lessonKey) >= 0);
-      var mergedTask = Object.assign({}, other, preferred);
-      mergedTask.done = completed;
-      mergedTask.completedOnce = completed;
-      mergedTask.completedAt = existing.completedAt || task.completedAt || (completed ? new Date().toISOString() : "");
-      mergedTask.actualSeconds = Math.max(Number(existing.actualSeconds) || 0, Number(task.actualSeconds) || 0);
-      normalizedTasks[index] = mergedTask;
-      if (completed) {
-        if (base.meta.completedHomeworkLessonIds.indexOf(lessonKey) < 0) base.meta.completedHomeworkLessonIds.push(lessonKey);
-        [existing, task].forEach(function (item) {
-          if (item && item.id && base.meta.completedHomeworkIds.indexOf(String(item.id)) < 0) base.meta.completedHomeworkIds.push(String(item.id));
-        });
-      }
-    });
-    base.tasks = normalizedTasks;
     base.quizzes = base.quizzes.map(function (quiz) {
       if (/^Quiz beOnLine · /.test(quiz.title || "")) quiz.title = String(quiz.title).replace(/^Quiz beOnLine · /, "Quiz da aula · ");
       return quiz;
@@ -871,10 +821,10 @@
       });
     });
     base.lessons.forEach(function (lesson) {
-      var completedQuiz = base.quizzes.filter(function (quiz) { return String(quiz.lessonId || "") === String(lesson.id || ""); }).sort(function (a, b) {
+      var completedQuiz = base.quizzes.filter(function (quiz) { return quiz.lessonId === lesson.id; }).sort(function (a, b) {
         return String(b.lastCompletedAt || "").localeCompare(String(a.lastCompletedAt || ""));
       })[0];
-      var completedTask = base.tasks.find(function (task) { return String(task.lessonId || "") === String(lesson.id || "") && task.type === "lesson-quiz" && task.done; });
+      var completedTask = base.tasks.find(function (task) { return task.lessonId === lesson.id && task.type === "lesson-quiz" && task.done; });
       var quizHasResult = completedQuiz && (completedQuiz.completedOnce || completedQuiz.lastScore != null || completedQuiz.lastCompletedAt);
       var completedAt = lesson.quizCompletedAt || lesson.beOnlineCompletedAt || (lesson.quizCompleted ? lesson.updatedAt || lesson.date || new Date().toISOString() : "") || (quizHasResult ? completedQuiz.lastCompletedAt || completedQuiz.updatedAt || completedQuiz.createdAt || new Date().toISOString() : "") || (completedTask && (completedTask.completedAt || completedTask.updatedAt || completedTask.createdAt || new Date().toISOString()));
       if (!completedAt) return;
@@ -883,13 +833,13 @@
       lesson.quizCompletedAt = completedAt;
       lesson.beOnlineCompletedAt = lesson.beOnlineCompletedAt || completedAt;
       base.quizzes.forEach(function (quiz) {
-        if (String(quiz.lessonId || "") === String(lesson.id || "") && asArray(quiz.questions).length) {
+        if (quiz.lessonId === lesson.id && asArray(quiz.questions).length) {
           quiz.completedOnce = true;
           quiz.lastCompletedAt = quiz.lastCompletedAt || completedAt;
         }
       });
       base.tasks.forEach(function (task) {
-        if (String(task.lessonId || "") === String(lesson.id || "") && task.type === "lesson-quiz") {
+        if (task.lessonId === lesson.id && task.type === "lesson-quiz") {
           task.done = true;
           task.completedOnce = true;
           task.completedAt = task.completedAt || completedAt;
@@ -1609,13 +1559,13 @@
 
   function configuredQuizForLesson(lessonId) {
     return state.quizzes.find(function (quiz) {
-      return String(quiz.lessonId || "") === String(lessonId || "") && asArray(quiz.questions).length;
+      return quiz.lessonId === lessonId && asArray(quiz.questions).length;
     }) || null;
   }
 
   function homeworkForLesson(lessonId) {
     return state.tasks.find(function (task) {
-      return String(task.lessonId || "") === String(lessonId || "") && (task.type === "homework" || task.type === "tpc") && (task.lockedContent || asArray(task.contentBlocks).length || task.configuredFromPrompt);
+      return task.lessonId === lessonId && (task.type === "homework" || task.type === "tpc") && (task.lockedContent || asArray(task.contentBlocks).length || task.configuredFromPrompt);
     }) || null;
   }
 
@@ -1631,28 +1581,15 @@
 
   function lessonIsBeOnline(lesson) {
     if (!lesson) return false;
-    var lessonId = String(lesson.id || "");
-    if (!lessonId) return false;
-
-    // Uma conclusão feita nesta sessão tem prioridade absoluta. Isto é especialmente
-    // importante no tutorial: avançar a hora nunca pode fazer o quiz reaparecer.
-    if (sessionCompletedLessonQuizIds.has(lessonId)) return true;
-
-    var quizzes = state.quizzes.filter(function (quiz) {
-      return String(quiz.lessonId || "") === lessonId && asArray(quiz.questions).length;
-    });
+    var lessonId = String(lesson.id);
+    var quizzes = state.quizzes.filter(function (quiz) { return String(quiz.lessonId) === lessonId && asArray(quiz.questions).length; });
     if (!quizzes.length) return false;
     if (asArray(state.meta && state.meta.completedLessonQuizIds).map(String).indexOf(lessonId) >= 0) return true;
     if (lesson.quizCompleted === true || !!lesson.quizCompletedAt || !!lesson.beOnlineCompletedAt) return true;
     if (quizzes.some(quizHasCompletion)) return true;
     return state.tasks.some(function (task) {
-      return String(task.lessonId || "") === lessonId && task.type === "lesson-quiz" &&
-        (task.done === true || task.completedOnce === true || !!task.completedAt);
+      return String(task.lessonId) === lessonId && task.type === "lesson-quiz" && (task.done === true || task.completedOnce === true || !!task.completedAt);
     });
-  }
-
-  function lessonQuizIsPending(lesson) {
-    return !!(lesson && configuredQuizForLesson(lesson.id) && !lessonIsBeOnline(lesson));
   }
 
   function beOnlineStatus() {
@@ -1687,7 +1624,7 @@
       return lessonHasEnded(lesson) && !!configuredQuizForLesson(lesson.id);
     }).forEach(function (lesson) {
       var quiz = configuredQuizForLesson(lesson.id);
-      var task = state.tasks.find(function (item) { return item.type === "lesson-quiz" && String(item.lessonId || "") === String(lesson.id || ""); });
+      var task = state.tasks.find(function (item) { return item.type === "lesson-quiz" && item.lessonId === lesson.id; });
       if (lessonIsBeOnline(lesson)) {
         if (task && !task.done) { task.done = true; changed = true; }
         return;
@@ -1709,20 +1646,19 @@
   function completeLessonBeOnline(lessonId) {
     var lesson = lessonById(lessonId);
     if (!lesson) return;
-    sessionCompletedLessonQuizIds.add(String(lessonId));
     var completedAt = new Date().toISOString();
     lesson.quizCompleted = true;
     state.meta.completedLessonQuizIds = Array.from(new Set(asArray(state.meta.completedLessonQuizIds).concat(String(lessonId))));
     lesson.quizCompletedAt = completedAt;
     lesson.beOnlineCompletedAt = completedAt;
     state.quizzes.forEach(function (quiz) {
-      if (String(quiz.lessonId || "") === String(lessonId || "") && asArray(quiz.questions).length) {
+      if (quiz.lessonId === lessonId && asArray(quiz.questions).length) {
         quiz.completedOnce = true;
         quiz.lastCompletedAt = completedAt;
       }
     });
     state.tasks.forEach(function (task) {
-      if (String(task.lessonId || "") === String(lessonId || "") && task.type === "lesson-quiz") {
+      if (task.lessonId === lessonId && task.type === "lesson-quiz") {
         task.done = true;
         task.completedOnce = true;
         task.completedAt = completedAt;
@@ -1820,16 +1756,20 @@
     var scenarios = homeDebugScenarios(homeDebug.baseDate);
     var nextIndex = clamp(index, 0, scenarios.length - 1);
     var scenario = scenarios[nextIndex];
-
-    // O tutorial é interativo: avançar a hora nunca repõe o template.
-    // Assim, quizzes e TPCs concluídos continuam concluídos nos passos seguintes.
-    if (!homeDebug.stateInitialized) {
-      state = normalizeState(clone(homeDebug.templateState));
-      homeDebug.stateInitialized = true;
-    } else {
-      state = normalizeState(state);
+    state = normalizeState(clone(homeDebug.templateState));
+    if (scenario.id === "homework" || scenario.id === "complete") {
+      state.lessons.forEach(function (lesson, lessonIndex) {
+        lesson.quizCompletedAt = scenario.id === "complete" || lessonIndex < 3 ? scenario.time : "";
+      });
+      state.tasks.forEach(function (task) {
+        if (task.type === "lesson-quiz") task.done = true;
+        if (scenario.id === "complete" && task.type !== "lesson-quiz") task.done = true;
+      });
+      state.quizzes.forEach(function (quiz, quizIndex) {
+        quiz.lastCompletedAt = scenario.time;
+        quiz.lastScore = [90, 80, 85][quizIndex] || 85;
+      });
     }
-
     homeDebug.index = nextIndex;
     homeDebug.now = scenario.time;
     homeDebug.scenario = scenario.id;
@@ -1840,7 +1780,6 @@
 
   function startHomeDebugTutorial() {
     closeModal();
-    sessionCompletedLessonQuizIds.clear();
     var baseDate = new Date();
     homeDebug = {
       active: true,
@@ -1850,8 +1789,7 @@
       baseDate: baseDate.toISOString(),
       index: 0,
       now: "",
-      scenario: "morning",
-      stateInitialized: false
+      scenario: "morning"
     };
     prepareHomeDebugScenario(0);
   }
@@ -1878,7 +1816,6 @@
     if (!homeDebug || !homeDebug.active) return;
     var original = homeDebug.originalState;
     homeDebug = null;
-    sessionCompletedLessonQuizIds.clear();
     state = normalizeState(original || state);
     closeModal();
     route = { name: "settings", id: null, tab: "overview" };
@@ -2037,19 +1974,19 @@
       return task.dueDate === today;
     });
     var overdue = all.filter(function (task) {
-      return task.type === "lesson-quiz" ? !task.done && task.dueDate && task.dueDate < today : !homeworkIsCompleted(task) && task.dueDate && task.dueDate < today;
+      return !task.done && task.dueDate && task.dueDate < today;
     });
     var homeworkDue = todayTasks.filter(function (task) {
       return task.type !== "lesson-quiz";
     });
-    var homeworkPending = homeworkDue.filter(function (task) { return !homeworkIsCompleted(task); });
+    var homeworkPending = homeworkDue.filter(function (task) { return !task.done; });
     return {
       all: all,
       today: todayTasks,
       overdue: overdue,
       homeworkDue: homeworkDue,
       homeworkPending: homeworkPending,
-      homeworkDone: homeworkDue.filter(homeworkIsCompleted)
+      homeworkDone: homeworkDue.filter(function (task) { return task.done; })
     };
   }
 
@@ -2108,7 +2045,7 @@
     });
     var previous = ended.length ? ended[ended.length - 1] : null;
     var pendingChecks = ended.filter(function (block) {
-      return block.lesson && lessonQuizIsPending(block.lesson);
+      return block.lesson && !!configuredQuizForLesson(block.lesson.id) && !lessonIsBeOnline(block.lesson);
     });
     var tasks = homeTaskBuckets(todayISO(now));
     var report = homeDailyReport(blocks, now);
@@ -2141,7 +2078,6 @@
       var elapsed = Math.max(0, minute - current.startMin);
       var remaining = Math.max(0, current.endMin - minute);
       var previousPending = pendingChecks.length ? pendingChecks[pendingChecks.length - 1] : null;
-      if (previousPending && (!previousPending.lesson || !lessonQuizIsPending(previousPending.lesson))) previousPending = null;
       var following = blocks.find(function (block) { return block.startMin >= current.endMin; }) || null;
 
       if (elapsed < 10) {
@@ -2198,21 +2134,6 @@
         return context;
       }
 
-      if (remaining <= 15 && current.lesson && !currentQuiz) {
-        var nextAfterNoQuiz = following && following.startMin - current.endMin <= 10;
-        context.phase = "closing";
-        context.phaseLabel = "A aula está a terminar";
-        context.title = (current.course ? current.course.name : "A aula") + " está quase a terminar.";
-        context.copy = "A aula termina às " + current.end + ". Não existe um Quiz da aula configurado para esta aula." +
-          (nextAfterNoQuiz ? " " + (following.course ? following.course.name : "A próxima aula") + " irá começar em breve." : "");
-        context.icon = "clock-alert";
-        context.stat = homeMinutesCopy(remaining);
-        context.statLabel = "até terminar";
-        context.primary = blockOpenButton(current, "Abrir aula", "button-yellow");
-        if (nextAfterNoQuiz) context.secondary = blockOpenButton(following, "Ver próxima aula", "");
-        return context;
-      }
-
       if (remaining <= 15 && current.lesson && currentQuiz && !currentQuizComplete) {
         var isBackToBack = following && following.startMin - current.endMin <= 10;
         context.phase = "closing";
@@ -2233,7 +2154,7 @@
         context.stat = homeMinutesCopy(remaining);
         context.statLabel = "restantes";
         context.primary = blockOpenButton(current, "Entrar na aula", "button-yellow");
-        if (current.lesson && lessonQuizIsPending(current.lesson)) context.secondary = lessonCheckButton(current.lesson, "Quiz da aula", "");
+        if (current.lesson && configuredQuizForLesson(current.lesson.id) && !lessonIsBeOnline(current.lesson)) context.secondary = lessonCheckButton(current.lesson, "Quiz da aula", "");
       }
       return context;
     }
@@ -2241,7 +2162,6 @@
     if (next) {
       var untilNext = Math.max(0, next.startMin - minute);
       var lastPending = pendingChecks.length ? pendingChecks[pendingChecks.length - 1] : null;
-      if (lastPending && (!lastPending.lesson || !lessonQuizIsPending(lastPending.lesson))) lastPending = null;
       if (untilNext <= 10) {
         context.phase = "soon";
         context.phaseLabel = "Quase a começar";
@@ -3129,8 +3049,7 @@
     var extras = asArray(task.extraTasks).length ? '<div class="homework-extra-list"><p class="card-label">Tarefas adicionais</p>' + task.extraTasks.map(function (item) { return '<article><div><i data-lucide="' + (item.optional ? 'circle-dashed' : 'circle-check-big') + '"></i><strong>' + esc(item.title) + '</strong>' + (item.optional ? '<span class="badge">Opcional</span>' : '') + '</div>' + renderContentBlocks(item.blocks) + '</article>'; }).join("") + '</div>' : '';
     var solution = asArray(task.solutionBlocks).length ? '<details class="homework-solution"><summary>Ver solução / critérios de correção</summary>' + renderContentBlocks(task.solutionBlocks) + '</details>' : '';
     var body = '<div class="view-only-banner"><i data-lucide="lock-keyhole"></i><span><strong>TPC da aula</strong><small>O conteúdo fica em modo de visualização depois de criado.</small></span></div><div class="question-meta"><span class="badge badge-violet">' + esc(task.estimatedMinutes || 30) + ' min</span><span class="badge">' + esc(relativeDate(task.dueDate)) + '</span></div><h3 style="margin:16px 0 8px">' + esc(task.title) + '</h3>' + renderContentBlocks(task.contentBlocks) + checklist + extras + solution;
-    var homeworkComplete = homeworkIsCompleted(task);
-    var footer = '<footer class="modal-foot"><button class="button' + (homeworkComplete ? ' button-dark' : '') + '" type="button" data-action="close-modal">Fechar</button>' + (homeworkComplete ? '' : '<button class="button button-dark" type="button" data-action="start-homework-session" data-task="' + attr(task.id) + '"><i data-lucide="play"></i>Fazer TPC</button>') + '</footer>';
+    var footer = '<footer class="modal-foot"><button class="button' + (task.done ? ' button-dark' : '') + '" type="button" data-action="close-modal">Fechar</button>' + (task.done ? '' : '<button class="button button-dark" type="button" data-action="start-homework-session" data-task="' + attr(task.id) + '"><i data-lucide="play"></i>Fazer TPC</button>') + '</footer>';
     openModal("TPC", body, { className: "modal-wide", footer: footer });
   }
 
@@ -3218,9 +3137,8 @@
     var quizHtml = quiz
       ? '<div class="lesson-configured-card"><span class="list-icon yellow"><i data-lucide="check-check"></i></span><div><strong>' + esc(quiz.title) + '</strong><small>' + asArray(quiz.questions).length + ' perguntas' + (quiz.lastScore != null ? ' · resultado ' + quiz.lastScore + '%' : '') + ' · conteúdo fechado</small></div><div class="list-actions"><button class="button ' + (onlineComplete ? 'button-dark' : 'button') + ' button-small" type="button" data-action="view-lesson-quiz" data-lesson="' + attr(lesson.id) + '"><i data-lucide="eye"></i>Ver</button>' + (onlineComplete ? '' : '<button class="button button-dark button-small" type="button" data-action="start-quiz" data-id="' + attr(quiz.id) + '"><i data-lucide="play"></i>Fazer</button>') + '</div></div>'
       : '<div class="lesson-unconfigured"><span class="metric-icon"><i data-lucide="check-check"></i></span><div><strong>Quiz ainda não configurado</strong><small>Escolhe os slides, copia o prompt para a IA e cola o JSON devolvido.</small></div><button class="button button-dark button-small" type="button" data-action="configure-lesson-content" data-kind="quiz" data-lesson="' + attr(lesson.id) + '"><i data-lucide="wand-sparkles"></i>✅ Configurar quiz</button></div>';
-    var homeworkComplete = homework ? homeworkIsCompleted(homework) : false;
     var homeworkHtml = homework
-      ? '<div class="lesson-configured-card"><span class="list-icon orange"><i data-lucide="notebook-pen"></i></span><div><strong>' + esc(homework.title) + '</strong><small>' + (homework.estimatedMinutes || 30) + ' min · ' + (homeworkComplete ? 'concluído' : 'por fazer') + ' · conteúdo fechado</small></div><div class="list-actions"><button class="button ' + (homeworkComplete ? 'button-dark' : 'button') + ' button-small" type="button" data-action="view-lesson-homework" data-id="' + attr(homework.id) + '"><i data-lucide="eye"></i>Ver</button>' + (homeworkComplete ? '' : '<button class="button button-dark button-small" type="button" data-action="start-homework-session" data-task="' + attr(homework.id) + '"><i data-lucide="play"></i>Fazer</button>') + '</div></div>'
+      ? '<div class="lesson-configured-card"><span class="list-icon orange"><i data-lucide="notebook-pen"></i></span><div><strong>' + esc(homework.title) + '</strong><small>' + (homework.estimatedMinutes || 30) + ' min · ' + (homework.done ? 'concluído' : 'por fazer') + ' · conteúdo fechado</small></div><div class="list-actions"><button class="button ' + (homework.done ? 'button-dark' : 'button') + ' button-small" type="button" data-action="view-lesson-homework" data-id="' + attr(homework.id) + '"><i data-lucide="eye"></i>Ver</button>' + (homework.done ? '' : '<button class="button button-dark button-small" type="button" data-action="start-homework-session" data-task="' + attr(homework.id) + '"><i data-lucide="play"></i>Fazer</button>') + '</div></div>'
       : '<div class="lesson-unconfigured"><span class="metric-icon"><i data-lucide="notebook-pen"></i></span><div><strong>TPC ainda não configurado</strong><small>O TPC é separado do quiz e pensado para fazer em casa.</small></div><button class="button button-dark button-small" type="button" data-action="configure-lesson-content" data-kind="homework" data-lesson="' + attr(lesson.id) + '"><i data-lucide="wand-sparkles"></i>✅ Configurar TPC</button></div>';
     var quizStatusCard = onlineComplete ? '' : '<article class="card span-12 beonline-lesson-card"><div class="beonline-lesson-copy"><span class="badge ' + (quiz && lessonEnded ? 'badge-danger' : 'badge-violet') + '">' + (quiz && lessonEnded ? 'Quiz pendente' : quiz ? 'Quiz preparado' : 'Sem quiz') + '</span><h3>Quiz da aula</h3><p>' + esc(quiz && lessonEnded ? 'O quiz está pronto para fazer.' : quiz ? 'Quando a aula estiver a terminar, a Home pode sugerir este quiz.' : 'O quiz só aparece na Home depois de o configurares.') + '</p></div></article>';
     return '<div class="page-head"><div><button class="button button-ghost button-small" type="button" data-route="course" data-id="' + attr(lesson.courseId) + '"><i data-lucide="arrow-left"></i>' + esc(course ? course.code || course.name : "Cadeira") + '</button><h2 style="margin-top:11px">' + esc(lesson.title) + '</h2><p>' + formatLongDate(lesson.date) + (lesson.start ? ' · ' + esc(lesson.start) + '–' + esc(lesson.end || '') : '') + ' · ' + esc(lessonTypeLabel(lesson.type)) + (lesson.room ? ' · ' + esc(lesson.room) : '') + '</p></div><div class="page-actions">' + (!archived ? '<button class="button" type="button" data-action="edit-lesson" data-id="' + attr(lesson.id) + '"><i data-lucide="pencil"></i>Editar aula</button><button class="button ' + (lesson.mastered ? 'button-yellow' : 'button-dark') + '" type="button" data-action="toggle-mastery" data-id="' + attr(lesson.id) + '"><i data-lucide="badge-check"></i>' + (lesson.mastered ? 'Dominada' : 'Marcar dominada') + '</button>' : '') + '</div></div><div class="bento-grid"><article class="card course-hero span-12" style="--course-color:' + safeColor(course && course.color) + ';min-height:220px"><div class="course-hero-copy"><span class="badge badge-dark">' + esc(lesson.type || 'Aula') + '</span><h2>' + esc(lesson.title) + '</h2><p>' + esc(lesson.topics || 'Adiciona os tópicos dados nesta aula.') + '</p></div><div class="course-score"><strong>' + (lesson.mastered ? '✓' : questions.length) + '</strong><span>' + (lesson.mastered ? 'matéria dominada' : 'perguntas antigas') + '</span></div></article>' + quizStatusCard + '<article class="card span-12"><div class="card-title-row"><div><h3>Slides e PDFs</h3><p class="card-subtitle">Os ficheiros são enviados para o Git e ficam disponíveis nos teus dispositivos.</p></div>' + (!archived ? '<button class="button button-small" type="button" data-action="add-material" data-course="' + attr(lesson.courseId) + '" data-lesson="' + attr(lesson.id) + '"><i data-lucide="file-up"></i>Carregar</button>' : '') + '</div><div style="margin-top:15px">' + materialsHtml + '</div></article><article class="card span-7"><div class="card-title-row"><div><h3>Perguntas de anos anteriores</h3></div><div class="list-actions">' + (!archived ? '<button class="button button-small" type="button" data-action="add-question" data-course="' + attr(lesson.courseId) + '" data-lesson="' + attr(lesson.id) + '"><i data-lucide="plus"></i>Pergunta</button>' : '') + '</div></div><div style="margin-top:15px">' + questionsHtml + '</div></article><article class="card span-5 lesson-config-card"><div class="card-title-row"><div><h3>✅ Quiz da aula</h3><p class="card-subtitle">Um por aula. Depois de criado, fica em visualização.</p></div></div>' + quizHtml + '</article><article class="card span-12 lesson-config-card"><div class="card-title-row"><div><h3>✅ TPC da aula</h3><p class="card-subtitle">Aplicação e prática para fazer em casa, separada do quiz.</p></div></div>' + homeworkHtml + '</article><article class="card span-12 notebook-card"><div class="card-title-row"><div><h3>Apontamentos</h3><p class="card-subtitle">Escreve como num caderno ou gera conteúdo com um prompt estruturado.</p></div><div class="list-actions">' + (!archived ? '<button class="button button-small" type="button" data-action="configure-lesson-content" data-kind="notes" data-lesson="' + attr(lesson.id) + '"><i data-lucide="wand-sparkles"></i>Gerar por prompt</button><button class="button button-dark button-small" type="button" data-action="open-notebook-editor" data-lesson="' + attr(lesson.id) + '"><i data-lucide="pencil"></i>Escrever</button>' : '') + '</div></div><div style="margin-top:15px">' + renderNotebookPage(lesson, false) + '</div><div class="notebook-meta"><span><i data-lucide="notebook"></i>' + esc(notebookPaperLabel(lesson.notesPaper)) + '</span><button class="button button-small" type="button" data-action="course-tab" data-id="' + attr(lesson.courseId) + '" data-tab="notebook"><i data-lucide="library-big"></i>Ver caderno da cadeira</button></div></article></div>';
@@ -3560,21 +3478,13 @@
     return !!task && (task.type === "homework" || task.type === "tpc");
   }
 
-  function homeworkIsCompleted(task) {
-    if (!task) return false;
-    if (task.done === true || task.completedOnce === true || !!task.completedAt) return true;
-    if (asArray(state.meta && state.meta.completedHomeworkIds).map(String).indexOf(String(task.id)) >= 0) return true;
-    var lessonId = task.lessonId != null && task.lessonId !== "" ? String(task.lessonId) : "";
-    return !!(lessonId && asArray(state.meta && state.meta.completedHomeworkLessonIds).map(String).indexOf(lessonId) >= 0);
-  }
-
   function homeworkSessionTasks() {
     var today = todayISO(activeHomeNow());
     var all = semesterItems("tasks").filter(isHomeworkTask).slice().sort(function (a, b) {
-      return Number(homeworkIsCompleted(a)) - Number(homeworkIsCompleted(b)) || String(a.dueDate || "9999").localeCompare(String(b.dueDate || "9999")) || String((courseById(a.courseId) || {}).name || "").localeCompare(String((courseById(b.courseId) || {}).name || ""));
+      return Number(a.done) - Number(b.done) || String(a.dueDate || "9999").localeCompare(String(b.dueDate || "9999")) || String((courseById(a.courseId) || {}).name || "").localeCompare(String((courseById(b.courseId) || {}).name || ""));
     });
     var relevant = all.filter(function (task) {
-      return !homeworkIsCompleted(task) || String(task.completedAt || "").slice(0, 10) === today;
+      return !task.done || String(task.completedAt || "").slice(0, 10) === today;
     });
     return relevant;
   }
@@ -3596,7 +3506,7 @@
 
   function setHomeworkCurrent(taskId, autoStart) {
     var tasks = homeworkSessionTasks();
-    var task = tasks.find(function (item) { return item.id === taskId && !homeworkIsCompleted(item); }) || tasks.find(function (item) { return !homeworkIsCompleted(item); }) || null;
+    var task = tasks.find(function (item) { return item.id === taskId && !item.done; }) || tasks.find(function (item) { return !item.done; }) || null;
     if (!homeworkSessionRuntime) homeworkSessionRuntime = { taskId: null, elapsedByTask: {}, startedAt: null, running: false, complete: false };
     storeHomeworkElapsed();
     homeworkSessionRuntime.taskId = task ? task.id : null;
@@ -3607,12 +3517,7 @@
   }
 
   function startHomeworkSession(taskId) {
-    var selected = taskId ? state.tasks.find(function (task) { return task.id === taskId; }) : null;
-    if (selected && homeworkIsCompleted(selected)) {
-      viewLessonHomework(selected.id);
-      return;
-    }
-    if (!homeworkSessionTasks().some(function (task) { return !homeworkIsCompleted(task); })) {
+    if (!homeworkSessionTasks().some(function (task) { return !task.done; })) {
       homeworkSessionRuntime = { taskId: null, elapsedByTask: {}, startedAt: null, running: false, complete: true };
     } else {
       homeworkSessionRuntime = { taskId: null, elapsedByTask: {}, startedAt: null, running: false, complete: false };
@@ -3653,9 +3558,8 @@
   function renderHomeworkChecklist(tasks, activeId) {
     return tasks.map(function (task, index) {
       var course = courseById(task.courseId);
-      var completed = homeworkIsCompleted(task);
-      var status = completed ? '<i data-lucide="check"></i>' : index + 1;
-      return '<button class="homework-queue-item ' + (completed ? 'is-done' : '') + ' ' + (task.id === activeId ? 'is-active' : '') + '" type="button" data-action="homework-select" data-id="' + attr(task.id) + '" ' + (completed ? 'disabled' : '') + '><span class="homework-queue-check">' + status + '</span><span><strong>' + esc(course ? course.name : 'TPC') + '</strong><small>' + esc(task.title) + ' · ' + esc(task.estimatedMinutes || 30) + ' min</small></span></button>';
+      var status = task.done ? '<i data-lucide="check"></i>' : index + 1;
+      return '<button class="homework-queue-item ' + (task.done ? 'is-done' : '') + ' ' + (task.id === activeId ? 'is-active' : '') + '" type="button" data-action="homework-select" data-id="' + attr(task.id) + '" ' + (task.done ? 'disabled' : '') + '><span class="homework-queue-check">' + status + '</span><span><strong>' + esc(course ? course.name : 'TPC') + '</strong><small>' + esc(task.title) + ' · ' + esc(task.estimatedMinutes || 30) + ' min</small></span></button>';
     }).join("");
   }
 
@@ -3679,7 +3583,7 @@
       homeworkSessionRuntime = { taskId: null, elapsedByTask: {}, startedAt: null, running: false, complete: false };
       setHomeworkCurrent("", true);
     }
-    var pending = tasks.filter(function (task) { return !homeworkIsCompleted(task); });
+    var pending = tasks.filter(function (task) { return !task.done; });
     if (!pending.length || homeworkSessionRuntime.complete) return renderHomeworkComplete(tasks);
     var current = pending.find(function (task) { return task.id === homeworkSessionRuntime.taskId; }) || setHomeworkCurrent(pending[0].id, true);
     var course = courseById(current.courseId);
@@ -3695,19 +3599,12 @@
     storeHomeworkElapsed();
     var task = state.tasks.find(function (item) { return item.id === homeworkSessionRuntime.taskId; });
     if (!task) return;
-    var completedAt = new Date().toISOString();
-    var lessonKey = task.lessonId != null && task.lessonId !== "" ? String(task.lessonId) : "";
-    state.tasks.forEach(function (candidate) {
-      var sameHomework = candidate.id === task.id || (lessonKey && String(candidate.lessonId || "") === lessonKey && (candidate.type === "homework" || candidate.type === "tpc"));
-      if (!sameHomework) return;
-      candidate.done = true;
-      candidate.completedOnce = true;
-      candidate.completedAt = candidate.completedAt || completedAt;
-      state.meta.completedHomeworkIds = Array.from(new Set(asArray(state.meta.completedHomeworkIds).concat(String(candidate.id))));
-    });
-    if (lessonKey) state.meta.completedHomeworkLessonIds = Array.from(new Set(asArray(state.meta.completedHomeworkLessonIds).concat(lessonKey)));
+    task.done = true;
+    task.completedOnce = true;
+    state.meta.completedHomeworkIds = Array.from(new Set(asArray(state.meta.completedHomeworkIds).concat(String(task.id))));
+    task.completedAt = new Date().toISOString();
     task.actualSeconds = Number(homeworkSessionRuntime.elapsedByTask[task.id] || 0);
-    var next = homeworkSessionTasks().find(function (item) { return !homeworkIsCompleted(item); });
+    var next = homeworkSessionTasks().find(function (item) { return !item.done; });
     if (next) {
       setHomeworkCurrent(next.id, true);
       await save(true);
@@ -5902,10 +5799,7 @@
       correct: correct,
       total: questions.length
     }).slice(-10);
-    if (quiz.lessonId) {
-      sessionCompletedLessonQuizIds.add(String(quiz.lessonId));
-      completeLessonBeOnline(quiz.lessonId);
-    }
+    if (quiz.lessonId) completeLessonBeOnline(quiz.lessonId);
     ensureBeOnlineTasks();
     await save(true);
     quizRuntime = null;
@@ -6553,7 +6447,7 @@
       if (task && task.type === "lesson-quiz") {
         await doLessonQuiz(task.lessonId || "");
       } else if (task && (task.type === "homework" || task.type === "tpc") && (task.lockedContent || task.configuredFromPrompt)) {
-        if (homeworkIsCompleted(task)) {
+        if (task.done || task.completedOnce) {
           viewLessonHomework(task.id);
         } else {
           closeModal();

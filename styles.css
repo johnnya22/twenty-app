@@ -1984,10 +1984,9 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
   font-weight: 700;
 }
 .phase-settling {
-  color: #fff;
   background:
-    radial-gradient(circle at 84% 22%, rgba(255, 211, 102, .16), transparent 28%),
-    linear-gradient(135deg, #171825 0%, #34304a 52%, #5d527f 100%);
+    radial-gradient(circle at 84% 22%, rgba(255, 236, 156, .38), transparent 28%),
+    linear-gradient(135deg, rgba(234, 229, 255, .98), rgba(255, 251, 235, .96));
 }
 .phase-starting {
   background:
@@ -2296,19 +2295,12 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 
 /* Twenty v24 · polimento de aula, caderno e Home */
 .school-now-card.phase-settling {
-  color: #fff !important;
+  color: #fff;
   background:
-    radial-gradient(circle at 84% 22%, rgba(255, 211, 102, .16), transparent 27%),
-    linear-gradient(135deg, #151621 0%, #302c45 54%, #584c79 100%) !important;
-  border-color: rgba(255,255,255,.22);
+    radial-gradient(circle at 84% 22%, rgba(255, 226, 124, .22), transparent 27%),
+    linear-gradient(135deg, #242434 0%, #4b4666 56%, #7566b3 100%);
 }
-.school-now-card.phase-settling .school-now-copy > p,
-.school-now-card.phase-settling .school-now-status small,
-.school-now-card.phase-settling .school-now-kicker { color: rgba(255,255,255,.88) !important; }
-.school-now-card.phase-settling .school-now-status {
-  background: rgba(10, 11, 20, .25);
-  border-color: rgba(255,255,255,.18);
-}
+.school-now-card.phase-settling .school-now-copy > p { color: rgba(255,255,255,.82); }
 .daily-report-card { scroll-margin-block: 120px; transition: box-shadow .25s ease, transform .25s ease; }
 .daily-report-card.is-highlighted { transform: translateY(-3px); box-shadow: 0 0 0 5px rgba(132,118,243,.16), var(--shadow); }
 .notebook-editor blockquote { min-height: 1.5em; }
