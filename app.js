@@ -1569,14 +1569,27 @@
     }) || null;
   }
 
+  function quizHasCompletion(quiz) {
+    if (!quiz) return false;
+    if (quiz.completedOnce === true || !!quiz.lastCompletedAt) return true;
+    if (quiz.lastScore !== null && quiz.lastScore !== undefined && quiz.lastScore !== "") return true;
+    if (Number(quiz.attemptCount || 0) > 0) return true;
+    return asArray(quiz.attempts).some(function (attempt) {
+      return !!(attempt && (attempt.completedAt || attempt.done || attempt.score !== null && attempt.score !== undefined));
+    });
+  }
+
   function lessonIsBeOnline(lesson) {
     if (!lesson) return false;
-    var quizzes = state.quizzes.filter(function (quiz) { return quiz.lessonId === lesson.id && asArray(quiz.questions).length; });
+    var lessonId = String(lesson.id);
+    var quizzes = state.quizzes.filter(function (quiz) { return String(quiz.lessonId) === lessonId && asArray(quiz.questions).length; });
     if (!quizzes.length) return false;
-    if (asArray(state.meta && state.meta.completedLessonQuizIds).indexOf(String(lesson.id)) >= 0) return true;
-    if (lesson.quizCompleted || lesson.quizCompletedAt || lesson.beOnlineCompletedAt) return true;
-    if (quizzes.some(function (quiz) { return !!quiz.completedOnce || quiz.lastScore != null || !!quiz.lastCompletedAt; })) return true;
-    return state.tasks.some(function (task) { return task.lessonId === lesson.id && task.type === "lesson-quiz" && (task.done || task.completedOnce); });
+    if (asArray(state.meta && state.meta.completedLessonQuizIds).map(String).indexOf(lessonId) >= 0) return true;
+    if (lesson.quizCompleted === true || !!lesson.quizCompletedAt || !!lesson.beOnlineCompletedAt) return true;
+    if (quizzes.some(quizHasCompletion)) return true;
+    return state.tasks.some(function (task) {
+      return String(task.lessonId) === lessonId && task.type === "lesson-quiz" && (task.done === true || task.completedOnce === true || !!task.completedAt);
+    });
   }
 
   function beOnlineStatus() {
@@ -1937,7 +1950,7 @@
   }
 
   function lessonCheckButton(lesson, label, className) {
-    if (!lesson) return "";
+    if (!lesson || lessonIsBeOnline(lesson)) return "";
     var quiz = configuredQuizForLesson(lesson.id);
     if (!quiz) return "";
     return '<button class="button ' + (className || "button-dark") + '" type="button" data-action="start-quiz" data-id="' + attr(quiz.id) + '"><i data-lucide="check-check"></i>' + esc(label || "Fazer quiz") + "</button>";
@@ -2091,7 +2104,37 @@
         return context;
       }
 
-      if (remaining <= 15 && current.lesson && configuredQuizForLesson(current.lesson.id) && !lessonIsBeOnline(current.lesson)) {
+      var currentQuiz = current.lesson ? configuredQuizForLesson(current.lesson.id) : null;
+      var currentQuizComplete = current.lesson ? lessonIsBeOnline(current.lesson) : false;
+
+      if (remaining <= 15 && current.lesson && currentQuiz && currentQuizComplete) {
+        var nextIsClose = following && following.startMin - current.endMin <= 10;
+        if (nextIsClose) {
+          context.phase = "soon";
+          context.phaseLabel = "Próxima aula";
+          context.title = (following.course ? following.course.name : "A próxima aula") + " irá começar em breve.";
+          context.copy = (following.lesson ? following.lesson.title + " · " : "") + following.start + "–" + following.end + (following.room ? " · " + following.room : "") + ".";
+          context.icon = "arrow-right-circle";
+          context.stat = following.start;
+          context.statLabel = "começa";
+          context.primary = blockOpenButton(following, following.lesson ? "Preparar próxima aula" : "Preparar aula", "button-yellow");
+          context.secondary = blockOpenButton(current, "Ver aula atual", "");
+        } else {
+          context.phase = "closing";
+          context.phaseLabel = "A aula está a terminar";
+          context.title = (current.course ? current.course.name : "A aula") + " está quase a terminar.";
+          context.copy = following
+            ? "A próxima aula começa às " + following.start + "."
+            : "Guarda os materiais e fecha a aula com calma.";
+          context.icon = "book-open-check";
+          context.stat = homeMinutesCopy(remaining);
+          context.statLabel = "até terminar";
+          context.primary = following ? blockOpenButton(following, "Ver próxima aula", "button-yellow") : blockOpenButton(current, "Ver aula", "button-yellow");
+        }
+        return context;
+      }
+
+      if (remaining <= 15 && current.lesson && currentQuiz && !currentQuizComplete) {
         var isBackToBack = following && following.startMin - current.endMin <= 10;
         context.phase = "closing";
         context.phaseLabel = "A aula está a terminar";
@@ -5749,6 +5792,13 @@
     quiz.lastScore = score;
     quiz.completedOnce = true;
     quiz.lastCompletedAt = new Date().toISOString();
+    quiz.attemptCount = Number(quiz.attemptCount || 0) + 1;
+    quiz.attempts = asArray(quiz.attempts).concat({
+      completedAt: quiz.lastCompletedAt,
+      score: score,
+      correct: correct,
+      total: questions.length
+    }).slice(-10);
     if (quiz.lessonId) completeLessonBeOnline(quiz.lessonId);
     ensureBeOnlineTasks();
     await save(true);

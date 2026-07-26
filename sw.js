@@ -1,16 +1,16 @@
 "use strict";
 
-var CACHE = "twenty-study-os-v24-polish";
+var CACHE = "twenty-study-os-v24-1-home-state";
 var APP_SHELL = [
   "./",
   "./index.html",
-  "./styles.css?v=24-polish",
-  "./sync.js?v=24-polish",
-  "./db.js?v=24-polish",
-  "./ai.js?v=24-polish",
-  "./ai-worker.js?v=24-polish",
-  "./app.js?v=24-polish",
-  "./lucide.min.js?v=24-polish",
+  "./styles.css?v=24-1-home-state",
+  "./sync.js?v=24-1-home-state",
+  "./db.js?v=24-1-home-state",
+  "./ai.js?v=24-1-home-state",
+  "./ai-worker.js?v=24-1-home-state",
+  "./app.js?v=24-1-home-state",
+  "./lucide.min.js?v=24-1-home-state",
   "./manifest.webmanifest",
   "./icon.svg",
   "./icon-192.png",
