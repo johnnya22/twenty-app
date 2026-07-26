@@ -1,16 +1,16 @@
 "use strict";
 
-var CACHE = "twenty-study-os-v24-1-home-state";
+var CACHE = "twenty-study-os-v24-2-state-lock";
 var APP_SHELL = [
   "./",
   "./index.html",
-  "./styles.css?v=24-1-home-state",
-  "./sync.js?v=24-1-home-state",
-  "./db.js?v=24-1-home-state",
-  "./ai.js?v=24-1-home-state",
-  "./ai-worker.js?v=24-1-home-state",
-  "./app.js?v=24-1-home-state",
-  "./lucide.min.js?v=24-1-home-state",
+  "./styles.css?v=24-2-state-lock",
+  "./sync.js?v=24-2-state-lock",
+  "./db.js?v=24-2-state-lock",
+  "./ai.js?v=24-2-state-lock",
+  "./ai-worker.js?v=24-2-state-lock",
+  "./app.js?v=24-2-state-lock",
+  "./lucide.min.js?v=24-2-state-lock",
   "./manifest.webmanifest",
   "./icon.svg",
   "./icon-192.png",
