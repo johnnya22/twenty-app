@@ -50,6 +50,9 @@
   var homeworkClockTimer = null;
   var homeworkSessionRuntime = null;
   var homeDebug = null;
+  // Guarda conclusões da sessão imediatamente, incluindo durante o tutorial/debug.
+  // É uma proteção extra contra normalizações ou estados antigos voltarem a marcar o quiz como pendente.
+  var sessionCompletedLessonQuizIds = new Set();
   var COLORS = ["#a99df7", "#ff92ae", "#ffad72", "#79cdb8", "#80bee8", "#f3e873", "#cab6ea", "#87d7df"];
   var WEEKDAYS = ["Domingo", "Segunda", "Terça", "Quarta", "Quinta", "Sexta", "Sábado"];
   var SHORT_WEEKDAYS = ["Dom", "Seg", "Ter", "Qua", "Qui", "Sex", "Sáb"];
@@ -1628,14 +1631,23 @@
 
   function lessonIsBeOnline(lesson) {
     if (!lesson) return false;
-    var lessonId = String(lesson.id);
-    var quizzes = state.quizzes.filter(function (quiz) { return String(quiz.lessonId) === lessonId && asArray(quiz.questions).length; });
+    var lessonId = String(lesson.id || "");
+    if (!lessonId) return false;
+
+    // Uma conclusão feita nesta sessão tem prioridade absoluta. Isto é especialmente
+    // importante no tutorial: avançar a hora nunca pode fazer o quiz reaparecer.
+    if (sessionCompletedLessonQuizIds.has(lessonId)) return true;
+
+    var quizzes = state.quizzes.filter(function (quiz) {
+      return String(quiz.lessonId || "") === lessonId && asArray(quiz.questions).length;
+    });
     if (!quizzes.length) return false;
     if (asArray(state.meta && state.meta.completedLessonQuizIds).map(String).indexOf(lessonId) >= 0) return true;
     if (lesson.quizCompleted === true || !!lesson.quizCompletedAt || !!lesson.beOnlineCompletedAt) return true;
     if (quizzes.some(quizHasCompletion)) return true;
     return state.tasks.some(function (task) {
-      return String(task.lessonId) === lessonId && task.type === "lesson-quiz" && (task.done === true || task.completedOnce === true || !!task.completedAt);
+      return String(task.lessonId || "") === lessonId && task.type === "lesson-quiz" &&
+        (task.done === true || task.completedOnce === true || !!task.completedAt);
     });
   }
 
@@ -1697,6 +1709,7 @@
   function completeLessonBeOnline(lessonId) {
     var lesson = lessonById(lessonId);
     if (!lesson) return;
+    sessionCompletedLessonQuizIds.add(String(lessonId));
     var completedAt = new Date().toISOString();
     lesson.quizCompleted = true;
     state.meta.completedLessonQuizIds = Array.from(new Set(asArray(state.meta.completedLessonQuizIds).concat(String(lessonId))));
@@ -1827,6 +1840,7 @@
 
   function startHomeDebugTutorial() {
     closeModal();
+    sessionCompletedLessonQuizIds.clear();
     var baseDate = new Date();
     homeDebug = {
       active: true,
@@ -1864,6 +1878,7 @@
     if (!homeDebug || !homeDebug.active) return;
     var original = homeDebug.originalState;
     homeDebug = null;
+    sessionCompletedLessonQuizIds.clear();
     state = normalizeState(original || state);
     closeModal();
     route = { name: "settings", id: null, tab: "overview" };
@@ -2126,6 +2141,7 @@
       var elapsed = Math.max(0, minute - current.startMin);
       var remaining = Math.max(0, current.endMin - minute);
       var previousPending = pendingChecks.length ? pendingChecks[pendingChecks.length - 1] : null;
+      if (previousPending && (!previousPending.lesson || !lessonQuizIsPending(previousPending.lesson))) previousPending = null;
       var following = blocks.find(function (block) { return block.startMin >= current.endMin; }) || null;
 
       if (elapsed < 10) {
@@ -2182,6 +2198,21 @@
         return context;
       }
 
+      if (remaining <= 15 && current.lesson && !currentQuiz) {
+        var nextAfterNoQuiz = following && following.startMin - current.endMin <= 10;
+        context.phase = "closing";
+        context.phaseLabel = "A aula está a terminar";
+        context.title = (current.course ? current.course.name : "A aula") + " está quase a terminar.";
+        context.copy = "A aula termina às " + current.end + ". Não existe um Quiz da aula configurado para esta aula." +
+          (nextAfterNoQuiz ? " " + (following.course ? following.course.name : "A próxima aula") + " irá começar em breve." : "");
+        context.icon = "clock-alert";
+        context.stat = homeMinutesCopy(remaining);
+        context.statLabel = "até terminar";
+        context.primary = blockOpenButton(current, "Abrir aula", "button-yellow");
+        if (nextAfterNoQuiz) context.secondary = blockOpenButton(following, "Ver próxima aula", "");
+        return context;
+      }
+
       if (remaining <= 15 && current.lesson && currentQuiz && !currentQuizComplete) {
         var isBackToBack = following && following.startMin - current.endMin <= 10;
         context.phase = "closing";
@@ -2210,6 +2241,7 @@
     if (next) {
       var untilNext = Math.max(0, next.startMin - minute);
       var lastPending = pendingChecks.length ? pendingChecks[pendingChecks.length - 1] : null;
+      if (lastPending && (!lastPending.lesson || !lessonQuizIsPending(lastPending.lesson))) lastPending = null;
       if (untilNext <= 10) {
         context.phase = "soon";
         context.phaseLabel = "Quase a começar";
@@ -5870,7 +5902,10 @@
       correct: correct,
       total: questions.length
     }).slice(-10);
-    if (quiz.lessonId) completeLessonBeOnline(quiz.lessonId);
+    if (quiz.lessonId) {
+      sessionCompletedLessonQuizIds.add(String(quiz.lessonId));
+      completeLessonBeOnline(quiz.lessonId);
+    }
     ensureBeOnlineTasks();
     await save(true);
     quizRuntime = null;
