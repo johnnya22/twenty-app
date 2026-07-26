@@ -28,6 +28,7 @@
   var calendarCursor = todayISO();
   var guidedTour = null;
   var activeImageObjectUrls = [];
+  var draggedNotebookSticker = null;
   var draggedStudyPayload = null;
   var aiDraft = null;
   var aiBusy = false;
@@ -46,6 +47,8 @@
   var canteenSelectedDate = null;
   var canteenClockTimer = null;
   var homeClockTimer = null;
+  var homeworkClockTimer = null;
+  var homeworkSessionRuntime = null;
   var homeDebug = null;
   var COLORS = ["#a99df7", "#ff92ae", "#ffad72", "#79cdb8", "#80bee8", "#f3e873", "#cab6ea", "#87d7df"];
   var WEEKDAYS = ["Domingo", "Segunda", "Terça", "Quarta", "Quinta", "Sexta", "Sábado"];
@@ -206,7 +209,7 @@
         }
         Array.from(node.attributes).forEach(function (attribute) {
           var name = attribute.name.toLowerCase();
-          var keep = name === "class" || name === "contenteditable" || name.indexOf("data-") === 0 || (node.nodeName === "A" && name === "href");
+          var keep = name === "class" || name === "contenteditable" || name === "draggable" || name.indexOf("data-") === 0 || (node.nodeName === "A" && name === "href") || (node.nodeName === "IMG" && ["src", "alt", "width", "height"].indexOf(name) >= 0);
           if (!keep || /^on/.test(name)) node.removeAttribute(attribute.name);
         });
         if (node.nodeName === "A") {
@@ -215,8 +218,16 @@
           else node.removeAttribute("href");
         }
         if (node.nodeName === "IMG") {
-          var imageSrc = safeResourceUrl(node.getAttribute("src") || "");
-          if (imageSrc) node.setAttribute("src", imageSrc); else node.remove();
+          var remotePath = node.getAttribute("data-remote-path") || "";
+          var localImageId = node.getAttribute("data-local-image-id") || "";
+          var imageSrc = safeNotebookImageUrl(node.getAttribute("src") || "");
+          if (imageSrc) node.setAttribute("src", imageSrc);
+          else node.removeAttribute("src");
+          if (!imageSrc && !remotePath && !localImageId) { node.remove(); return; }
+          var imageWidth = clamp(node.getAttribute("data-width") || node.getAttribute("width") || 280, 80, 720);
+          node.setAttribute("width", String(imageWidth));
+          node.setAttribute("data-width", String(imageWidth));
+          node.removeAttribute("height");
           node.setAttribute("alt", node.getAttribute("alt") || "Imagem dos apontamentos");
         }
       });
@@ -224,6 +235,228 @@
     } catch (_) {
       return '<p>' + nl2br(String(value || "")) + '</p>';
     }
+  }
+
+
+  function notebookStickerMarkup(options) {
+    options = options || {};
+    var width = clamp(options.width || 280, 80, 720);
+    var align = ["left", "center", "right"].indexOf(options.align) >= 0 ? options.align : "center";
+    var imageAttributes = 'width="' + width + '" data-width="' + width + '" alt="' + attr(options.alt || options.name || "Imagem dos apontamentos") + '"';
+    if (options.src) imageAttributes += ' src="' + attr(options.src) + '"';
+    if (options.remote && options.remote.path) {
+      imageAttributes += ' data-remote-path="' + attr(options.remote.path) + '" data-remote-name="' + attr(options.remote.name || options.name || "imagem") + '"';
+    }
+    if (options.localImageId) imageAttributes += ' data-local-image-id="' + attr(options.localImageId) + '"';
+    return '<figure class="notebook-sticker align-' + align + '" contenteditable="false" draggable="true" data-width="' + width + '"><img ' + imageAttributes + '>' + (options.caption ? '<figcaption>' + esc(options.caption) + '</figcaption>' : '') + '</figure><p><br></p>';
+  }
+
+  function preparePastedNotebookHTML(value) {
+    var safe = sanitizeNotebookHTML(value || "");
+    var doc = new DOMParser().parseFromString('<div id="pasteRoot">' + safe + '</div>', "text/html");
+    var root = doc.getElementById("pasteRoot");
+    Array.from(root.querySelectorAll("img")).forEach(function (image) {
+      var existing = image.closest(".notebook-sticker");
+      var width = clamp(image.getAttribute("width") || image.getAttribute("data-width") || 280, 80, 720);
+      image.setAttribute("width", String(width));
+      image.setAttribute("data-width", String(width));
+      image.removeAttribute("height");
+      if (existing) {
+        existing.setAttribute("contenteditable", "false");
+        existing.setAttribute("draggable", "true");
+        existing.setAttribute("data-width", String(width));
+        return;
+      }
+      var figure = doc.createElement("figure");
+      figure.className = "notebook-sticker align-center";
+      figure.setAttribute("contenteditable", "false");
+      figure.setAttribute("draggable", "true");
+      figure.setAttribute("data-width", String(width));
+      image.parentNode.insertBefore(figure, image);
+      figure.appendChild(image);
+    });
+    return root.innerHTML;
+  }
+
+  function notebookEditorRange(editor) {
+    var selection = window.getSelection();
+    if (!selection || !selection.rangeCount) return null;
+    var range = selection.getRangeAt(0);
+    if (!editor.contains(range.commonAncestorContainer)) return null;
+    return range.cloneRange();
+  }
+
+  function insertNotebookHTML(editor, html, savedRange) {
+    if (!editor || !html) return;
+    editor.focus();
+    var selection = window.getSelection();
+    var range = savedRange;
+    if (!range || !editor.contains(range.commonAncestorContainer)) {
+      range = document.createRange();
+      range.selectNodeContents(editor);
+      range.collapse(false);
+    }
+    selection.removeAllRanges();
+    selection.addRange(range);
+    if (!document.execCommand("insertHTML", false, html)) {
+      var fragment = range.createContextualFragment(html);
+      range.deleteContents();
+      range.insertNode(fragment);
+      range.collapse(false);
+      selection.removeAllRanges();
+      selection.addRange(range);
+    }
+    enhanceNotebookStickers(editor);
+    hydrateLocalImages(editor);
+    hydrateNotebookImages(editor);
+  }
+
+  function enhanceNotebookStickers(root) {
+    if (!root) return;
+    Array.from(root.querySelectorAll(".notebook-sticker")).forEach(function (sticker) {
+      sticker.setAttribute("contenteditable", "false");
+      sticker.setAttribute("draggable", "true");
+      var image = sticker.querySelector("img");
+      var width = clamp(sticker.getAttribute("data-width") || (image && (image.getAttribute("data-width") || image.getAttribute("width"))) || 280, 80, 720);
+      sticker.setAttribute("data-width", String(width));
+      if (image) { image.setAttribute("width", String(width)); image.setAttribute("data-width", String(width)); }
+      if (!sticker.querySelector(".notebook-sticker-controls")) {
+        sticker.insertAdjacentHTML("beforeend", '<span class="notebook-sticker-controls" contenteditable="false"><button type="button" data-action="notebook-sticker-smaller" title="Diminuir"><i data-lucide="minus"></i></button><button type="button" data-action="notebook-sticker-larger" title="Aumentar"><i data-lucide="plus"></i></button><button type="button" data-action="notebook-sticker-align" data-align="left" title="Alinhar à esquerda"><i data-lucide="align-left"></i></button><button type="button" data-action="notebook-sticker-align" data-align="center" title="Centrar"><i data-lucide="align-center"></i></button><button type="button" data-action="notebook-sticker-align" data-align="right" title="Alinhar à direita"><i data-lucide="align-right"></i></button><button type="button" class="is-danger" data-action="notebook-sticker-delete" title="Apagar imagem"><i data-lucide="trash-2"></i></button></span>');
+      }
+    });
+    refreshIcons(root);
+  }
+
+  function hydrateNotebookImages(root) {
+    if (!root || !Sync) return;
+    Array.from(root.querySelectorAll('img[data-remote-path]')).forEach(function (image) {
+      if (image.dataset.remoteHydrated === "loading" || image.dataset.remoteHydrated === "true") return;
+      var path = image.getAttribute("data-remote-path");
+      if (!path) return;
+      image.dataset.remoteHydrated = "loading";
+      Sync.downloadFile({ path: path, name: image.getAttribute("data-remote-name") || "imagem" }, {}).then(function (blob) {
+        if (!blob || !image.isConnected) return;
+        var url = URL.createObjectURL(blob);
+        activeImageObjectUrls.push(url);
+        image.src = url;
+        image.dataset.remoteHydrated = "true";
+      }).catch(function () {
+        image.dataset.remoteHydrated = "error";
+        image.alt = "Não foi possível descarregar esta imagem.";
+      });
+    });
+  }
+
+  async function storeNotebookImageFile(file) {
+    if (!file || !/^image\//i.test(file.type || "")) throw new Error("Só podes colar ficheiros de imagem no caderno.");
+    if (file.size > 12 * 1024 * 1024) throw new Error("Esta imagem tem mais de 12 MB.");
+    var syncConfigured = !!(Sync && Sync.getStatus && Sync.getStatus().configured);
+    var localImageId = "";
+    var remoteFile = null;
+    var objectUrl = URL.createObjectURL(file);
+    activeImageObjectUrls.push(objectUrl);
+    if (syncConfigured && navigator.onLine) {
+      setManualSyncActivity("A enviar a imagem…", "A preparar a imagem para aparecer em todos os dispositivos.", 4, true);
+      remoteFile = await Sync.uploadFile(file, {
+        id: uid("noteimage"),
+        name: file.name || "imagem-colada.png",
+        onProgress: function (report) {
+          var progress = report.progress == null ? null : 6 + Math.round(report.progress * 0.86);
+          var detail = report.total ? formatBytes(report.loaded) + " de " + formatBytes(report.total) + " enviados" : "A enviar a imagem…";
+          setManualSyncActivity("A enviar a imagem…", detail, progress, true);
+        },
+        onUploadComplete: function () { setManualSyncActivity("A confirmar no GitHub…", "A guardar a imagem no caderno sincronizado.", 94, true); }
+      });
+      finishManualSyncActivity(true);
+    } else {
+      localImageId = await DB.putFile(file, { kind: "notebook-sticker" });
+      toast(syncConfigured ? "Sem Internet: a imagem ficou local até voltares a ter ligação." : "A imagem ficou apenas neste dispositivo. Configura o Git para a sincronizar.", "warning");
+    }
+    return { objectUrl: objectUrl, remoteFile: remoteFile, localImageId: localImageId, file: file };
+  }
+
+  async function uploadNotebookImage(file, editor, savedRange) {
+    var stored = await storeNotebookImageFile(file);
+    insertNotebookHTML(editor, notebookStickerMarkup({ src: stored.objectUrl, remote: stored.remoteFile, localImageId: stored.localImageId, name: file.name, alt: file.name || "Imagem colada", width: 280 }), savedRange);
+  }
+
+  async function dataUrlToNotebookFile(value, fallbackName) {
+    var response = await fetch(value);
+    var blob = await response.blob();
+    var extension = (blob.type || "image/png").split("/")[1].replace("jpeg", "jpg") || "png";
+    return new File([blob], (fallbackName || "imagem-colada") + "." + extension, { type: blob.type || "image/png" });
+  }
+
+  async function materializeNotebookImages(editor) {
+    if (!editor) return;
+    var images = Array.from(editor.querySelectorAll('img:not([data-remote-path]):not([data-local-image-id])'));
+    var keptExternal = false;
+    for (var index = 0; index < images.length; index += 1) {
+      var image = images[index];
+      var src = image.getAttribute("src") || "";
+      if (!src) continue;
+      var file = null;
+      try {
+        if (/^data:image\//i.test(src)) {
+          file = await dataUrlToNotebookFile(src, "imagem-colada");
+        } else if (/^blob:/i.test(src)) {
+          var blobResponse = await fetch(src);
+          var blob = await blobResponse.blob();
+          file = new File([blob], "imagem-colada." + ((blob.type || "image/png").split("/")[1] || "png"), { type: blob.type || "image/png" });
+        } else if (/^https?:/i.test(src)) {
+          try {
+            var remoteResponse = await fetch(src, { mode: "cors", credentials: "omit" });
+            if (remoteResponse.ok && /^image\//i.test(remoteResponse.headers.get("content-type") || "")) {
+              var remoteBlob = await remoteResponse.blob();
+              file = new File([remoteBlob], "imagem-web." + ((remoteBlob.type || "image/png").split("/")[1] || "png"), { type: remoteBlob.type || "image/png" });
+            }
+          } catch (_) {
+            keptExternal = true;
+          }
+        }
+        if (!file) continue;
+        var stored = await storeNotebookImageFile(file);
+        if (stored.remoteFile && stored.remoteFile.path) {
+          image.setAttribute("data-remote-path", stored.remoteFile.path);
+          image.setAttribute("data-remote-name", stored.remoteFile.name || file.name);
+          image.removeAttribute("data-local-image-id");
+        } else if (stored.localImageId) {
+          image.setAttribute("data-local-image-id", stored.localImageId);
+          image.removeAttribute("data-remote-path");
+          image.removeAttribute("data-remote-name");
+        }
+        image.src = stored.objectUrl;
+      } catch (error) {
+        console.warn("Não foi possível guardar uma imagem colada", error);
+        keptExternal = true;
+      }
+    }
+    if (keptExternal) toast("Algumas imagens ficaram ligadas ao site original porque esse site bloqueou a cópia direta.", "warning");
+  }
+
+  async function handleNotebookPaste(event, editor) {
+    var clipboard = event.clipboardData || window.clipboardData;
+    if (!clipboard) return;
+    event.preventDefault();
+    var savedRange = notebookEditorRange(editor);
+    var imageFiles = Array.from(clipboard.items || []).filter(function (item) { return item.kind === "file" && /^image\//i.test(item.type || ""); }).map(function (item) { return item.getAsFile(); }).filter(Boolean);
+    if (!imageFiles.length) imageFiles = Array.from(clipboard.files || []).filter(function (file) { return /^image\//i.test(file.type || ""); });
+    if (imageFiles.length) {
+      try {
+        for (var index = 0; index < imageFiles.length; index += 1) await uploadNotebookImage(imageFiles[index], editor, savedRange);
+      } catch (error) {
+        finishManualSyncActivity(false);
+        toast(error.message || "Não foi possível colar a imagem.", "error");
+      }
+      return;
+    }
+    var html = clipboard.getData("text/html");
+    if (html) {
+      insertNotebookHTML(editor, preparePastedNotebookHTML(html), savedRange);
+      return;
+    }
+    var text = clipboard.getData("text/plain");
+    if (text) insertNotebookHTML(editor, '<p>' + nl2br(text) + '</p>', savedRange);
   }
 
   function typesetMath(root) {
@@ -417,7 +650,9 @@
         externalFingerprint: "",
         externalCheckedAt: "",
         externalRevision: 0,
-        source: "device"
+        source: "device",
+        completedLessonQuizIds: [],
+        completedHomeworkIds: []
       },
       profile: {
         name: "",
@@ -470,6 +705,8 @@
     var source = input && typeof input === "object" ? input : {};
     base.schemaVersion = Math.max(6, Number(source.schemaVersion) || 0);
     base.meta = Object.assign(base.meta, source.meta || {});
+    base.meta.completedLessonQuizIds = Array.from(new Set(asArray(base.meta.completedLessonQuizIds).map(String).filter(Boolean)));
+    base.meta.completedHomeworkIds = Array.from(new Set(asArray(base.meta.completedHomeworkIds).map(String).filter(Boolean)));
     base.profile = Object.assign(base.profile, source.profile || {});
     base.settings = Object.assign(base.settings, source.settings || {});
     if (["day", "three", "week", "month"].indexOf(base.settings.calendarView) < 0) base.settings.calendarView = "month";
@@ -521,6 +758,20 @@
       task.contentBlocks = normalizeContentBlocks(task.contentBlocks || task.instructionsBlocks || []);
       task.solutionBlocks = normalizeContentBlocks(task.solutionBlocks || []);
       task.checklist = asArray(task.checklist).map(String).filter(Boolean);
+      task.extraTasks = asArray(task.extraTasks).map(function (item, index) {
+        if (typeof item === "string") return { title: item, blocks: [], optional: false };
+        item = item && typeof item === "object" ? item : {};
+        return {
+          title: String(item.title || item.label || ("Tarefa extra " + (index + 1))),
+          blocks: normalizeContentBlocks(item.blocks || item.contentBlocks || item.instructions || ""),
+          optional: !!item.optional
+        };
+      });
+      task.completedAt = task.completedAt || "";
+      task.completedOnce = !!(task.completedOnce || task.done || task.completedAt || base.meta.completedHomeworkIds.indexOf(String(task.id)) >= 0);
+      if (task.completedOnce && (task.type === "homework" || task.type === "tpc")) task.done = true;
+      if ((task.type === "homework" || task.type === "tpc") && task.completedOnce && base.meta.completedHomeworkIds.indexOf(String(task.id)) < 0) base.meta.completedHomeworkIds.push(String(task.id));
+      task.actualSeconds = Math.max(0, Number(task.actualSeconds) || 0);
       return task;
     });
     base.quizzes = base.quizzes.map(function (quiz) {
@@ -567,6 +818,32 @@
         questionCount: 10, modelMode: "fast", modelId: "", createdAt: "", warning: ""
       }, project, {
         slides: asArray(project.slides), flashcards: asArray(project.flashcards), quizQuestions: asArray(project.quizQuestions)
+      });
+    });
+    base.lessons.forEach(function (lesson) {
+      var completedQuiz = base.quizzes.filter(function (quiz) { return quiz.lessonId === lesson.id; }).sort(function (a, b) {
+        return String(b.lastCompletedAt || "").localeCompare(String(a.lastCompletedAt || ""));
+      })[0];
+      var completedTask = base.tasks.find(function (task) { return task.lessonId === lesson.id && task.type === "lesson-quiz" && task.done; });
+      var quizHasResult = completedQuiz && (completedQuiz.completedOnce || completedQuiz.lastScore != null || completedQuiz.lastCompletedAt);
+      var completedAt = lesson.quizCompletedAt || lesson.beOnlineCompletedAt || (lesson.quizCompleted ? lesson.updatedAt || lesson.date || new Date().toISOString() : "") || (quizHasResult ? completedQuiz.lastCompletedAt || completedQuiz.updatedAt || completedQuiz.createdAt || new Date().toISOString() : "") || (completedTask && (completedTask.completedAt || completedTask.updatedAt || completedTask.createdAt || new Date().toISOString()));
+      if (!completedAt) return;
+      lesson.quizCompleted = true;
+      if (base.meta.completedLessonQuizIds.indexOf(String(lesson.id)) < 0) base.meta.completedLessonQuizIds.push(String(lesson.id));
+      lesson.quizCompletedAt = completedAt;
+      lesson.beOnlineCompletedAt = lesson.beOnlineCompletedAt || completedAt;
+      base.quizzes.forEach(function (quiz) {
+        if (quiz.lessonId === lesson.id && asArray(quiz.questions).length) {
+          quiz.completedOnce = true;
+          quiz.lastCompletedAt = quiz.lastCompletedAt || completedAt;
+        }
+      });
+      base.tasks.forEach(function (task) {
+        if (task.lessonId === lesson.id && task.type === "lesson-quiz") {
+          task.done = true;
+          task.completedOnce = true;
+          task.completedAt = task.completedAt || completedAt;
+        }
       });
     });
     return base;
@@ -1008,6 +1285,10 @@
       clearTimeout(homeClockTimer);
       homeClockTimer = null;
     }
+    if (homeworkClockTimer) {
+      clearTimeout(homeworkClockTimer);
+      homeworkClockTimer = null;
+    }
     renderShell();
     var html;
     if (route.name === "home") html = renderHome();
@@ -1015,6 +1296,7 @@
     else if (route.name === "course") html = renderCourse(route.id, route.tab);
     else if (route.name === "lesson") html = renderLesson(route.id);
     else if (route.name === "planner") html = renderPlanner();
+    else if (route.name === "homework") html = renderHomeworkSession();
     else if (route.name === "study") html = renderStudy();
     else if (route.name === "grades") html = renderGrades();
     else if (route.name === "canteen") html = renderCanteen();
@@ -1024,6 +1306,7 @@
     view.focus({ preventScroll: true });
     refreshIcons(document);
     hydrateLocalImages(view);
+    hydrateNotebookImages(view);
     typesetMath(view);
     if (route.name === "settings") {
       enhanceSettingsActions();
@@ -1042,6 +1325,7 @@
         if (route.name === "home" && !modalRoot.querySelector(".modal-card")) render();
       }, 60000 - (Date.now() % 60000) + 250);
     }
+    if (route.name === "homework") scheduleHomeworkClock();
   }
 
   function getLiveLesson(date) {
@@ -1287,10 +1571,12 @@
 
   function lessonIsBeOnline(lesson) {
     if (!lesson) return false;
-    var quiz = configuredQuizForLesson(lesson.id);
-    if (!quiz) return false;
-    if (lesson.quizCompletedAt || lesson.beOnlineCompletedAt) return true;
-    return !!quiz.lastCompletedAt;
+    var quizzes = state.quizzes.filter(function (quiz) { return quiz.lessonId === lesson.id && asArray(quiz.questions).length; });
+    if (!quizzes.length) return false;
+    if (asArray(state.meta && state.meta.completedLessonQuizIds).indexOf(String(lesson.id)) >= 0) return true;
+    if (lesson.quizCompleted || lesson.quizCompletedAt || lesson.beOnlineCompletedAt) return true;
+    if (quizzes.some(function (quiz) { return !!quiz.completedOnce || quiz.lastScore != null || !!quiz.lastCompletedAt; })) return true;
+    return state.tasks.some(function (task) { return task.lessonId === lesson.id && task.type === "lesson-quiz" && (task.done || task.completedOnce); });
   }
 
   function beOnlineStatus() {
@@ -1312,9 +1598,13 @@
     if (!state.currentSemesterId) return false;
     var changed = false;
     var before = state.tasks.length;
+    var seenLessonQuizTasks = new Set();
     state.tasks = state.tasks.filter(function (task) {
       if (task.type !== "lesson-quiz" || !task.autoGenerated) return true;
-      return !!configuredQuizForLesson(task.lessonId);
+      if (!configuredQuizForLesson(task.lessonId)) return false;
+      if (seenLessonQuizTasks.has(task.lessonId)) return false;
+      seenLessonQuizTasks.add(task.lessonId);
+      return true;
     });
     if (state.tasks.length !== before) changed = true;
     semesterItems("lessons").filter(function (lesson) {
@@ -1343,9 +1633,23 @@
   function completeLessonBeOnline(lessonId) {
     var lesson = lessonById(lessonId);
     if (!lesson) return;
-    lesson.quizCompletedAt = new Date().toISOString();
+    var completedAt = new Date().toISOString();
+    lesson.quizCompleted = true;
+    state.meta.completedLessonQuizIds = Array.from(new Set(asArray(state.meta.completedLessonQuizIds).concat(String(lessonId))));
+    lesson.quizCompletedAt = completedAt;
+    lesson.beOnlineCompletedAt = completedAt;
+    state.quizzes.forEach(function (quiz) {
+      if (quiz.lessonId === lessonId && asArray(quiz.questions).length) {
+        quiz.completedOnce = true;
+        quiz.lastCompletedAt = completedAt;
+      }
+    });
     state.tasks.forEach(function (task) {
-      if (task.lessonId === lessonId && task.type === "lesson-quiz") task.done = true;
+      if (task.lessonId === lessonId && task.type === "lesson-quiz") {
+        task.done = true;
+        task.completedOnce = true;
+        task.completedAt = completedAt;
+      }
     });
   }
 
@@ -1892,7 +2196,7 @@
       context.icon = "notebook-pen";
       context.stat = String(totalPending);
       context.statLabel = totalPending === 1 ? "TPC pendente" : "TPCs pendentes";
-      context.primary = '<button class="button button-yellow" type="button" data-route="planner"><i data-lucide="list-checks"></i>Começar TPC</button>';
+      context.primary = '<button class="button button-yellow" type="button" data-action="start-homework-session"><i data-lucide="play"></i>Começar TPCs</button>';
       context.secondary = '<button class="button" type="button" data-action="add-task"><i data-lucide="plus"></i>Adicionar TPC</button>';
       return context;
     }
@@ -1905,7 +2209,7 @@
       context.icon = "badge-check";
       context.stat = report.academic == null ? "✓" : round(report.academic, 1);
       context.statLabel = report.academic == null ? "rotina completa" : "nota do dia";
-      context.primary = '<button class="button button-yellow" type="button" data-route="grades"><i data-lucide="award"></i>Ver Report Card</button>';
+      context.primary = '<button class="button button-yellow" type="button" data-action="view-report-card"><i data-lucide="award"></i>Ver Report Card</button>';
       context.secondary = '<button class="button" type="button" data-route="planner"><i data-lucide="calendar-days"></i>Ver amanhã</button>';
       return context;
     }
@@ -1941,7 +2245,7 @@
     }).join("") : '<p class="report-empty">Faz os Quizzes da aula para construíres a nota académica de hoje.</p>';
     var grade = report.academic == null ? "—" : round(report.academic, 1);
     var status = report.complete ? "Fechado" : "Em construção";
-    return '<article class="card span-5 daily-report-card ' + (report.complete ? "is-complete" : "") + '"><div class="card-title-row"><div><p class="card-label">Report Card · Hoje</p><h3>O teu dia escolar</h3></div><span class="badge ' + (report.complete ? "badge-mint" : "badge-yellow") + '">' + status + '</span></div><div class="report-grade"><strong>' + grade + '</strong><span>/20<br>nota académica</span></div><div class="report-subjects">' + subjectRows + '</div><div class="report-routine"><span><strong>' + report.routine + '%</strong> rotina escolar</span><div class="mini-progress"><span style="width:' + report.routine + '%"></span></div><small>' + report.checksDone + '/' + report.checksDue + ' Quizzes da aula · ' + report.homeworkDone + '/' + report.homeworkDue + ' TPCs</small></div><button class="button button-small" type="button" data-route="grades"><i data-lucide="arrow-right"></i>Ver notas</button></article>';
+    return '<article class="card span-5 daily-report-card ' + (report.complete ? "is-complete" : "") + '"><div class="card-title-row"><div><p class="card-label">Report Card · Hoje</p><h3>O teu dia escolar</h3></div><span class="badge ' + (report.complete ? "badge-mint" : "badge-yellow") + '">' + status + '</span></div><div class="report-grade"><strong>' + grade + '</strong><span>/20<br>nota académica</span></div><div class="report-subjects">' + subjectRows + '</div><div class="report-routine"><span><strong>' + report.routine + '%</strong> rotina escolar</span><div class="mini-progress"><span style="width:' + report.routine + '%"></span></div><small>' + report.checksDone + '/' + report.checksDue + ' Quizzes da aula · ' + report.homeworkDone + '/' + report.homeworkDue + ' TPCs</small></div><button class="button button-small" type="button" data-action="view-report-card"><i data-lucide="arrow-down"></i>Ver Report Card</button></article>';
   }
 
   function renderHome() {
@@ -1991,12 +2295,13 @@
       + renderHomeStep("notebook-pen", "TPC", tpcTotal ? tpcDone + "/" + tpcTotal + " concluídos" : "Sem TPC para hoje", tpcStepStatus)
       + renderHomeStep("award", "Report Card", report.complete && blocks.length ? "Dia fechado" : "Atualiza ao longo do dia", reportStatus);
 
-    var hero = '<section class="school-now-card span-12 ' + attr(context.atmosphere.className) + ' phase-' + attr(context.phase) + '"><div class="school-now-copy"><div class="school-now-kicker"><span><i data-lucide="' + attr(context.atmosphere.icon) + '"></i>' + esc(context.atmosphere.label) + '</span><b>' + esc(context.phaseLabel) + '</b></div><h2>' + esc(context.title) + '</h2><p>' + esc(context.copy) + '</p><div class="school-now-actions">' + context.primary + context.secondary + '</div></div><div class="school-now-status"><span class="school-now-icon"><i data-lucide="' + attr(context.icon) + '"></i></span><strong>' + esc(context.stat) + '</strong><small>' + esc(context.statLabel) + '</small><div class="school-now-glow"></div></div></section>';
+    var phaseBadge = context.phaseLabel && context.phaseLabel !== context.atmosphere.label ? '<b>' + esc(context.phaseLabel) + '</b>' : '';
+    var hero = '<section class="school-now-card span-12 ' + attr(context.atmosphere.className) + ' phase-' + attr(context.phase) + '"><div class="school-now-copy"><div class="school-now-kicker"><span><i data-lucide="' + attr(context.atmosphere.icon) + '"></i>' + esc(context.atmosphere.label) + '</span>' + phaseBadge + '</div><h2>' + esc(context.title) + '</h2><p>' + esc(context.copy) + '</p><div class="school-now-actions">' + context.primary + context.secondary + '</div></div><div class="school-now-status"><span class="school-now-icon"><i data-lucide="' + attr(context.icon) + '"></i></span><strong>' + esc(context.stat) + '</strong><small>' + esc(context.statLabel) + '</small><div class="school-now-glow"></div></div></section>';
 
     return renderHomeDebugBar() + hero
       + '<div class="bento-grid home-school-grid" style="margin-top:15px">'
       + '<article class="card span-5 school-path-card"><div class="card-title-row"><div><p class="card-label">O teu dia</p><h3>Da aula ao fim do dia</h3><p class="card-subtitle">A Home muda o próximo passo à medida que vais avançando.</p></div><span class="metric-icon"><i data-lucide="route"></i></span></div><div class="school-steps">' + timeline + "</div></article>"
-      + '<article class="card span-7 after-school-card"><div class="card-title-row"><div><p class="card-label">A seguir</p><h3>Quizzes da aula e TPC</h3><p class="card-subtitle">Primeiro verificas o que aprendeste. Depois aplicas em casa.</p></div><button class="button button-small" type="button" data-action="add-task"><i data-lucide="plus"></i>TPC</button></div><div class="list-stack after-school-list">' + afterSchoolItems + "</div></article>"
+      + '<article class="card span-7 after-school-card"><div class="card-title-row"><div><p class="card-label">A seguir</p><h3>Quizzes da aula e TPC</h3><p class="card-subtitle">Primeiro verificas o que aprendeste. Depois fazes os TPCs numa sessão guiada.</p></div><div class="list-actions"><button class="button button-small" type="button" data-action="start-homework-session"><i data-lucide="play"></i>Fazer TPCs</button><button class="row-button" type="button" data-action="add-task" aria-label="Adicionar TPC"><i data-lucide="plus"></i></button></div></div><div class="list-stack after-school-list">' + afterSchoolItems + "</div></article>"
       + renderDailyReportCard(report, blocks)
       + '<article class="card span-7 next-date-card"><div class="card-title-row"><div><p class="card-label">No horizonte</p><h3>O que merece atenção</h3></div><button class="button button-small" type="button" data-route="planner"><i data-lucide="calendar-days"></i>Calendário</button></div><div style="margin-top:15px">' + nextAssessmentHtml + '</div><div class="home-mini-stats"><span><strong>' + tasks.overdue.length + '</strong> em atraso</span><span><strong>' + semesterItems("questions").length + '</strong> perguntas antigas</span><span><strong>' + overallProgress() + '%</strong> matéria dominada</span></div></article>'
       + "</div>";
@@ -2022,13 +2327,22 @@
   function renderTaskRow(task) {
     var course = courseById(task.courseId);
     var label = task.type === "lesson-quiz" ? "Quiz" : task.type === "review" ? "Revisão" : task.priority === "high" ? "Prioridade" : "Tarefa";
+    var lockedHomework = (task.type === "homework" || task.type === "tpc") && (task.lockedContent || task.configuredFromPrompt || asArray(task.contentBlocks).length);
+    var oneTimeComplete = task.done && (task.type === "lesson-quiz" || lockedHomework);
     var lessonAction = "";
     if (task.lessonId && task.type === "lesson-quiz" && !task.done) {
       lessonAction = '<button class="button button-dark button-small task-open-button" type="button" data-action="do-beonline-quiz" data-lesson="' + attr(task.lessonId) + '"><i data-lucide="play"></i>Fazer quiz</button>';
+    } else if (lockedHomework && !task.done) {
+      lessonAction = '<button class="button button-dark button-small task-open-button" type="button" data-action="start-homework-session" data-task="' + attr(task.id) + '"><i data-lucide="play"></i>Fazer</button>';
+    } else if (lockedHomework && task.done) {
+      lessonAction = '<button class="button button-small task-open-button" type="button" data-action="view-lesson-homework" data-id="' + attr(task.id) + '"><i data-lucide="eye"></i>Ver</button>';
     } else if (task.lessonId) {
       lessonAction = '<button class="row-button task-open-button" type="button" data-route="lesson" data-id="' + attr(task.lessonId) + '" aria-label="Abrir aula"><i data-lucide="arrow-up-right"></i></button>';
     }
-    return '<div class="list-row ' + (task.done ? "is-done" : "") + '"><button class="check-button ' + (task.done ? "is-done" : "") + '" type="button" data-action="toggle-task" data-id="' + attr(task.id) + '" aria-label="' + (task.done ? "Reabrir tarefa" : "Concluir tarefa") + '">' + (task.done ? '<i data-lucide="check"></i>' : "") + '</button><span class="list-icon ' + (task.type === "review" || task.type === "lesson-quiz" ? "yellow" : "") + '"><i data-lucide="' + taskIcon(task.type) + '"></i></span><span class="list-content"><strong>' + esc(task.title) + '</strong><small>' + esc(course ? course.name : "Pessoal") + ' · ' + relativeDate(task.dueDate) + (task.dueTime ? " às " + esc(task.dueTime) : "") + '</small></span><span class="badge ' + (task.type === "lesson-quiz" ? "badge-violet" : task.priority === "high" ? "badge-danger" : "") + '">' + esc(label) + '</span>' + lessonAction + "</div>";
+    var checkControl = oneTimeComplete
+      ? '<span class="check-button is-done" aria-label="Concluído"><i data-lucide="check"></i></span>'
+      : '<button class="check-button ' + (task.done ? "is-done" : "") + '" type="button" data-action="toggle-task" data-id="' + attr(task.id) + '" aria-label="' + (task.done ? "Reabrir tarefa" : "Concluir tarefa") + '">' + (task.done ? '<i data-lucide="check"></i>' : "") + '</button>';
+    return '<div class="list-row ' + (task.done ? "is-done" : "") + '">' + checkControl + '<span class="list-icon ' + (task.type === "review" || task.type === "lesson-quiz" ? "yellow" : "") + '"><i data-lucide="' + taskIcon(task.type) + '"></i></span><span class="list-content"><strong>' + esc(task.title) + '</strong><small>' + esc(course ? course.name : "Pessoal") + ' · ' + relativeDate(task.dueDate) + (task.dueTime ? " às " + esc(task.dueTime) : "") + '</small></span><span class="badge ' + (task.type === "lesson-quiz" ? "badge-violet" : task.priority === "high" ? "badge-danger" : "") + '">' + esc(label) + '</span>' + lessonAction + "</div>";
   }
 
   function courseProgress(course) {
@@ -2530,7 +2844,7 @@
       return '{\n  "title": "Quiz da aula · ' + lesson.title.replace(/"/g, "\\\"") + '",\n  "questions": [\n    {\n      "promptBlocks": ' + commonBlocks + ',\n      "options": [' + commonBlocks + ', ' + commonBlocks + ', ' + commonBlocks + ', ' + commonBlocks + '],\n      "correctIndex": 0,\n      "explanationBlocks": ' + commonBlocks + ',\n      "sourceSlides": [1, 2],\n      "difficulty": "medium"\n    }\n  ]\n}';
     }
     if (kind === "homework") {
-      return '{\n  "title": "TPC · ' + lesson.title.replace(/"/g, "\\\"") + '",\n  "estimatedMinutes": 30,\n  "instructionsBlocks": ' + commonBlocks + ',\n  "solutionBlocks": ' + commonBlocks + ',\n  "checklist": ["Passo 1", "Passo 2"]\n}';
+      return '{\n  "title": "TPC · ' + lesson.title.replace(/"/g, "\\\"") + '",\n  "estimatedMinutes": 30,\n  "instructionsBlocks": ' + commonBlocks + ',\n  "solutionBlocks": ' + commonBlocks + ',\n  "checklist": ["Passo 1", "Passo 2"],\n  "extraTasks": [\n    {"title":"Tarefa adicional pedida pelo professor","blocks":' + commonBlocks + ',"optional":false}\n  ]\n}';
     }
     return '{\n  "title": "Apontamentos · ' + lesson.title.replace(/"/g, "\\\"") + '",\n  "paper": "lined",\n  "blocks": ' + commonBlocks + '\n}';
   }
@@ -2566,7 +2880,11 @@
       "- Não inventes imagens que não existem nos slides; quando necessário, descreve exatamente que zona/diagrama deve aparecer.",
       kind === "quiz" ? "- Cria entre 5 e 10 perguntas. Usa quatro opções por pergunta e um único correctIndex." : "",
       kind === "homework" ? "- O TPC deve ser diferente do quiz da aula e adequado para fazer em casa. Inclui solução ou critérios de correção." : "",
-      kind === "notes" ? "- Organiza os apontamentos por secções e usa fórmulas, código ou diagramas apenas quando melhorarem realmente a compreensão." : "",
+      kind === "homework" ? "- instructionsBlocks representa a tarefa principal. Usa extraTasks apenas para pedidos adicionais concretos do professor; cada item tem title, blocks e optional." : "",
+      kind === "homework" ? "- Dá uma estimativa realista em estimatedMinutes, porque a Twenty vai usar esse valor no timer da sessão de TPC." : "",
+      kind === "notes" ? "- Este conteúdo será ACRESCENTADO depois dos apontamentos já escritos pelo utilizador. Não reescrevas, apagues nem substituas os apontamentos existentes; evita repetir ideias já presentes." : "",
+      kind === "notes" ? "- Organiza a nova continuação por secções e usa fórmulas, código ou diagramas apenas quando melhorarem realmente a compreensão." : "",
+      kind === "notes" && lesson.notes ? "- Apontamentos existentes para não repetires: " + lesson.notes : "",
       "",
       "FORMATO EXATO ESPERADO PELA TWENTY",
       lessonBuilderSchema(kind, lesson),
@@ -2644,11 +2962,15 @@
         if (homeworkForLesson(lesson.id)) throw new Error("Esta aula já tem um TPC configurado.");
         var instructions = attachSlideMaterialReferences(payload.instructionsBlocks || payload.contentBlocks || payload.instructions || "", selectedMaterials);
         if (!instructions.length) throw new Error("O JSON não contém instruções para o TPC.");
-        state.tasks.push({ id: uid("task"), semesterId: lesson.semesterId, courseId: lesson.courseId, lessonId: lesson.id, title: String(payload.title || "TPC · " + lesson.title), type: "homework", dueDate: lesson.date || todayISO(), dueTime: "20:30", priority: "normal", done: false, estimatedMinutes: clamp(payload.estimatedMinutes || 30, 5, 240), contentBlocks: instructions, solutionBlocks: attachSlideMaterialReferences(payload.solutionBlocks || payload.solution || "", selectedMaterials), checklist: asArray(payload.checklist).map(String).filter(Boolean), configuredFromPrompt: true, lockedContent: true, createdAt: new Date().toISOString() });
+        state.tasks.push({ id: uid("task"), semesterId: lesson.semesterId, courseId: lesson.courseId, lessonId: lesson.id, title: String(payload.title || "TPC · " + lesson.title), type: "homework", dueDate: lesson.date || todayISO(), dueTime: "20:30", priority: "normal", done: false, estimatedMinutes: clamp(payload.estimatedMinutes || 30, 5, 240), contentBlocks: instructions, solutionBlocks: attachSlideMaterialReferences(payload.solutionBlocks || payload.solution || "", selectedMaterials), checklist: asArray(payload.checklist).map(String).filter(Boolean), extraTasks: asArray(payload.extraTasks).map(function (item, index) { if (typeof item === "string") return { title: item, blocks: [], optional: false }; item = item && typeof item === "object" ? item : {}; return { title: String(item.title || ("Tarefa extra " + (index + 1))), blocks: attachSlideMaterialReferences(item.blocks || item.contentBlocks || item.instructions || "", selectedMaterials), optional: !!item.optional }; }), configuredFromPrompt: true, lockedContent: true, createdAt: new Date().toISOString() });
       } else {
         var blocks = attachSlideMaterialReferences(payload.blocks || payload.notesBlocks || payload.contentBlocks || payload.notes || "", selectedMaterials);
         if (!blocks.length) throw new Error("O JSON não contém apontamentos.");
-        lesson.notesHtml = sanitizeNotebookHTML(blocksToNotebookHTML(blocks));
+        var generatedHtml = sanitizeNotebookHTML(blocksToNotebookHTML(blocks));
+        var existingHtml = sanitizeNotebookHTML(lesson.notesHtml || (lesson.notes ? '<p>' + nl2br(lesson.notes) + '</p>' : ''));
+        var aiContinuation = '<div class="notebook-ai-continuation" data-ai-added-at="' + attr(new Date().toISOString()) + '"><p class="notebook-ai-label"><span>✦</span> Continuação adicionada com IA</p>' + generatedHtml + '</div>';
+        lesson.notesHtml = sanitizeNotebookHTML((existingHtml ? existingHtml + '<p><br></p>' : '') + aiContinuation + '<p><br></p>');
+        lesson.notes = contentBlocksPlainText([{ type: "text", text: lesson.notes || "" }]) + (lesson.notes ? "\n\n" : "") + contentBlocksPlainText(blocks);
         lesson.notesPaper = ["lined", "grid", "blank"].indexOf(payload.paper) >= 0 ? payload.paper : (lesson.notesPaper || "lined");
         lesson.notesUpdatedAt = new Date().toISOString();
       }
@@ -2667,11 +2989,13 @@
     var quiz = configuredQuizForLesson(lessonId);
     var lesson = lessonById(lessonId);
     if (!quiz || !lesson) return;
-    var body = '<div class="view-only-banner"><i data-lucide="lock-keyhole"></i><span><strong>Conteúdo fechado</strong><small>Há apenas um quiz por aula. Podes consultá-lo e fazê-lo, mas não editá-lo.</small></span></div><div class="quiz-preview-list">' + asArray(quiz.questions).map(function (question, index) {
+    var body = '<div class="view-only-banner"><i data-lucide="lock-keyhole"></i><span><strong>Conteúdo fechado</strong><small>Há apenas um quiz por aula. Depois de concluído, fica disponível apenas para consulta.</small></span></div><div class="quiz-preview-list">' + asArray(quiz.questions).map(function (question, index) {
       var options = asArray(question.optionBlocks).length ? question.optionBlocks : asArray(question.options);
       return '<article class="quiz-preview-card"><p class="card-label">Pergunta ' + (index + 1) + '</p>' + renderContentBlocks(question.promptBlocks || question.prompt) + '<div class="quiz-preview-options">' + options.map(function (option, optionIndex) { return '<div class="quiz-preview-option ' + (optionIndex === Number(question.answerIndex) ? "is-correct" : "") + '"><span>' + String.fromCharCode(65 + optionIndex) + '</span>' + renderQuizOptionContent(option) + '</div>'; }).join("") + '</div><details><summary>Ver explicação</summary>' + renderContentBlocks(question.explanationBlocks || question.explanation) + '</details></article>';
     }).join("") + '</div>';
-    openModal("Quiz da aula", body, { className: "modal-wide", footer: '<footer class="modal-foot"><button class="button" type="button" data-action="close-modal">Fechar</button><button class="button button-dark" type="button" data-action="start-quiz" data-id="' + attr(quiz.id) + '"><i data-lucide="play"></i>Fazer quiz</button></footer>' });
+    var completed = lessonIsBeOnline(lesson);
+    var footer = '<footer class="modal-foot"><button class="button' + (completed ? ' button-dark' : '') + '" type="button" data-action="close-modal">Fechar</button>' + (completed ? '' : '<button class="button button-dark" type="button" data-action="start-quiz" data-id="' + attr(quiz.id) + '"><i data-lucide="play"></i>Fazer quiz</button>') + '</footer>';
+    openModal("Quiz da aula", body, { className: "modal-wide", footer: footer });
   }
 
   function viewLessonHomework(taskId) {
@@ -2679,9 +3003,11 @@
     if (!task) return;
     var lesson = lessonById(task.lessonId);
     var checklist = asArray(task.checklist).length ? '<div class="homework-checklist"><p class="card-label">Checklist</p>' + task.checklist.map(function (item) { return '<span><i data-lucide="square"></i>' + esc(item) + '</span>'; }).join("") + '</div>' : '';
+    var extras = asArray(task.extraTasks).length ? '<div class="homework-extra-list"><p class="card-label">Tarefas adicionais</p>' + task.extraTasks.map(function (item) { return '<article><div><i data-lucide="' + (item.optional ? 'circle-dashed' : 'circle-check-big') + '"></i><strong>' + esc(item.title) + '</strong>' + (item.optional ? '<span class="badge">Opcional</span>' : '') + '</div>' + renderContentBlocks(item.blocks) + '</article>'; }).join("") + '</div>' : '';
     var solution = asArray(task.solutionBlocks).length ? '<details class="homework-solution"><summary>Ver solução / critérios de correção</summary>' + renderContentBlocks(task.solutionBlocks) + '</details>' : '';
-    var body = '<div class="view-only-banner"><i data-lucide="lock-keyhole"></i><span><strong>TPC da aula</strong><small>O conteúdo fica em modo de visualização depois de criado.</small></span></div><div class="question-meta"><span class="badge badge-violet">' + esc(task.estimatedMinutes || 30) + ' min</span><span class="badge">' + esc(relativeDate(task.dueDate)) + '</span></div><h3 style="margin:16px 0 8px">' + esc(task.title) + '</h3>' + renderContentBlocks(task.contentBlocks) + checklist + solution;
-    openModal("TPC", body, { className: "modal-wide", footer: '<footer class="modal-foot"><button class="button" type="button" data-action="close-modal">Fechar</button><button class="button ' + (task.done ? "button" : "button-dark") + '" type="button" data-action="toggle-task" data-id="' + attr(task.id) + '"><i data-lucide="check"></i>' + (task.done ? "Reabrir" : "Marcar concluído") + '</button></footer>' });
+    var body = '<div class="view-only-banner"><i data-lucide="lock-keyhole"></i><span><strong>TPC da aula</strong><small>O conteúdo fica em modo de visualização depois de criado.</small></span></div><div class="question-meta"><span class="badge badge-violet">' + esc(task.estimatedMinutes || 30) + ' min</span><span class="badge">' + esc(relativeDate(task.dueDate)) + '</span></div><h3 style="margin:16px 0 8px">' + esc(task.title) + '</h3>' + renderContentBlocks(task.contentBlocks) + checklist + extras + solution;
+    var footer = '<footer class="modal-foot"><button class="button' + (task.done ? ' button-dark' : '') + '" type="button" data-action="close-modal">Fechar</button>' + (task.done ? '' : '<button class="button button-dark" type="button" data-action="start-homework-session" data-task="' + attr(task.id) + '"><i data-lucide="play"></i>Fazer TPC</button>') + '</footer>';
+    openModal("TPC", body, { className: "modal-wide", footer: footer });
   }
 
   function notebookPaperLabel(value) {
@@ -2699,26 +3025,42 @@
     var lesson = lessonById(lessonId);
     if (!lesson) return;
     var html = lesson.notesHtml || (lesson.notes ? '<p>' + nl2br(lesson.notes) + '</p>' : '<p><br></p>');
-    var toolbar = '<div class="notebook-toolbar" role="toolbar" aria-label="Formatar apontamentos"><button type="button" data-action="notebook-command" data-command="bold" title="Negrito"><i data-lucide="bold"></i></button><button type="button" data-action="notebook-command" data-command="italic" title="Itálico"><i data-lucide="italic"></i></button><button type="button" data-action="notebook-command" data-command="underline" title="Sublinhar"><i data-lucide="underline"></i></button><button type="button" data-action="notebook-command" data-command="strikeThrough" title="Rasurar"><i data-lucide="strikethrough"></i></button><span></span><button type="button" data-action="notebook-block" data-block="h2">H2</button><button type="button" data-action="notebook-block" data-block="h3">H3</button><button type="button" data-action="notebook-command" data-command="insertUnorderedList" title="Lista"><i data-lucide="list"></i></button><button type="button" data-action="notebook-command" data-command="insertOrderedList" title="Lista numerada"><i data-lucide="list-ordered"></i></button><button type="button" data-action="notebook-command" data-command="formatBlock" data-value="blockquote" title="Citação"><i data-lucide="quote"></i></button></div>';
-    var body = '<form id="notebookForm" data-lesson="' + attr(lesson.id) + '"><div class="notebook-settings"><label>Folha<select id="notebookPaper"><option value="lined" ' + (lesson.notesPaper === "lined" ? "selected" : "") + '>Pautado</option><option value="grid" ' + (lesson.notesPaper === "grid" ? "selected" : "") + '>Quadriculado</option><option value="blank" ' + (lesson.notesPaper === "blank" ? "selected" : "") + '>Branco</option></select></label><label>Fonte<select disabled><option>Fonte da Twenty</option></select></label></div>' + toolbar + '<div id="notebookEditor" class="notebook-page notebook-editor paper-' + attr(lesson.notesPaper || "lined") + '" contenteditable="true" spellcheck="true">' + html + '</div><div class="form-note">Podes usar negrito, itálico, sublinhado, listas e títulos. Fórmulas, código, SVG e referências a imagens podem ser importados através do prompt de apontamentos.</div></form>';
-    openModal("Apontamentos da aula", body, { className: "modal-notebook", footer: '<footer class="modal-foot"><button class="button" type="button" data-action="close-modal">Cancelar</button><button class="button button-dark" type="button" data-action="save-notebook"><i data-lucide="check"></i>Guardar apontamentos</button></footer>' });
+    var toolbar = '<div class="notebook-toolbar" role="toolbar" aria-label="Formatar apontamentos"><button type="button" data-action="notebook-command" data-command="bold" title="Negrito"><i data-lucide="bold"></i></button><button type="button" data-action="notebook-command" data-command="italic" title="Itálico"><i data-lucide="italic"></i></button><button type="button" data-action="notebook-command" data-command="underline" title="Sublinhar"><i data-lucide="underline"></i></button><button type="button" data-action="notebook-command" data-command="strikeThrough" title="Rasurar"><i data-lucide="strikethrough"></i></button><span></span><button type="button" data-action="notebook-block" data-block="h2">H2</button><button type="button" data-action="notebook-block" data-block="h3">H3</button><button type="button" data-action="notebook-command" data-command="insertUnorderedList" title="Lista"><i data-lucide="list"></i></button><button type="button" data-action="notebook-command" data-command="insertOrderedList" title="Lista numerada"><i data-lucide="list-ordered"></i></button><button type="button" data-action="notebook-command" data-command="formatBlock" data-value="blockquote" title="Citação"><i data-lucide="quote"></i></button><span></span><button type="button" data-action="notebook-add-image" title="Adicionar imagem ou sticker"><i data-lucide="image-plus"></i></button><button type="button" data-action="configure-lesson-content" data-kind="notes" data-lesson="' + attr(lesson.id) + '" title="Acrescentar com IA"><i data-lucide="sparkles"></i></button></div>';
+    var body = '<form id="notebookForm" data-lesson="' + attr(lesson.id) + '"><div class="notebook-settings"><label>Folha<select id="notebookPaper"><option value="lined" ' + (lesson.notesPaper === "lined" ? "selected" : "") + '>Pautado</option><option value="grid" ' + (lesson.notesPaper === "grid" ? "selected" : "") + '>Quadriculado</option><option value="blank" ' + (lesson.notesPaper === "blank" ? "selected" : "") + '>Branco</option></select></label><label>Fonte<select disabled><option>Fonte da Twenty</option></select></label></div>' + toolbar + '<input id="notebookImageInput" type="file" accept="image/*" multiple hidden><div id="notebookEditor" class="notebook-page notebook-editor paper-' + attr(lesson.notesPaper || "lined") + '" contenteditable="true" spellcheck="true">' + html + '</div><div class="form-note"><strong>Colar de sites:</strong> usa “Copiar imagem” ou copia conteúdo de uma página e cola aqui. Texto e imagens são aceites diretamente no caderno. As imagens funcionam como stickers: arrasta para mudar de lugar e usa os controlos para redimensionar, alinhar ou apagar. O conteúdo criado pela IA é sempre acrescentado no fim e nunca apaga o que escreveste.</div></form>';
+    openModal("Apontamentos da aula", body, { className: "modal-notebook", footer: '<footer class="modal-foot"><button class="button" type="button" data-action="close-modal">Sair e guardar</button><button class="button button-dark" type="button" data-action="save-notebook"><i data-lucide="check"></i>Guardar apontamentos</button></footer>' });
   }
 
-  async function saveNotebook() {
+  async function saveNotebook(options) {
+    options = options || {};
     var form = modalRoot.querySelector("#notebookForm");
-    if (!form) return;
+    if (!form) return false;
     var lesson = lessonById(form.dataset.lesson);
-    if (!lesson) return;
+    if (!lesson) return false;
     var editor = form.querySelector("#notebookEditor");
     var paper = form.querySelector("#notebookPaper");
-    lesson.notesHtml = sanitizeNotebookHTML(editor ? editor.innerHTML : "");
+    await materializeNotebookImages(editor);
+    var editorClone = editor ? editor.cloneNode(true) : document.createElement("div");
+    Array.from(editorClone.querySelectorAll(".notebook-sticker-controls")).forEach(function (controls) { controls.remove(); });
+    Array.from(editorClone.querySelectorAll('img[data-remote-path], img[data-local-image-id]')).forEach(function (image) { image.removeAttribute("src"); image.removeAttribute("data-hydrated"); image.removeAttribute("data-remote-hydrated"); });
+    lesson.notesHtml = sanitizeNotebookHTML(editorClone.innerHTML || "");
     lesson.notes = contentBlocksPlainText([{ type: "text", text: editor ? editor.innerText : "" }]);
     lesson.notesPaper = paper && ["lined", "grid", "blank"].indexOf(paper.value) >= 0 ? paper.value : "lined";
     lesson.notesUpdatedAt = new Date().toISOString();
     await save(true);
+    if (options.close !== false) closeModal();
+    if (options.render !== false) render();
+    if (!options.silent) toast("Apontamentos guardados.");
+    return true;
+  }
+
+  async function closeModalSavingNotebook() {
+    if (modalRoot.querySelector("#notebookForm")) {
+      try { await saveNotebook({ close: false, render: false, silent: true }); }
+      catch (error) { toast(error.message || "Não foi possível guardar os apontamentos.", "error"); return false; }
+    }
     closeModal();
     render();
-    toast("Apontamentos guardados.");
+    return true;
   }
 
   function renderCourseNotebook(course, archived) {
@@ -2750,14 +3092,13 @@
     var materialsHtml = materials.length ? '<div class="material-grid">' + currentMaterials.concat(oldMaterials).map(function (item) { return renderMaterialCard(item, course || { semesterId: null }, archived); }).join("") + '</div>' : emptyState("file-up", "Ainda sem material", "Carrega os slides ou PDF desta aula. O ficheiro ficará sincronizado.", "add-material", "Carregar material");
     var questionsHtml = questions.length ? questions.map(function (item) { return renderQuestionCard(item, archived); }).join("") : emptyState("message-circle-question", "Sem perguntas anteriores", "Associa perguntas de testes antigos a esta aula.", "add-question", "Associar pergunta");
     var quizHtml = quiz
-      ? '<div class="lesson-configured-card"><span class="list-icon yellow"><i data-lucide="check-check"></i></span><div><strong>' + esc(quiz.title) + '</strong><small>' + asArray(quiz.questions).length + ' perguntas' + (quiz.lastScore != null ? ' · último resultado ' + quiz.lastScore + '%' : '') + ' · conteúdo fechado</small></div><div class="list-actions"><button class="button button-small" type="button" data-action="view-lesson-quiz" data-lesson="' + attr(lesson.id) + '"><i data-lucide="eye"></i>Ver</button><button class="button button-dark button-small" type="button" data-action="start-quiz" data-id="' + attr(quiz.id) + '"><i data-lucide="play"></i>Fazer</button></div></div>'
+      ? '<div class="lesson-configured-card"><span class="list-icon yellow"><i data-lucide="check-check"></i></span><div><strong>' + esc(quiz.title) + '</strong><small>' + asArray(quiz.questions).length + ' perguntas' + (quiz.lastScore != null ? ' · resultado ' + quiz.lastScore + '%' : '') + ' · conteúdo fechado</small></div><div class="list-actions"><button class="button ' + (onlineComplete ? 'button-dark' : 'button') + ' button-small" type="button" data-action="view-lesson-quiz" data-lesson="' + attr(lesson.id) + '"><i data-lucide="eye"></i>Ver</button>' + (onlineComplete ? '' : '<button class="button button-dark button-small" type="button" data-action="start-quiz" data-id="' + attr(quiz.id) + '"><i data-lucide="play"></i>Fazer</button>') + '</div></div>'
       : '<div class="lesson-unconfigured"><span class="metric-icon"><i data-lucide="check-check"></i></span><div><strong>Quiz ainda não configurado</strong><small>Escolhe os slides, copia o prompt para a IA e cola o JSON devolvido.</small></div><button class="button button-dark button-small" type="button" data-action="configure-lesson-content" data-kind="quiz" data-lesson="' + attr(lesson.id) + '"><i data-lucide="wand-sparkles"></i>✅ Configurar quiz</button></div>';
     var homeworkHtml = homework
-      ? '<div class="lesson-configured-card"><span class="list-icon orange"><i data-lucide="notebook-pen"></i></span><div><strong>' + esc(homework.title) + '</strong><small>' + (homework.estimatedMinutes || 30) + ' min · ' + (homework.done ? 'concluído' : 'por fazer') + ' · conteúdo fechado</small></div><div class="list-actions"><button class="button button-small" type="button" data-action="view-lesson-homework" data-id="' + attr(homework.id) + '"><i data-lucide="eye"></i>Ver</button><button class="button ' + (homework.done ? "button" : "button-dark") + ' button-small" type="button" data-action="toggle-task" data-id="' + attr(homework.id) + '"><i data-lucide="check"></i>' + (homework.done ? 'Reabrir' : 'Concluir') + '</button></div></div>'
+      ? '<div class="lesson-configured-card"><span class="list-icon orange"><i data-lucide="notebook-pen"></i></span><div><strong>' + esc(homework.title) + '</strong><small>' + (homework.estimatedMinutes || 30) + ' min · ' + (homework.done ? 'concluído' : 'por fazer') + ' · conteúdo fechado</small></div><div class="list-actions"><button class="button ' + (homework.done ? 'button-dark' : 'button') + ' button-small" type="button" data-action="view-lesson-homework" data-id="' + attr(homework.id) + '"><i data-lucide="eye"></i>Ver</button>' + (homework.done ? '' : '<button class="button button-dark button-small" type="button" data-action="start-homework-session" data-task="' + attr(homework.id) + '"><i data-lucide="play"></i>Fazer</button>') + '</div></div>'
       : '<div class="lesson-unconfigured"><span class="metric-icon"><i data-lucide="notebook-pen"></i></span><div><strong>TPC ainda não configurado</strong><small>O TPC é separado do quiz e pensado para fazer em casa.</small></div><button class="button button-dark button-small" type="button" data-action="configure-lesson-content" data-kind="homework" data-lesson="' + attr(lesson.id) + '"><i data-lucide="wand-sparkles"></i>✅ Configurar TPC</button></div>';
-    var statusLabel = onlineComplete ? "Quiz feito" : quiz && lessonEnded ? "Quiz pendente" : quiz ? "Quiz preparado" : "Sem quiz";
-    var statusCopy = onlineComplete ? "O quiz desta aula já foi concluído e não volta a aparecer como pendente." : quiz && lessonEnded ? "O quiz está pronto para fazer." : quiz ? "Quando a aula estiver a terminar, a Home pode sugerir este quiz." : "O quiz só aparece na Home depois de o configurares.";
-    return '<div class="page-head"><div><button class="button button-ghost button-small" type="button" data-route="course" data-id="' + attr(lesson.courseId) + '"><i data-lucide="arrow-left"></i>' + esc(course ? course.code || course.name : "Cadeira") + '</button><h2 style="margin-top:11px">' + esc(lesson.title) + '</h2><p>' + formatLongDate(lesson.date) + (lesson.start ? ' · ' + esc(lesson.start) + '–' + esc(lesson.end || '') : '') + ' · ' + esc(lessonTypeLabel(lesson.type)) + (lesson.room ? ' · ' + esc(lesson.room) : '') + '</p></div><div class="page-actions">' + (!archived ? '<button class="button" type="button" data-action="edit-lesson" data-id="' + attr(lesson.id) + '"><i data-lucide="pencil"></i>Editar aula</button><button class="button ' + (lesson.mastered ? 'button-yellow' : 'button-dark') + '" type="button" data-action="toggle-mastery" data-id="' + attr(lesson.id) + '"><i data-lucide="badge-check"></i>' + (lesson.mastered ? 'Dominada' : 'Marcar dominada') + '</button>' : '') + '</div></div><div class="bento-grid"><article class="card course-hero span-12" style="--course-color:' + safeColor(course && course.color) + ';min-height:220px"><div class="course-hero-copy"><span class="badge badge-dark">' + esc(lesson.type || 'Aula') + '</span><h2>' + esc(lesson.title) + '</h2><p>' + esc(lesson.topics || 'Adiciona os tópicos dados nesta aula.') + '</p></div><div class="course-score"><strong>' + (lesson.mastered ? '✓' : questions.length) + '</strong><span>' + (lesson.mastered ? 'matéria dominada' : 'perguntas antigas') + '</span></div></article><article class="card span-12 beonline-lesson-card ' + (onlineComplete ? 'is-online' : '') + '"><div class="beonline-lesson-copy"><span class="badge ' + (onlineComplete ? 'badge-mint' : quiz && lessonEnded ? 'badge-danger' : 'badge-violet') + '">' + statusLabel + '</span><h3>Quiz da aula</h3><p>' + esc(statusCopy) + '</p></div></article><article class="card span-12"><div class="card-title-row"><div><h3>Slides e PDFs</h3><p class="card-subtitle">Os ficheiros são enviados para o Git e ficam disponíveis nos teus dispositivos.</p></div>' + (!archived ? '<button class="button button-small" type="button" data-action="add-material" data-course="' + attr(lesson.courseId) + '" data-lesson="' + attr(lesson.id) + '"><i data-lucide="file-up"></i>Carregar</button>' : '') + '</div><div style="margin-top:15px">' + materialsHtml + '</div></article><article class="card span-7"><div class="card-title-row"><div><h3>Perguntas de anos anteriores</h3></div><div class="list-actions">' + (!archived ? '<button class="button button-small" type="button" data-action="add-question" data-course="' + attr(lesson.courseId) + '" data-lesson="' + attr(lesson.id) + '"><i data-lucide="plus"></i>Pergunta</button>' : '') + '</div></div><div style="margin-top:15px">' + questionsHtml + '</div></article><article class="card span-5 lesson-config-card"><div class="card-title-row"><div><h3>✅ Quiz da aula</h3><p class="card-subtitle">Um por aula. Depois de criado, fica em visualização.</p></div></div>' + quizHtml + '</article><article class="card span-12 lesson-config-card"><div class="card-title-row"><div><h3>✅ TPC da aula</h3><p class="card-subtitle">Aplicação e prática para fazer em casa, separada do quiz.</p></div></div>' + homeworkHtml + '</article><article class="card span-12 notebook-card"><div class="card-title-row"><div><h3>Apontamentos</h3><p class="card-subtitle">Escreve como num caderno ou gera conteúdo com um prompt estruturado.</p></div><div class="list-actions">' + (!archived ? '<button class="button button-small" type="button" data-action="configure-lesson-content" data-kind="notes" data-lesson="' + attr(lesson.id) + '"><i data-lucide="wand-sparkles"></i>Gerar por prompt</button><button class="button button-dark button-small" type="button" data-action="open-notebook-editor" data-lesson="' + attr(lesson.id) + '"><i data-lucide="pencil"></i>Escrever</button>' : '') + '</div></div><div style="margin-top:15px">' + renderNotebookPage(lesson, false) + '</div><div class="notebook-meta"><span><i data-lucide="notebook"></i>' + esc(notebookPaperLabel(lesson.notesPaper)) + '</span><button class="button button-small" type="button" data-action="course-tab" data-id="' + attr(lesson.courseId) + '" data-tab="notebook"><i data-lucide="library-big"></i>Ver caderno da cadeira</button></div></article></div>';
+    var quizStatusCard = onlineComplete ? '' : '<article class="card span-12 beonline-lesson-card"><div class="beonline-lesson-copy"><span class="badge ' + (quiz && lessonEnded ? 'badge-danger' : 'badge-violet') + '">' + (quiz && lessonEnded ? 'Quiz pendente' : quiz ? 'Quiz preparado' : 'Sem quiz') + '</span><h3>Quiz da aula</h3><p>' + esc(quiz && lessonEnded ? 'O quiz está pronto para fazer.' : quiz ? 'Quando a aula estiver a terminar, a Home pode sugerir este quiz.' : 'O quiz só aparece na Home depois de o configurares.') + '</p></div></article>';
+    return '<div class="page-head"><div><button class="button button-ghost button-small" type="button" data-route="course" data-id="' + attr(lesson.courseId) + '"><i data-lucide="arrow-left"></i>' + esc(course ? course.code || course.name : "Cadeira") + '</button><h2 style="margin-top:11px">' + esc(lesson.title) + '</h2><p>' + formatLongDate(lesson.date) + (lesson.start ? ' · ' + esc(lesson.start) + '–' + esc(lesson.end || '') : '') + ' · ' + esc(lessonTypeLabel(lesson.type)) + (lesson.room ? ' · ' + esc(lesson.room) : '') + '</p></div><div class="page-actions">' + (!archived ? '<button class="button" type="button" data-action="edit-lesson" data-id="' + attr(lesson.id) + '"><i data-lucide="pencil"></i>Editar aula</button><button class="button ' + (lesson.mastered ? 'button-yellow' : 'button-dark') + '" type="button" data-action="toggle-mastery" data-id="' + attr(lesson.id) + '"><i data-lucide="badge-check"></i>' + (lesson.mastered ? 'Dominada' : 'Marcar dominada') + '</button>' : '') + '</div></div><div class="bento-grid"><article class="card course-hero span-12" style="--course-color:' + safeColor(course && course.color) + ';min-height:220px"><div class="course-hero-copy"><span class="badge badge-dark">' + esc(lesson.type || 'Aula') + '</span><h2>' + esc(lesson.title) + '</h2><p>' + esc(lesson.topics || 'Adiciona os tópicos dados nesta aula.') + '</p></div><div class="course-score"><strong>' + (lesson.mastered ? '✓' : questions.length) + '</strong><span>' + (lesson.mastered ? 'matéria dominada' : 'perguntas antigas') + '</span></div></article>' + quizStatusCard + '<article class="card span-12"><div class="card-title-row"><div><h3>Slides e PDFs</h3><p class="card-subtitle">Os ficheiros são enviados para o Git e ficam disponíveis nos teus dispositivos.</p></div>' + (!archived ? '<button class="button button-small" type="button" data-action="add-material" data-course="' + attr(lesson.courseId) + '" data-lesson="' + attr(lesson.id) + '"><i data-lucide="file-up"></i>Carregar</button>' : '') + '</div><div style="margin-top:15px">' + materialsHtml + '</div></article><article class="card span-7"><div class="card-title-row"><div><h3>Perguntas de anos anteriores</h3></div><div class="list-actions">' + (!archived ? '<button class="button button-small" type="button" data-action="add-question" data-course="' + attr(lesson.courseId) + '" data-lesson="' + attr(lesson.id) + '"><i data-lucide="plus"></i>Pergunta</button>' : '') + '</div></div><div style="margin-top:15px">' + questionsHtml + '</div></article><article class="card span-5 lesson-config-card"><div class="card-title-row"><div><h3>✅ Quiz da aula</h3><p class="card-subtitle">Um por aula. Depois de criado, fica em visualização.</p></div></div>' + quizHtml + '</article><article class="card span-12 lesson-config-card"><div class="card-title-row"><div><h3>✅ TPC da aula</h3><p class="card-subtitle">Aplicação e prática para fazer em casa, separada do quiz.</p></div></div>' + homeworkHtml + '</article><article class="card span-12 notebook-card"><div class="card-title-row"><div><h3>Apontamentos</h3><p class="card-subtitle">Escreve como num caderno ou gera conteúdo com um prompt estruturado.</p></div><div class="list-actions">' + (!archived ? '<button class="button button-small" type="button" data-action="configure-lesson-content" data-kind="notes" data-lesson="' + attr(lesson.id) + '"><i data-lucide="wand-sparkles"></i>Gerar por prompt</button><button class="button button-dark button-small" type="button" data-action="open-notebook-editor" data-lesson="' + attr(lesson.id) + '"><i data-lucide="pencil"></i>Escrever</button>' : '') + '</div></div><div style="margin-top:15px">' + renderNotebookPage(lesson, false) + '</div><div class="notebook-meta"><span><i data-lucide="notebook"></i>' + esc(notebookPaperLabel(lesson.notesPaper)) + '</span><button class="button button-small" type="button" data-action="course-tab" data-id="' + attr(lesson.courseId) + '" data-tab="notebook"><i data-lucide="library-big"></i>Ver caderno da cadeira</button></div></article></div>';
   }
 
   function plannerModeControl(active) {
@@ -2778,7 +3119,7 @@
       var detailAction = item.kind === "event" ? "show-event" : "assessment-scope";
       return '<div class="list-row"><span class="list-icon ' + item.color + '"><i data-lucide="' + item.icon + '"></i></span><span class="list-content"><strong>' + esc(item.title) + '</strong><small>' + relativeDate(item.date) + (item.time ? " · " + esc(item.time) : "") + ' · ' + esc(item.subtitle) + '</small></span><span class="badge">' + (item.kind === "event" ? "Evento" : "Avaliação") + '</span><button class="row-button" type="button" data-action="' + detailAction + '" data-id="' + attr(item.id) + '" aria-label="Ver detalhes"><i data-lucide="arrow-right"></i></button></div>';
     }).join("") : emptyState("calendar-days", "Agenda livre", "Adiciona testes ou eventos da faculdade quando souberes as datas.", "add-assessment", "Adicionar data");
-    return '<div class="bento-grid" style="margin-top:15px"><article class="card span-6"><div class="card-title-row"><div><h3>Tarefas e revisões</h3></div><button class="button button-small" type="button" data-action="add-task"><i data-lucide="plus"></i>Adicionar</button></div><div class="list-stack">' + taskHtml + '</div></article><article class="card span-6"><div class="card-title-row"><div><h3>Avaliações e eventos</h3></div><div class="list-actions"><button class="row-button" type="button" data-action="add-event" aria-label="Adicionar evento"><i data-lucide="party-popper"></i></button><button class="row-button" type="button" data-action="add-assessment" aria-label="Adicionar avaliação"><i data-lucide="file-plus-2"></i></button></div></div><div class="list-stack">' + agendaHtml + "</div></article></div>";
+    return '<div class="bento-grid" style="margin-top:15px"><article class="card span-6"><div class="card-title-row"><div><h3>Tarefas e revisões</h3></div><div class="list-actions"><button class="button button-small" type="button" data-action="start-homework-session"><i data-lucide="play"></i>Fazer TPCs</button><button class="row-button" type="button" data-action="add-task" aria-label="Adicionar tarefa"><i data-lucide="plus"></i></button></div></div><div class="list-stack">' + taskHtml + '</div></article><article class="card span-6"><div class="card-title-row"><div><h3>Avaliações e eventos</h3></div><div class="list-actions"><button class="row-button" type="button" data-action="add-event" aria-label="Adicionar evento"><i data-lucide="party-popper"></i></button><button class="row-button" type="button" data-action="add-assessment" aria-label="Adicionar avaliação"><i data-lucide="file-plus-2"></i></button></div></div><div class="list-stack">' + agendaHtml + "</div></article></div>";
   }
 
   function renderScheduleView() {
@@ -3087,6 +3428,169 @@
     });
     if (!added) { toast("Não há espaço livre suficiente neste dia.", "warning"); return; }
     await save(true); render(); toast(added + " bloco(s) de estudo adicionados.");
+  }
+
+
+  function isHomeworkTask(task) {
+    return !!task && (task.type === "homework" || task.type === "tpc");
+  }
+
+  function homeworkSessionTasks() {
+    var today = todayISO(activeHomeNow());
+    var all = semesterItems("tasks").filter(isHomeworkTask).slice().sort(function (a, b) {
+      return Number(a.done) - Number(b.done) || String(a.dueDate || "9999").localeCompare(String(b.dueDate || "9999")) || String((courseById(a.courseId) || {}).name || "").localeCompare(String((courseById(b.courseId) || {}).name || ""));
+    });
+    var relevant = all.filter(function (task) {
+      return !task.done || String(task.completedAt || "").slice(0, 10) === today;
+    });
+    return relevant;
+  }
+
+  function homeworkElapsedSeconds() {
+    if (!homeworkSessionRuntime || !homeworkSessionRuntime.taskId) return 0;
+    var base = Number(homeworkSessionRuntime.elapsedByTask[homeworkSessionRuntime.taskId] || 0);
+    if (homeworkSessionRuntime.running && homeworkSessionRuntime.startedAt) {
+      base += Math.max(0, Math.floor((Date.now() - homeworkSessionRuntime.startedAt) / 1000));
+    }
+    return base;
+  }
+
+  function storeHomeworkElapsed() {
+    if (!homeworkSessionRuntime || !homeworkSessionRuntime.taskId) return;
+    homeworkSessionRuntime.elapsedByTask[homeworkSessionRuntime.taskId] = homeworkElapsedSeconds();
+    homeworkSessionRuntime.startedAt = homeworkSessionRuntime.running ? Date.now() : null;
+  }
+
+  function setHomeworkCurrent(taskId, autoStart) {
+    var tasks = homeworkSessionTasks();
+    var task = tasks.find(function (item) { return item.id === taskId && !item.done; }) || tasks.find(function (item) { return !item.done; }) || null;
+    if (!homeworkSessionRuntime) homeworkSessionRuntime = { taskId: null, elapsedByTask: {}, startedAt: null, running: false, complete: false };
+    storeHomeworkElapsed();
+    homeworkSessionRuntime.taskId = task ? task.id : null;
+    homeworkSessionRuntime.complete = !task;
+    homeworkSessionRuntime.running = !!task && autoStart !== false;
+    homeworkSessionRuntime.startedAt = homeworkSessionRuntime.running ? Date.now() : null;
+    return task;
+  }
+
+  function startHomeworkSession(taskId) {
+    if (!homeworkSessionTasks().some(function (task) { return !task.done; })) {
+      homeworkSessionRuntime = { taskId: null, elapsedByTask: {}, startedAt: null, running: false, complete: true };
+    } else {
+      homeworkSessionRuntime = { taskId: null, elapsedByTask: {}, startedAt: null, running: false, complete: false };
+      setHomeworkCurrent(taskId || "", true);
+    }
+    setRoute("homework");
+  }
+
+  function formatHomeworkClock(seconds) {
+    seconds = Math.max(0, Math.floor(Number(seconds) || 0));
+    var hours = Math.floor(seconds / 3600);
+    var minutes = Math.floor(seconds % 3600 / 60);
+    var rest = seconds % 60;
+    return (hours ? String(hours).padStart(2, "0") + ":" : "") + String(minutes).padStart(2, "0") + ":" + String(rest).padStart(2, "0");
+  }
+
+  function updateHomeworkClock() {
+    if (route.name !== "homework") return;
+    var timer = document.getElementById("homeworkSessionTimer");
+    var ring = document.querySelector(".homework-timer-ring");
+    var elapsed = homeworkElapsedSeconds();
+    if (timer) timer.textContent = formatHomeworkClock(elapsed);
+    if (ring) {
+      var duration = Math.max(1, Number(ring.dataset.duration || 30) * 60);
+      var progress = Math.min(100, Math.round(elapsed / duration * 100));
+      ring.style.setProperty("--homework-progress", progress + "%");
+      var caption = ring.querySelector("small");
+      if (caption) caption.textContent = elapsed >= duration ? "tempo estimado atingido" : Math.max(0, Math.ceil((duration - elapsed) / 60)) + " min estimados restantes";
+    }
+    homeworkClockTimer = setTimeout(updateHomeworkClock, 1000);
+  }
+
+  function scheduleHomeworkClock() {
+    if (homeworkClockTimer) clearTimeout(homeworkClockTimer);
+    homeworkClockTimer = setTimeout(updateHomeworkClock, 120);
+  }
+
+  function renderHomeworkChecklist(tasks, activeId) {
+    return tasks.map(function (task, index) {
+      var course = courseById(task.courseId);
+      var status = task.done ? '<i data-lucide="check"></i>' : index + 1;
+      return '<button class="homework-queue-item ' + (task.done ? 'is-done' : '') + ' ' + (task.id === activeId ? 'is-active' : '') + '" type="button" data-action="homework-select" data-id="' + attr(task.id) + '" ' + (task.done ? 'disabled' : '') + '><span class="homework-queue-check">' + status + '</span><span><strong>' + esc(course ? course.name : 'TPC') + '</strong><small>' + esc(task.title) + ' · ' + esc(task.estimatedMinutes || 30) + ' min</small></span></button>';
+    }).join("");
+  }
+
+  function renderHomeworkTaskBody(task) {
+    var checklist = asArray(task.checklist).length ? '<section class="homework-focus-section"><p class="card-label">Passos</p><div class="homework-focus-checklist">' + task.checklist.map(function (item) { return '<span><i data-lucide="square"></i>' + esc(item) + '</span>'; }).join("") + '</div></section>' : '';
+    var extras = asArray(task.extraTasks).length ? '<section class="homework-focus-section"><p class="card-label">Tarefas adicionais</p><div class="homework-focus-extras">' + task.extraTasks.map(function (item) { return '<article><div><i data-lucide="' + (item.optional ? 'circle-dashed' : 'circle-check-big') + '"></i><strong>' + esc(item.title) + '</strong>' + (item.optional ? '<span class="badge">Opcional</span>' : '') + '</div>' + renderContentBlocks(item.blocks) + '</article>'; }).join("") + '</div></section>' : '';
+    return '<section class="homework-focus-section homework-main-task"><p class="card-label">Tarefa</p>' + (asArray(task.contentBlocks).length ? renderContentBlocks(task.contentBlocks) : '<p>' + esc(task.notes || task.title) + '</p>') + '</section>' + checklist + extras;
+  }
+
+  function renderHomeworkComplete(tasks) {
+    return '<section class="homework-complete-screen"><span class="homework-complete-icon"><i data-lucide="check"></i></span><p class="card-label">After-school complete</p><h2>TPCs feitos!</h2><p>Fechaste ' + tasks.length + ' tarefa' + (tasks.length === 1 ? '' : 's') + '. Já podes descansar sem aquela sensação de “estou-me a esquecer de alguma coisa”.</p><div class="homework-complete-actions"><button class="button button-dark" type="button" data-route="home"><i data-lucide="house"></i>Voltar à Home</button><button class="button" type="button" data-action="view-report-card"><i data-lucide="award"></i>Ver o dia</button></div></section>';
+  }
+
+  function renderHomeworkSession() {
+    setHeader("TPCs", "Sessão depois das aulas");
+    var tasks = homeworkSessionTasks();
+    if (!tasks.length) {
+      return '<div class="page-head"><div><h2>Não há TPCs para fazer.</h2><p>Quando adicionares um TPC numa aula, ele aparece aqui numa sessão guiada.</p></div><div class="page-actions"><button class="button" type="button" data-route="home"><i data-lucide="arrow-left"></i>Voltar</button></div></div>' + emptyState("party-popper", "Tudo livre", "O teu fim de tarde está livre. Aproveita.", "add-task", "Adicionar TPC");
+    }
+    if (!homeworkSessionRuntime) {
+      homeworkSessionRuntime = { taskId: null, elapsedByTask: {}, startedAt: null, running: false, complete: false };
+      setHomeworkCurrent("", true);
+    }
+    var pending = tasks.filter(function (task) { return !task.done; });
+    if (!pending.length || homeworkSessionRuntime.complete) return renderHomeworkComplete(tasks);
+    var current = pending.find(function (task) { return task.id === homeworkSessionRuntime.taskId; }) || setHomeworkCurrent(pending[0].id, true);
+    var course = courseById(current.courseId);
+    var position = pending.findIndex(function (task) { return task.id === current.id; }) + 1;
+    var queue = renderHomeworkChecklist(tasks, current.id);
+    var elapsed = homeworkElapsedSeconds();
+    var body = renderHomeworkTaskBody(current);
+    return '<div class="page-head homework-session-head"><div><button class="button button-ghost button-small" type="button" data-route="home"><i data-lucide="arrow-left"></i>Home</button><h2 style="margin-top:11px">TPCs depois das aulas</h2><p>Uma disciplina de cada vez. A Twenty trata da fila; tu só tens de fazer a tarefa em frente.</p></div><div class="page-actions"><span class="badge badge-violet">' + (tasks.length - pending.length) + '/' + tasks.length + ' feitos</span></div></div><div class="homework-session-layout"><aside class="homework-queue card"><div class="card-title-row"><div><p class="card-label">Checklist</p><h3>Disciplinas</h3></div><span class="badge">' + pending.length + ' restantes</span></div><div class="homework-queue-list">' + queue + '</div></aside><main class="homework-focus card"><div class="homework-focus-top"><div><p class="card-label">TPC em curso · ' + position + ' de ' + pending.length + '</p><span class="badge badge-dark">' + esc(course ? course.name : 'TPC') + '</span><h2>' + esc(current.title) + '</h2></div><div class="homework-timer-ring" data-duration="' + attr(current.estimatedMinutes || 30) + '" style="--homework-progress:0%"><strong id="homeworkSessionTimer">' + formatHomeworkClock(elapsed) + '</strong><small>' + esc(current.estimatedMinutes || 30) + ' min estimados</small></div></div><div class="homework-focus-content">' + body + '</div><div class="homework-focus-actions">' + (homeworkSessionRuntime.running ? '<button class="button" type="button" data-action="homework-pause"><i data-lucide="pause"></i>Pausar</button>' : '<button class="button" type="button" data-action="homework-resume"><i data-lucide="play"></i>Continuar</button>') + (current.lessonId ? '<button class="button" type="button" data-route="lesson" data-id="' + attr(current.lessonId) + '"><i data-lucide="book-open"></i>Abrir aula</button>' : '') + '<button class="button button-dark homework-finish-button" type="button" data-action="homework-finish"><i data-lucide="check"></i>Terminar e avançar</button></div></main></div>';
+  }
+
+  async function finishHomeworkTask() {
+    if (!homeworkSessionRuntime || !homeworkSessionRuntime.taskId) return;
+    storeHomeworkElapsed();
+    var task = state.tasks.find(function (item) { return item.id === homeworkSessionRuntime.taskId; });
+    if (!task) return;
+    task.done = true;
+    task.completedOnce = true;
+    state.meta.completedHomeworkIds = Array.from(new Set(asArray(state.meta.completedHomeworkIds).concat(String(task.id))));
+    task.completedAt = new Date().toISOString();
+    task.actualSeconds = Number(homeworkSessionRuntime.elapsedByTask[task.id] || 0);
+    var next = homeworkSessionTasks().find(function (item) { return !item.done; });
+    if (next) {
+      setHomeworkCurrent(next.id, true);
+      await save(true);
+      render();
+      toast("TPC concluído. A seguir: " + next.title);
+      return;
+    }
+    homeworkSessionRuntime.taskId = null;
+    homeworkSessionRuntime.running = false;
+    homeworkSessionRuntime.complete = true;
+    await save(true);
+    render();
+    setTimeout(launchHomeworkConfetti, 80);
+  }
+
+  function launchHomeworkConfetti() {
+    var layer = document.createElement("div");
+    layer.className = "homework-confetti";
+    for (var index = 0; index < 72; index += 1) {
+      var piece = document.createElement("i");
+      piece.style.setProperty("--x", Math.round(Math.random() * 100) + "vw");
+      piece.style.setProperty("--delay", (Math.random() * .7).toFixed(2) + "s");
+      piece.style.setProperty("--spin", Math.round(Math.random() * 720 - 360) + "deg");
+      piece.style.setProperty("--drift", Math.round(Math.random() * 180 - 90) + "px");
+      piece.dataset.tone = String(index % 6);
+      layer.appendChild(piece);
+    }
+    document.body.appendChild(layer);
+    setTimeout(function () { layer.remove(); }, 3800);
   }
 
   function renderPlanner() {
@@ -3836,6 +4340,8 @@
     document.body.style.overflow = "hidden";
     refreshIcons(modalRoot);
     hydrateLocalImages(modalRoot);
+    hydrateNotebookImages(modalRoot);
+    enhanceNotebookStickers(modalRoot);
     typesetMath(modalRoot);
     var first = modalRoot.querySelector("input:not([type=hidden]), select, textarea, button");
     if (first) setTimeout(function () { first.focus(); }, 30);
@@ -3849,6 +4355,7 @@
     modalRoot.innerHTML = "";
     revokeImageObjectUrls();
     hydrateLocalImages(view);
+    hydrateNotebookImages(view);
     if (!onboarding) document.body.style.overflow = "";
   }
 
@@ -4358,6 +4865,14 @@
     if (!url) return "";
     if (/^(javascript|data|vbscript):/i.test(url)) return "";
     return url;
+  }
+
+  function safeNotebookImageUrl(value) {
+    var url = String(value || "").trim();
+    if (!url) return "";
+    if (/^data:image\/(png|jpe?g|gif|webp);base64,/i.test(url) && url.length <= 18 * 1024 * 1024) return url;
+    if (/^blob:/i.test(url)) return url;
+    return safeResourceUrl(url);
   }
 
   function normalizeImageRefs(value, fallbackRole) {
@@ -5185,6 +5700,10 @@
   function startQuiz(id) {
     var quiz = state.quizzes.find(function (item) { return item.id === id; });
     if (!quiz || !asArray(quiz.questions).length) { toast("Este quiz ainda não tem perguntas.", "warning"); return; }
+    if (quiz.lessonId && lessonIsBeOnline(lessonById(quiz.lessonId))) {
+      viewLessonQuiz(quiz.lessonId);
+      return;
+    }
     quizRuntime = { quizId: id, index: 0, answers: [], selected: null, revealed: false };
     renderQuizQuestion();
   }
@@ -5228,6 +5747,7 @@
     }, 0);
     var score = Math.round(correct / questions.length * 100);
     quiz.lastScore = score;
+    quiz.completedOnce = true;
     quiz.lastCompletedAt = new Date().toISOString();
     if (quiz.lessonId) completeLessonBeOnline(quiz.lessonId);
     ensureBeOnlineTasks();
@@ -5670,8 +6190,18 @@
     if (!action) return;
     if (action === "close-modal") {
       if (quizRuntime) quizRuntime = null;
-      closeModal();
+      await closeModalSavingNotebook();
       if (onboarding) renderOnboarding();
+    } else if (action === "view-report-card") {
+      closeModal();
+      setRoute("home");
+      setTimeout(function () {
+        var card = document.querySelector(".daily-report-card");
+        if (!card) return;
+        card.classList.add("is-highlighted");
+        card.scrollIntoView({ behavior: "smooth", block: "center" });
+        setTimeout(function () { card.classList.remove("is-highlighted"); }, 1800);
+      }, 80);
     } else if (action === "quick-add") {
       openQuickAdd();
     } else if (action === "add-course") {
@@ -5743,6 +6273,7 @@
     } else if (action === "sync-material") {
       await syncExistingMaterial(button.dataset.id);
     } else if (action === "configure-lesson-content") {
+      if (modalRoot.querySelector("#notebookForm")) await saveNotebook({ close: false, render: false, silent: true });
       openLessonBuilder(button.dataset.lesson || route.id, button.dataset.kind || "quiz");
     } else if (action === "copy-lesson-builder-prompt") {
       var promptArea = modalRoot.querySelector("#lessonBuilderPrompt");
@@ -5756,13 +6287,35 @@
     } else if (action === "open-notebook-editor") {
       openNotebookEditor(button.dataset.lesson || route.id);
     } else if (action === "save-notebook") {
-      await saveNotebook();
+      await saveNotebook({ close: true, render: true, silent: false });
     } else if (action === "notebook-command") {
       var noteEditor = modalRoot.querySelector("#notebookEditor");
       if (noteEditor) { noteEditor.focus(); document.execCommand(button.dataset.command, false, button.dataset.value || null); }
     } else if (action === "notebook-block") {
       var blockEditor = modalRoot.querySelector("#notebookEditor");
       if (blockEditor) { blockEditor.focus(); document.execCommand("formatBlock", false, button.dataset.block || "p"); }
+    } else if (action === "notebook-add-image") {
+      var notebookImageInput = modalRoot.querySelector("#notebookImageInput");
+      if (notebookImageInput) notebookImageInput.click();
+    } else if (action === "notebook-sticker-delete") {
+      var deleteSticker = button.closest(".notebook-sticker");
+      if (deleteSticker) deleteSticker.remove();
+    } else if (action === "notebook-sticker-smaller" || action === "notebook-sticker-larger") {
+      var resizeSticker = button.closest(".notebook-sticker");
+      var resizeImage = resizeSticker && resizeSticker.querySelector("img");
+      if (resizeSticker && resizeImage) {
+        var currentWidth = clamp(resizeSticker.getAttribute("data-width") || resizeImage.getAttribute("width") || 280, 80, 720);
+        var nextWidth = clamp(currentWidth + (action === "notebook-sticker-larger" ? 40 : -40), 80, 720);
+        resizeSticker.setAttribute("data-width", String(nextWidth));
+        resizeImage.setAttribute("width", String(nextWidth));
+        resizeImage.setAttribute("data-width", String(nextWidth));
+      }
+    } else if (action === "notebook-sticker-align") {
+      var alignSticker = button.closest(".notebook-sticker");
+      if (alignSticker) {
+        alignSticker.classList.remove("align-left", "align-center", "align-right");
+        alignSticker.classList.add("align-" + (["left", "center", "right"].indexOf(button.dataset.align) >= 0 ? button.dataset.align : "center"));
+      }
     } else if (action === "lesson-ai") {
       openLessonAIModal(button.dataset.lesson || route.id, button.dataset.output || "quiz", button.dataset.material || "");
     } else if (action === "run-lesson-ai") {
@@ -5843,6 +6396,13 @@
       var task = state.tasks.find(function (item) { return item.id === button.dataset.id; });
       if (task && task.type === "lesson-quiz") {
         await doLessonQuiz(task.lessonId || "");
+      } else if (task && (task.type === "homework" || task.type === "tpc") && (task.lockedContent || task.configuredFromPrompt)) {
+        if (task.done || task.completedOnce) {
+          viewLessonHomework(task.id);
+        } else {
+          closeModal();
+          startHomeworkSession(task.id);
+        }
       } else if (task) {
         task.done = !task.done;
         await save(true);
@@ -5850,6 +6410,21 @@
         render();
         toast(task.done ? "Tarefa concluída." : "Tarefa reaberta.");
       }
+    } else if (action === "start-homework-session") {
+      closeModal();
+      startHomeworkSession(button.dataset.task || "");
+    } else if (action === "homework-select") {
+      setHomeworkCurrent(button.dataset.id || "", true);
+      render();
+    } else if (action === "homework-pause") {
+      storeHomeworkElapsed();
+      if (homeworkSessionRuntime) { homeworkSessionRuntime.running = false; homeworkSessionRuntime.startedAt = null; }
+      render();
+    } else if (action === "homework-resume") {
+      if (homeworkSessionRuntime) { homeworkSessionRuntime.running = true; homeworkSessionRuntime.startedAt = Date.now(); }
+      render();
+    } else if (action === "homework-finish") {
+      await finishHomeworkTask();
     } else if (action === "toggle-mastery") {
       var lesson = lessonById(button.dataset.id);
       if (lesson) { lesson.mastered = !lesson.mastered; await save(true); render(); toast(lesson.mastered ? "Aula marcada como dominada." : "Aula voltou à lista de revisão."); }
@@ -6074,7 +6649,7 @@
     }
   }
 
-  function handleDocumentClick(event) {
+  async function handleDocumentClick(event) {
     var actionButton = event.target.closest("[data-action]");
     if (actionButton) {
       event.preventDefault();
@@ -6097,7 +6672,7 @@
       if (!searchInput.value) document.querySelector(".search-box").classList.remove("is-open");
     }
     if (event.target.classList.contains("modal-layer")) {
-      closeModal();
+      await closeModalSavingNotebook();
       if (onboarding) renderOnboarding();
     }
   }
@@ -6149,7 +6724,7 @@
       }, 60000);
       if (!state.profile.onboardingComplete || !state.currentSemesterId || !activeCourses().length) startOnboarding(state.semesters.length ? "new-semester" : "first");
       if ("serviceWorker" in navigator && location.protocol !== "file:") {
-        navigator.serviceWorker.register("sw.js?v=20-school-lab", { updateViaCache: "none" }).then(function () {
+        navigator.serviceWorker.register("sw.js?v=22-notebook-stickers", { updateViaCache: "none" }).then(function () {
           if (Sync && Sync.getStatus().configured) Sync.startAutoSync();
         }).catch(function () {
           if (Sync && Sync.getStatus().configured) Sync.startAutoSync();
@@ -6247,9 +6822,58 @@
   modalRoot.addEventListener("paste", function (event) {
     var editor = event.target.closest("#notebookEditor");
     if (!editor) return;
+    handleNotebookPaste(event, editor);
+  });
+  modalRoot.addEventListener("keydown", function (event) {
+    var editor = event.target.closest("#notebookEditor");
+    if (!editor || event.key !== "Enter" || event.shiftKey) return;
+    var selection = window.getSelection();
+    var node = selection && selection.anchorNode;
+    var element = node && (node.nodeType === 1 ? node : node.parentElement);
+    var quote = element && element.closest ? element.closest("blockquote") : null;
+    if (!quote || !editor.contains(quote)) return;
     event.preventDefault();
-    var value = (event.clipboardData || window.clipboardData).getData("text/plain");
-    document.execCommand("insertText", false, value);
+    var paragraph = document.createElement("p");
+    paragraph.innerHTML = "<br>";
+    quote.insertAdjacentElement("afterend", paragraph);
+    var range = document.createRange();
+    range.selectNodeContents(paragraph);
+    range.collapse(true);
+    selection.removeAllRanges();
+    selection.addRange(range);
+  });
+  modalRoot.addEventListener("dragstart", function (event) {
+    var sticker = event.target.closest(".notebook-sticker");
+    if (!sticker) return;
+    draggedNotebookSticker = sticker;
+    sticker.classList.add("is-dragging");
+    if (event.dataTransfer) { event.dataTransfer.effectAllowed = "move"; event.dataTransfer.setData("text/plain", "twenty-notebook-sticker"); }
+  });
+  modalRoot.addEventListener("dragend", function (event) {
+    var sticker = event.target.closest(".notebook-sticker");
+    if (sticker) sticker.classList.remove("is-dragging");
+    draggedNotebookSticker = null;
+  });
+  modalRoot.addEventListener("dragover", function (event) {
+    var editor = event.target.closest("#notebookEditor");
+    if (!editor || !draggedNotebookSticker) return;
+    event.preventDefault();
+    if (event.dataTransfer) event.dataTransfer.dropEffect = "move";
+  });
+  modalRoot.addEventListener("drop", function (event) {
+    var editor = event.target.closest("#notebookEditor");
+    if (!editor || !draggedNotebookSticker) return;
+    event.preventDefault();
+    var range = null;
+    if (document.caretRangeFromPoint) range = document.caretRangeFromPoint(event.clientX, event.clientY);
+    else if (document.caretPositionFromPoint) {
+      var position = document.caretPositionFromPoint(event.clientX, event.clientY);
+      if (position) { range = document.createRange(); range.setStart(position.offsetNode, position.offset); range.collapse(true); }
+    }
+    if (range && editor.contains(range.commonAncestorContainer)) range.insertNode(draggedNotebookSticker);
+    else editor.appendChild(draggedNotebookSticker);
+    draggedNotebookSticker.classList.remove("is-dragging");
+    draggedNotebookSticker = null;
   });
   modalRoot.addEventListener("submit", function (event) {
     if (event.target.id === "pastQuestionForm") {
@@ -6268,6 +6892,22 @@
     if (evaluationForm && event.target.matches('[data-role="component-weight"]')) updateEvaluationBuilderSummary(evaluationForm);
   });
   modalRoot.addEventListener("change", function (event) {
+    if (event.target.matches("#notebookImageInput")) {
+      var notebookEditorForFile = modalRoot.querySelector("#notebookEditor");
+      var selectedFiles = Array.from(event.target.files || []);
+      var savedNotebookRange = notebookEditorForFile ? notebookEditorRange(notebookEditorForFile) : null;
+      (async function () {
+        try {
+          for (var imageIndex = 0; imageIndex < selectedFiles.length; imageIndex += 1) await uploadNotebookImage(selectedFiles[imageIndex], notebookEditorForFile, savedNotebookRange);
+        } catch (error) {
+          finishManualSyncActivity(false);
+          toast(error.message || "Não foi possível adicionar a imagem.", "error");
+        } finally {
+          event.target.value = "";
+        }
+      })();
+      return;
+    }
     var builderForm = event.target.closest("#lessonBuilderForm");
     if (builderForm && event.target.matches('[name="materialIds"], [name="includePast"]')) {
       refreshLessonBuilderPrompt();
@@ -6355,11 +6995,11 @@
       if (!searchInput.value && searchResults.hidden) document.querySelector(".search-box").classList.remove("is-open");
     }, 180);
   });
-  document.addEventListener("keydown", function (event) {
+  document.addEventListener("keydown", async function (event) {
     if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k") { event.preventDefault(); searchInput.focus(); searchInput.select(); }
     if (event.key === "Escape") {
       if (guidedTour) stopGuidedTour(true);
-      else if (!onboarding) closeModal();
+      else if (!onboarding) await closeModalSavingNotebook();
       searchResults.hidden = true;
     }
     if ((event.key === "Enter" || event.key === " ") && event.target.matches('.course-card[role="button"]')) { event.preventDefault(); setRoute("course", event.target.dataset.id); }
