@@ -2947,3 +2947,302 @@ article.diner-menu-entry, span.diner-menu-entry, .diner-menu-entry.is-readonly {
   .diner-smart-badges, .diner-chef-reason { margin-left: 25px; }
   .diner-chef-note-label { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
 }
+
+
+/* v0.26.5 · Editorial menu inspired by modern café posters */
+.diner-poster {
+  --diner-ink: #242630;
+  --diner-paper: #fbfaf7;
+  --diner-red: #7667ef;
+  --diner-blue: #7667ef;
+  --diner-yellow: #fff48a;
+  border-color: rgba(36, 38, 48, .32);
+  background-color: var(--diner-paper);
+  background-image:
+    linear-gradient(rgba(118, 103, 239, .025), rgba(118, 103, 239, .025)),
+    radial-gradient(rgba(36, 38, 48, .045) .75px, transparent .75px);
+  background-size: 100% 100%, 7px 7px;
+  box-shadow: 0 26px 70px rgba(45, 43, 70, .16), inset 0 0 0 8px rgba(255,255,255,.62);
+}
+.diner-poster::before {
+  inset: 14px;
+  border: 1px solid rgba(118, 103, 239, .28);
+}
+.diner-poster::after {
+  width: 20px;
+  height: auto;
+  inset: 0 auto 0 0;
+  border: 0;
+  border-radius: 0;
+  transform: none;
+  background:
+    conic-gradient(from 90deg, var(--diner-blue) 25%, transparent 0 50%, var(--diner-blue) 0 75%, transparent 0) 0 0/20px 20px;
+  opacity: .95;
+}
+.diner-poster-head {
+  min-height: 220px;
+  align-items: flex-start;
+  padding: 34px 48px 24px 58px;
+  border-bottom: 3px solid var(--diner-blue);
+  background:
+    radial-gradient(circle at 88% 24%, rgba(255,244,138,.72), transparent 22%),
+    linear-gradient(120deg, rgba(118,103,239,.045), transparent 54%);
+}
+.diner-poster-brand small {
+  color: var(--diner-blue);
+  font-size: .62rem;
+  letter-spacing: .19em;
+}
+.diner-poster-brand h3 {
+  position: relative;
+  margin: 8px 0 16px;
+  min-height: 102px;
+  font-family: Impact, "Arial Black", sans-serif;
+  font-size: clamp(4rem, 11vw, 8rem);
+  line-height: .76;
+  letter-spacing: -.045em;
+  color: var(--diner-blue);
+}
+.diner-poster-brand h3 span { display: block; }
+.diner-poster-brand h3 em {
+  position: absolute;
+  left: -3px;
+  bottom: -22px;
+  font-family: "Brush Script MT", "Segoe Script", cursive;
+  font-size: .46em;
+  font-weight: 700;
+  line-height: 1;
+  letter-spacing: -.07em;
+  color: #242630;
+  transform: rotate(-4deg);
+}
+.diner-poster-brand p {
+  color: rgba(36,38,48,.64);
+  font-size: .56rem;
+  letter-spacing: .14em;
+}
+.diner-poster-meta {
+  align-self: start;
+  gap: 10px;
+}
+.diner-poster-meta span {
+  color: #242630;
+  padding-bottom: 8px;
+  border-bottom: 3px solid var(--diner-blue);
+}
+.diner-poster-meta strong {
+  color: #242630;
+  border: 2px solid var(--diner-blue);
+  background: var(--diner-yellow);
+  box-shadow: 4px 4px 0 var(--diner-blue);
+}
+.diner-poster-meta strong.is-open { color: #242630; }
+.diner-poster-grid {
+  margin-left: 20px;
+  grid-template-columns: .9fr 1.1fr;
+}
+.diner-poster-panel {
+  padding: 30px 32px;
+}
+.diner-poster-panel:nth-child(2),
+.diner-poster-panel.diner-mains {
+  border-color: rgba(118,103,239,.34);
+}
+.diner-poster-panel > header {
+  padding-bottom: 9px;
+  border-bottom: 4px solid var(--diner-blue);
+}
+.diner-poster-panel > header span {
+  color: var(--diner-blue);
+}
+.diner-poster-panel > header h4 {
+  color: var(--diner-blue);
+  font-family: Impact, "Arial Black", sans-serif;
+  font-size: clamp(1.5rem, 3vw, 2.35rem);
+  letter-spacing: -.01em;
+}
+.diner-menu-entry {
+  padding-block: 10px;
+}
+.diner-entry-line strong {
+  color: #242630;
+  font-size: .74rem;
+  letter-spacing: -.01em;
+}
+.diner-entry-icon {
+  width: 28px;
+  height: 28px;
+  display: inline-grid;
+  place-items: center;
+  border: 1px solid rgba(118,103,239,.24);
+  border-radius: 9px;
+  background: rgba(118,103,239,.08);
+}
+.diner-dot-leader {
+  border-bottom-color: rgba(118,103,239,.45);
+}
+.diner-entry-kcal {
+  color: var(--diner-blue);
+  font-weight: 950;
+}
+.diner-hand-mark {
+  border-color: rgba(255, 191, 213, .86);
+  background: rgba(255, 231, 134, .16);
+}
+.diner-menu-entry.is-selected::after { color: var(--diner-blue); }
+.diner-menu-entry.is-chef-recommended {
+  border-color: rgba(118,103,239,.38);
+  background: linear-gradient(100deg, rgba(255,244,138,.55), rgba(245,241,255,.7));
+  box-shadow: 4px 4px 0 rgba(118,103,239,.16);
+}
+.diner-menu-entry.is-chef-recommended::before {
+  color: #fff;
+  background: var(--diner-blue);
+  border-color: var(--diner-blue);
+}
+.diner-chef-note {
+  margin-left: 48px;
+  border: 2px dashed rgba(118,103,239,.5);
+  background: linear-gradient(100deg, rgba(245,241,255,.92), rgba(255,248,187,.72));
+}
+.diner-chef-note-label > span { color: var(--diner-blue); }
+.diner-poster-footer {
+  margin-left: 20px;
+  border-top-color: var(--diner-blue);
+  background: linear-gradient(90deg, rgba(118,103,239,.09), rgba(255,244,138,.3));
+}
+.diner-ticket-button {
+  border-color: #242630;
+  color: #fff;
+  background: var(--diner-blue);
+  box-shadow: 4px 4px 0 #242630;
+}
+.diner-ticket-button:hover:not(:disabled) { box-shadow: 6px 6px 0 #242630; }
+.diner-day-rail {
+  border-radius: 16px;
+  background: #f4f1ff;
+}
+.diner-day-rail > div:first-child span { color: var(--violet); }
+.diner-day-rail > div:first-child strong { color: #242630; }
+.diner-day-rail .canteen-day-chip.is-active {
+  color: #fff;
+  border-color: var(--violet);
+  background: var(--violet);
+}
+.diner-meal-toggle {
+  border-color: rgba(118,103,239,.2);
+  background: #efedf9;
+}
+.diner-meal-toggle button.is-active {
+  color: #fff;
+  background: var(--violet);
+  box-shadow: 0 8px 20px rgba(118,103,239,.22);
+}
+
+@media (min-width: 761px) {
+  .diner-poster::marker { display: none; }
+  .diner-poster > .diner-poster-grid::after {
+    content: "TWENTY CAMPUS · DAILY MENU";
+    grid-column: 1 / -1;
+    min-height: 118px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    margin: 0 32px 20px;
+    border: 1px solid rgba(118,103,239,.22);
+    color: rgba(118,103,239,.44);
+    background:
+      linear-gradient(135deg, transparent 42%, rgba(118,103,239,.06) 42% 58%, transparent 58%),
+      radial-gradient(circle at 25% 50%, rgba(255,244,138,.55), transparent 26%);
+    font: 950 .62rem/1 Impact, "Arial Black", sans-serif;
+    letter-spacing: .22em;
+  }
+}
+
+@media (max-width: 760px) {
+  .diner-page-head h2 { font-size: 2rem; }
+  .diner-poster {
+    border-radius: 20px;
+    box-shadow: 0 18px 42px rgba(45,43,70,.14);
+  }
+  .diner-poster::after {
+    width: auto;
+    height: 14px;
+    inset: 0 0 auto 0;
+    background-size: 14px 14px;
+  }
+  .diner-poster::before { inset: 10px; }
+  .diner-poster-head {
+    min-height: 0;
+    padding: 30px 18px 20px;
+    gap: 12px;
+    border-bottom-width: 2px;
+  }
+  .diner-poster-brand { min-width: 0; }
+  .diner-poster-brand small { font-size: .45rem; }
+  .diner-poster-brand h3 {
+    min-height: 68px;
+    font-size: clamp(3.1rem, 19vw, 5.3rem);
+    margin-bottom: 9px;
+  }
+  .diner-poster-brand h3 em {
+    bottom: -13px;
+    font-size: .42em;
+  }
+  .diner-poster-brand p { font-size: .43rem; }
+  .diner-poster-meta {
+    max-width: 104px;
+    gap: 6px;
+  }
+  .diner-poster-meta span {
+    font-size: .38rem;
+    line-height: 1.45;
+  }
+  .diner-poster-meta strong {
+    padding: 5px 6px;
+    font-size: .38rem;
+    box-shadow: 2px 2px 0 var(--diner-blue);
+  }
+  .diner-poster-grid {
+    margin-left: 0;
+    grid-template-columns: 1fr;
+  }
+  .diner-poster-panel,
+  .diner-poster-panel:nth-child(2),
+  .diner-poster-panel.diner-mains {
+    padding: 22px 18px;
+    border-left: 0;
+  }
+  .diner-poster-panel:nth-child(2),
+  .diner-poster-panel.diner-mains { border-top: 1px solid rgba(118,103,239,.28); }
+  .diner-poster-panel > header {
+    margin-bottom: 12px;
+    border-bottom-width: 3px;
+  }
+  .diner-poster-panel > header h4 { font-size: 1.45rem; }
+  .diner-entry-line { gap: 6px; }
+  .diner-entry-line strong {
+    max-width: 58%;
+    font-size: .66rem;
+  }
+  .diner-entry-icon {
+    width: 25px;
+    height: 25px;
+    font-size: .78rem;
+  }
+  .diner-entry-kcal { font-size: .47rem; }
+  .diner-official-name,
+  .diner-entry-tags,
+  .diner-allergens,
+  .diner-smart-badges,
+  .diner-chef-reason { margin-left: 31px; }
+  .diner-chef-note {
+    margin: 0 16px 18px;
+    padding: 13px;
+  }
+  .diner-poster-footer {
+    margin-left: 0;
+    padding: 18px;
+  }
+  .diner-ticket-button { min-height: 48px; }
+}

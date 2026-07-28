@@ -1,16 +1,16 @@
 "use strict";
 
-var CACHE = "twenty-study-os-v26-4-fast-chef-ai";
+var CACHE = "twenty-study-os-v26-5-editorial-menu";
 var APP_SHELL = [
   "./",
   "./index.html",
-  "./styles.css?v=26.4-fast-chef-ai",
-  "./sync.js?v=26.4-fast-chef-ai",
-  "./db.js?v=26.4-fast-chef-ai",
-  "./ai.js?v=26.4-fast-chef-ai",
-  "./ai-worker.js?v=26.4-fast-chef-ai",
-  "./app.js?v=26.4-fast-chef-ai",
-  "./lucide.min.js?v=26.4-fast-chef-ai",
+  "./styles.css?v=26.5-editorial-menu",
+  "./sync.js?v=26.5-editorial-menu",
+  "./db.js?v=26.5-editorial-menu",
+  "./ai.js?v=26.5-editorial-menu",
+  "./ai-worker.js?v=26.5-editorial-menu",
+  "./app.js?v=26.5-editorial-menu",
+  "./lucide.min.js?v=26.5-editorial-menu",
   "./manifest.webmanifest",
   "./icon.svg",
   "./icon-192.png",

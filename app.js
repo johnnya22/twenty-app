@@ -5071,7 +5071,7 @@
       : '<footer class="diner-poster-footer"><div><span>O teu pedido</span><strong>' + esc(summary) + '</strong><small>Total · ' + esc(options.price || "3,10 €") + '</small></div><button class="diner-ticket-button" type="button" data-action="canteen-issue-ticket" ' + (ready ? "" : "disabled") + '><i data-lucide="ticket"></i>EMITIR TICKET DE ' + esc(mealLabel.toUpperCase()) + '</button></footer>';
 
     return '<section class="diner-poster canteen-' + mealType + (visit ? ' is-readonly' : '') + '">' +
-      '<header class="diner-poster-head"><div class="diner-poster-brand"><small>CAMPUS DINER FCT</small><h3>C A N T I N A</h3><p>' + esc(mealLabel.toUpperCase()) + ' · ' + esc(date) + '</p></div><div class="diner-poster-meta"><span>' + esc(options.price || "3,10 €") + ' · PREÇO SOCIAL</span><strong class="' + (service.open ? 'is-open' : '') + '">' + statusLabel + ' ' + esc(period.start) + '–' + esc(period.end) + '</strong></div></header>' +
+      '<header class="diner-poster-head"><div class="diner-poster-brand"><small>CAMPUS DINER FCT</small><h3><span>MENU</span><em>Cantina</em></h3><p>' + esc(mealLabel.toUpperCase()) + ' · ' + esc(date) + '</p></div><div class="diner-poster-meta"><span>' + esc(options.price || "3,10 €") + ' · PREÇO SOCIAL</span><strong class="' + (service.open ? 'is-open' : '') + '">' + statusLabel + ' ' + esc(period.start) + '–' + esc(period.end) + '</strong></div></header>' +
       '<div class="diner-poster-grid"><section class="diner-poster-panel diner-soups"><header><span>01</span><h4>SOPAS</h4></header><div class="diner-menu-list">' + soupLines + '</div></section><section class="diner-poster-panel diner-desserts"><header><span>02</span><h4>SOBREMESAS</h4></header><div class="diner-menu-list">' + canteenDessertChips(selection, !!visit, visit && visit.dessert && visit.dessert.id) + '</div></section><section class="diner-poster-panel diner-mains"><header><span>03</span><h4>PRATOS PRINCIPAIS</h4><small>Assinala a tua escolha</small></header><div class="diner-menu-list">' + dishLines + '</div></section></div>' +
       renderCanteenPosterAINote(meal) + readonlyFooter + '</section>';
   }
@@ -5079,7 +5079,7 @@
   function renderCanteen() {
     setHeader("Cantina", "Campus · SAS NOVA");
     var refreshButton = '<button class="button canteen-refresh-button" type="button" data-action="refresh-canteen" ' + (canteenStatus === "loading" ? "disabled" : "") + '><i data-lucide="refresh-cw"></i>' + (canteenStatus === "loading" ? "A atualizar…" : "Atualizar") + '</button>';
-    var head = '<div class="page-head canteen-page-head diner-page-head"><div><p class="canteen-page-kicker">Campus Diner FCT</p><h2>A ementa de hoje, impressa como deve ser.</h2><p>Vê a escolha do chef, assinala na folha, emite o ticket e fecha a refeição quando levantares o tabuleiro.</p></div><div class="page-actions">' + refreshButton + '</div></div>';
+    var head = '<div class="page-head canteen-page-head diner-page-head"><div><p class="canteen-page-kicker">Campus Diner FCT</p><h2>A ementa de hoje, com ar de poster.</h2><p>Escolhe o prato, marca a sobremesa e guarda o teu ticket do dia.</p></div><div class="page-actions">' + refreshButton + '</div></div>';
     if (!canteenMenu && (canteenStatus === "idle" || canteenStatus === "loading")) {
       return head + '<section class="card canteen-loading canteen-loading-revamp"><span class="loading-orb"></span><div><p class="canteen-loading-label">A montar o poster</p><h3>A carregar a ementa</h3><p>A consultar a informação oficial da SAS NOVA.</p></div></section>';
     }
