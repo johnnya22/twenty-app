@@ -1569,27 +1569,14 @@
     }) || null;
   }
 
-  function quizHasCompletion(quiz) {
-    if (!quiz) return false;
-    if (quiz.completedOnce === true || !!quiz.lastCompletedAt) return true;
-    if (quiz.lastScore !== null && quiz.lastScore !== undefined && quiz.lastScore !== "") return true;
-    if (Number(quiz.attemptCount || 0) > 0) return true;
-    return asArray(quiz.attempts).some(function (attempt) {
-      return !!(attempt && (attempt.completedAt || attempt.done || attempt.score !== null && attempt.score !== undefined));
-    });
-  }
-
   function lessonIsBeOnline(lesson) {
     if (!lesson) return false;
-    var lessonId = String(lesson.id);
-    var quizzes = state.quizzes.filter(function (quiz) { return String(quiz.lessonId) === lessonId && asArray(quiz.questions).length; });
+    var quizzes = state.quizzes.filter(function (quiz) { return quiz.lessonId === lesson.id && asArray(quiz.questions).length; });
     if (!quizzes.length) return false;
-    if (asArray(state.meta && state.meta.completedLessonQuizIds).map(String).indexOf(lessonId) >= 0) return true;
-    if (lesson.quizCompleted === true || !!lesson.quizCompletedAt || !!lesson.beOnlineCompletedAt) return true;
-    if (quizzes.some(quizHasCompletion)) return true;
-    return state.tasks.some(function (task) {
-      return String(task.lessonId) === lessonId && task.type === "lesson-quiz" && (task.done === true || task.completedOnce === true || !!task.completedAt);
-    });
+    if (asArray(state.meta && state.meta.completedLessonQuizIds).indexOf(String(lesson.id)) >= 0) return true;
+    if (lesson.quizCompleted || lesson.quizCompletedAt || lesson.beOnlineCompletedAt) return true;
+    if (quizzes.some(function (quiz) { return !!quiz.completedOnce || quiz.lastScore != null || !!quiz.lastCompletedAt; })) return true;
+    return state.tasks.some(function (task) { return task.lessonId === lesson.id && task.type === "lesson-quiz" && (task.done || task.completedOnce); });
   }
 
   function beOnlineStatus() {
@@ -1950,7 +1937,7 @@
   }
 
   function lessonCheckButton(lesson, label, className) {
-    if (!lesson || lessonIsBeOnline(lesson)) return "";
+    if (!lesson) return "";
     var quiz = configuredQuizForLesson(lesson.id);
     if (!quiz) return "";
     return '<button class="button ' + (className || "button-dark") + '" type="button" data-action="start-quiz" data-id="' + attr(quiz.id) + '"><i data-lucide="check-check"></i>' + esc(label || "Fazer quiz") + "</button>";
@@ -2104,37 +2091,7 @@
         return context;
       }
 
-      var currentQuiz = current.lesson ? configuredQuizForLesson(current.lesson.id) : null;
-      var currentQuizComplete = current.lesson ? lessonIsBeOnline(current.lesson) : false;
-
-      if (remaining <= 15 && current.lesson && currentQuiz && currentQuizComplete) {
-        var nextIsClose = following && following.startMin - current.endMin <= 10;
-        if (nextIsClose) {
-          context.phase = "soon";
-          context.phaseLabel = "Próxima aula";
-          context.title = (following.course ? following.course.name : "A próxima aula") + " irá começar em breve.";
-          context.copy = (following.lesson ? following.lesson.title + " · " : "") + following.start + "–" + following.end + (following.room ? " · " + following.room : "") + ".";
-          context.icon = "arrow-right-circle";
-          context.stat = following.start;
-          context.statLabel = "começa";
-          context.primary = blockOpenButton(following, following.lesson ? "Preparar próxima aula" : "Preparar aula", "button-yellow");
-          context.secondary = blockOpenButton(current, "Ver aula atual", "");
-        } else {
-          context.phase = "closing";
-          context.phaseLabel = "A aula está a terminar";
-          context.title = (current.course ? current.course.name : "A aula") + " está quase a terminar.";
-          context.copy = following
-            ? "A próxima aula começa às " + following.start + "."
-            : "Guarda os materiais e fecha a aula com calma.";
-          context.icon = "book-open-check";
-          context.stat = homeMinutesCopy(remaining);
-          context.statLabel = "até terminar";
-          context.primary = following ? blockOpenButton(following, "Ver próxima aula", "button-yellow") : blockOpenButton(current, "Ver aula", "button-yellow");
-        }
-        return context;
-      }
-
-      if (remaining <= 15 && current.lesson && currentQuiz && !currentQuizComplete) {
+      if (remaining <= 15 && current.lesson && configuredQuizForLesson(current.lesson.id) && !lessonIsBeOnline(current.lesson)) {
         var isBackToBack = following && following.startMin - current.endMin <= 10;
         context.phase = "closing";
         context.phaseLabel = "A aula está a terminar";
@@ -4247,15 +4204,43 @@
     var value = String(type || "").toLowerCase();
     if (value.indexOf("sopa") >= 0) return "soup";
     if (value.indexOf("veg") >= 0) return "leaf";
+    if (value.indexOf("peixe") >= 0 || value.indexOf("pesc") >= 0) return "fish";
+    if (value.indexOf("carne") >= 0) return "drumstick";
     return "utensils";
+  }
+
+  function canteenDishTone(type) {
+    var value = String(type || "").toLowerCase();
+    if (value.indexOf("sopa") >= 0) return "soup";
+    if (value.indexOf("veg") >= 0) return "vegetarian";
+    if (value.indexOf("peixe") >= 0 || value.indexOf("pesc") >= 0) return "fish";
+    if (value.indexOf("carne") >= 0) return "meat";
+    return "classic";
+  }
+
+  function canteenDishLabel(type) {
+    var value = cleanText(type || "Opção");
+    if (!value) return "Opção";
+    return value.replace(/^prato\s+/i, "");
   }
 
   function canteenDayChip(day) {
     var date = localDate(day.date);
     var today = canteenPortugalParts(new Date()).iso;
-    var label = day.date === today ? "Hoje" : date ? new Intl.DateTimeFormat("pt-PT", { weekday: "short" }).format(date).replace(".", "") : "Dia";
+    var isToday = day.date === today;
+    var label = isToday ? "Hoje" : date ? new Intl.DateTimeFormat("pt-PT", { weekday: "short" }).format(date).replace(".", "") : "Dia";
     var dateLabel = date ? new Intl.DateTimeFormat("pt-PT", { day: "2-digit", month: "short" }).format(date).replace(".", "") : day.label;
-    return '<button class="canteen-day-chip ' + (day.date === canteenSelectedDate ? "is-active" : "") + '" type="button" data-action="canteen-day" data-date="' + attr(day.date) + '"><span>' + esc(label) + '</span><strong>' + esc(dateLabel) + '</strong></button>';
+    return '<button class="canteen-day-chip ' + (day.date === canteenSelectedDate ? "is-active" : "") + '" type="button" data-action="canteen-day" data-date="' + attr(day.date) + '"><span>' + esc(label) + '</span><strong>' + esc(dateLabel) + '</strong>' + (isToday ? '<i aria-hidden="true"></i>' : '') + '</button>';
+  }
+
+  function canteenDishCard(item, menu, options) {
+    options = options || {};
+    var codes = asArray(item.allergens);
+    var names = codes.map(function (id) { return menu.allergens && menu.allergens[id] ? menu.allergens[id] : "Alergénio " + id; });
+    var tone = canteenDishTone(item.type);
+    var allergenCodes = codes.length ? '<span class="canteen-allergen-codes" title="' + attr(names.join(", ")) + '" aria-label="Alergénios ' + attr(codes.join(", ")) + '"><i data-lucide="shield-alert"></i>' + esc(codes.join(", ")) + '</span>' : '<span class="canteen-no-allergen-label">Sem alergénios indicados</span>';
+    var kcal = item.kcal ? '<span class="canteen-kcal ' + attr(item.calorieBand || "") + '"><strong>' + Number(item.kcal) + '</strong><small>kcal</small></span>' : '';
+    return '<article class="canteen-dish-card is-' + tone + (options.compact ? ' is-compact' : '') + '"><div class="canteen-dish-card-top"><span class="canteen-dish-visual"><i data-lucide="' + canteenDishIcon(item.type) + '"></i></span><span class="canteen-kind">' + esc(canteenDishLabel(item.type)) + '</span>' + kcal + '</div><h4>' + esc(item.description || "Descrição indisponível") + '</h4><footer>' + allergenCodes + '</footer></article>';
   }
 
   function renderCanteenMeal(meal, menu, options) {
@@ -4264,38 +4249,33 @@
     var items = asArray(meal.items);
     var soups = items.filter(function (item) { return String(item.type || "").toLowerCase().indexOf("sopa") >= 0; });
     var mainDishes = items.filter(function (item) { return String(item.type || "").toLowerCase().indexOf("sopa") < 0; });
-    function renderDish(item, showType) {
-      var codes = asArray(item.allergens);
-      var names = codes.map(function (id) { return menu.allergens && menu.allergens[id] ? menu.allergens[id] : "Alergénio " + id; });
-      var allergenCodes = codes.length ? '<span class="canteen-allergen-codes" title="' + attr(names.join(", ")) + '" aria-label="Alergénios ' + attr(codes.join(", ")) + '"><i data-lucide="shield-alert"></i>' + esc(codes.join(", ")) + '</span>' : "";
-      return '<div class="canteen-dish"><span class="canteen-dish-icon"><i data-lucide="' + canteenDishIcon(item.type) + '"></i></span><div class="canteen-dish-copy"><div>' + (showType ? '<span class="canteen-kind">' + esc(item.type || "Opção") + '</span>' : "") + allergenCodes + '</div><strong>' + esc(item.description || "Descrição indisponível") + '</strong></div>' + (item.kcal ? '<span class="canteen-kcal ' + attr(item.calorieBand || "") + '"><strong>' + Number(item.kcal) + '</strong><small>kcal</small></span>' : "") + '</div>';
-    }
-    var soupRows = soups.length ? soups.map(function (item) { return renderDish(item, false); }).join("") : '<p class="canteen-unavailable">Sem sopa indicada para este serviço.</p>';
-    var dishRows = mainDishes.length ? mainDishes.map(function (item) { return renderDish(item, true); }).join("") : '<p class="canteen-unavailable">Sem pratos indicados para este serviço.</p>';
-    var head = '<span class="canteen-meal-icon"><i data-lucide="' + canteenMealIcon(meal.name) + '"></i></span><h3>' + esc(meal.name) + '</h3><span class="canteen-option-count">' + mainDishes.length + (mainDishes.length === 1 ? ' prato' : ' pratos') + '</span>';
-    var classes = "card canteen-meal canteen-" + tone;
-    if (options.primary) classes += " canteen-primary-meal";
-    if (options.nested) classes += " canteen-nested-meal";
-    return '<article class="' + classes + '">' + (options.hideHead ? "" : '<div class="canteen-meal-head">' + head + '</div>') + '<div class="canteen-menu-groups"><section class="canteen-menu-group canteen-soup-group"><h4>Sopa</h4><div class="canteen-dishes">' + soupRows + '</div></section><section class="canteen-menu-group"><div class="canteen-group-head"><h4>Escolhe o prato</h4><span>' + mainDishes.length + (mainDishes.length === 1 ? ' opção' : ' opções') + '</span></div><div class="canteen-dishes">' + dishRows + '</div></section></div></article>';
+    var soupCards = soups.length ? soups.map(function (item) { return canteenDishCard(item, menu, { compact: true }); }).join("") : '<div class="canteen-menu-empty"><i data-lucide="soup"></i><span>Sem sopa indicada.</span></div>';
+    var dishCards = mainDishes.length ? mainDishes.map(function (item) { return canteenDishCard(item, menu); }).join("") : '<div class="canteen-menu-empty"><i data-lucide="utensils-crossed"></i><span>Sem pratos publicados.</span></div>';
+    var mealLabel = tone === "dinner" ? "Jantar" : "Almoço";
+    var eyebrow = tone === "dinner" ? "Para fechar o dia" : "Menu principal";
+    var classes = "canteen-menu-board canteen-" + tone;
+    if (options.primary) classes += " is-primary";
+    if (options.nested) classes += " is-nested";
+    return '<section class="' + classes + '"><header class="canteen-menu-board-head"><div><span>' + esc(eyebrow) + '</span><h3>' + esc(mealLabel) + '</h3></div><strong>' + mainDishes.length + (mainDishes.length === 1 ? ' prato' : ' pratos') + '</strong></header><div class="canteen-menu-layout"><aside class="canteen-soup-spotlight"><div class="canteen-section-title"><span class="canteen-section-icon"><i data-lucide="soup"></i></span><div><small>Para começar</small><h4>Sopa do dia</h4></div></div><div class="canteen-soup-list">' + soupCards + '</div></aside><div class="canteen-main-selection"><div class="canteen-section-heading"><div><small>O momento principal</small><h4>Escolhe o teu prato</h4></div><span>' + mainDishes.length + (mainDishes.length === 1 ? ' opção' : ' opções') + '</span></div><div class="canteen-dish-grid">' + dishCards + '</div></div></div></section>';
   }
 
   function renderCanteenDinner(meal, menu, hours) {
     var mainCount = meal ? asArray(meal.items).filter(function (item) { return String(item.type || "").toLowerCase().indexOf("sopa") < 0; }).length : 0;
     var dinnerHours = hours && hours.dinner ? hours.dinner.start + "–" + hours.dinner.end : "18:30–20:30";
     var copy = meal ? mainCount + (mainCount === 1 ? " prato" : " pratos") + " · " + dinnerHours : "Sem ementa publicada";
-    var content = meal ? renderCanteenMeal(meal, menu, { nested: true, hideHead: true }) : '<div class="canteen-dinner-empty"><i data-lucide="utensils-crossed"></i><p>O jantar não está indicado para este dia.</p></div>';
-    return '<details class="canteen-dinner-disclosure"><summary><span class="canteen-dinner-icon"><i data-lucide="moon-star"></i></span><span><strong>Jantar</strong><small>' + esc(copy) + '</small></span><i class="canteen-dinner-chevron" data-lucide="chevron-down"></i></summary><div class="canteen-dinner-content">' + content + '</div></details>';
+    var content = meal ? renderCanteenMeal(meal, menu, { nested: true }) : '<div class="canteen-dinner-empty"><i data-lucide="utensils-crossed"></i><p>O jantar não está indicado para este dia.</p></div>';
+    return '<details class="canteen-evening-card"><summary><span class="canteen-evening-moon"><i data-lucide="moon-star"></i></span><span class="canteen-evening-copy"><small>Mais tarde</small><strong>Ver jantar</strong><em>' + esc(copy) + '</em></span><span class="canteen-evening-action">Abrir <i data-lucide="chevron-down"></i></span></summary><div class="canteen-evening-content">' + content + '</div></details>';
   }
 
   function renderCanteen() {
     setHeader("Cantina", "Campus · SAS NOVA");
-    var refreshButton = '<button class="button" type="button" data-action="refresh-canteen" ' + (canteenStatus === "loading" ? "disabled" : "") + '><i data-lucide="refresh-cw"></i>' + (canteenStatus === "loading" ? "A atualizar…" : "Atualizar") + '</button>';
-    var head = '<div class="page-head canteen-page-head"><div><h2>Cantina da FCT</h2><p>Ementa do refeitório.</p></div><div class="page-actions">' + refreshButton + '</div></div>';
+    var refreshButton = '<button class="button canteen-refresh-button" type="button" data-action="refresh-canteen" ' + (canteenStatus === "loading" ? "disabled" : "") + '><i data-lucide="refresh-cw"></i>' + (canteenStatus === "loading" ? "A atualizar…" : "Atualizar") + '</button>';
+    var head = '<div class="page-head canteen-page-head"><div><p class="canteen-page-kicker">Campus dining</p><h2>Cantina</h2><p>A ementa oficial, apresentada como merece.</p></div><div class="page-actions">' + refreshButton + '</div></div>';
     if (!canteenMenu && (canteenStatus === "idle" || canteenStatus === "loading")) {
-      return head + '<section class="card canteen-loading"><span class="loading-orb"></span><div><h3>A carregar ementa</h3><p>A consultar a ementa oficial da SAS NOVA.</p></div></section>';
+      return head + '<section class="card canteen-loading canteen-loading-revamp"><span class="loading-orb"></span><div><p class="canteen-loading-label">A preparar a mesa</p><h3>A carregar a ementa</h3><p>A consultar a informação oficial da SAS NOVA.</p></div></section>';
     }
     if (!canteenMenu) {
-      return head + '<section class="card canteen-error"><span class="canteen-empty-icon"><i data-lucide="wifi-off"></i></span><div><h3>Não foi possível abrir a ementa.</h3><p>' + esc(canteenError || "A fonte oficial está temporariamente indisponível.") + '</p><button class="button button-dark" type="button" data-action="refresh-canteen"><i data-lucide="refresh-cw"></i>Tentar novamente</button></div></section>';
+      return head + '<section class="card canteen-error canteen-error-revamp"><span class="canteen-empty-icon"><i data-lucide="wifi-off"></i></span><div><h3>Hoje a ementa não chegou à mesa.</h3><p>' + esc(canteenError || "A fonte oficial está temporariamente indisponível.") + '</p><button class="button button-dark" type="button" data-action="refresh-canteen"><i data-lucide="refresh-cw"></i>Tentar novamente</button></div></section>';
     }
     var now = canteenPortugalParts(new Date());
     var hours = canteenServiceHours(canteenMenu);
@@ -4314,6 +4294,7 @@
     var selected = days.find(function (day) { return day.date === canteenSelectedDate; }) || days[0];
     var selectedDate = selected && localDate(selected.date);
     var longDate = selectedDate ? new Intl.DateTimeFormat("pt-PT", { weekday: "long", day: "numeric", month: "long" }).format(selectedDate) : selected.label;
+    var selectedIsToday = selected && selected.date === now.iso;
     var consultedAt = canteenMenu.fetchedAt ? new Intl.DateTimeFormat("pt-PT", { timeZone: "Europe/Lisbon", day: "2-digit", month: "long", year: "numeric", hour: "2-digit", minute: "2-digit" }).format(new Date(canteenMenu.fetchedAt)) : "data indisponível";
     var allOfficial = canteenStatus === "ready" && canteenMenu.infoSource === "official";
     var statusClass = allOfficial ? "is-fresh" : "is-stale";
@@ -4328,9 +4309,13 @@
     var summerCopy = closures.summer || "Férias de verão: encerramento no último dia útil de julho e reabertura no 2.º dia útil de setembro.";
     var seasonalCopy = closures.seasonal || "Existem ainda encerramentos curtos no Natal, Carnaval e Páscoa, comunicados por aviso.";
     var alternativesCopy = closures.alternatives || "Nesses períodos, algumas cantinas de outras universidades públicas podem permanecer abertas a alunos da NOVA.";
-    var serviceCard = '<section class="canteen-service-status ' + (service.open ? "is-open" : "is-closed") + '"><span class="canteen-service-icon"><i data-lucide="' + service.icon + '"></i></span><div class="canteen-service-copy"><h3>' + esc(service.title) + '</h3><p>' + esc(service.detail) + '</p><small>Segundo o horário regular publicado.</small></div><div class="canteen-price"><span>Refeição social</span><strong>' + esc(price) + '</strong><small>desde ' + esc(effectiveFrom) + '</small></div></section>';
-    var footer = '<div class="canteen-footer-grid"><article class="card canteen-closures"><div class="card-title-row"><div><p class="card-label">Funcionamento</p><h3>Encerramentos</h3></div><span class="metric-icon"><i data-lucide="calendar-off"></i></span></div><div class="canteen-closure-list"><p>' + esc(summerCopy) + '</p><p>' + esc(seasonalCopy) + '</p><small>' + esc(alternativesCopy) + '</small></div></article><article class="card canteen-allergens"><div class="card-title-row"><div><p class="card-label">Informação alimentar</p><h3>Alergénios</h3></div><span class="metric-icon"><i data-lucide="shield-alert"></i></span></div><details><summary>Ver legenda completa</summary><div class="canteen-allergen-grid">' + allergenEntries + '</div></details><p>' + esc(canteenMenu.allergenNotice || "Confirma sempre os alergénios com o responsável da unidade.") + '</p></article></div><aside class="canteen-meal-note"><i data-lucide="info"></i><p>A refeição social inclui ' + esc(includes) + '. A ementa pode sofrer alterações no próprio dia.</p></aside><section class="canteen-verification ' + statusClass + '"><span class="canteen-verified-icon"><i data-lucide="' + (allOfficial ? "badge-check" : "cloud-off") + '"></i></span><div><strong>' + esc(verificationTitle) + '</strong><p>' + esc(verificationCopy) + '</p></div><div class="canteen-source-meta"><time>' + esc(verificationTime) + '</time><span><a href="' + attr(canteenMenu.pageUrl || CANTEEN_PAGE_URL) + '" target="_blank" rel="noopener noreferrer">Ementa oficial <i data-lucide="arrow-up-right"></i></a><a href="' + attr(info.pageUrl || CANTEEN_INFO_PAGE_URL) + '" target="_blank" rel="noopener noreferrer">Preço e condições <i data-lucide="arrow-up-right"></i></a></span></div></section>';
-    return head + serviceCard + '<div class="canteen-days" role="group" aria-label="Escolher dia">' + days.map(canteenDayChip).join("") + '</div><div class="canteen-date-heading"><h3>' + esc(longDate.charAt(0).toUpperCase() + longDate.slice(1)) + '</h3><span>Almoço</span></div><div class="canteen-menu-stack">' + lunchCard + renderCanteenDinner(dinner, canteenMenu, hours) + '</div>' + footer;
+    var heroStatus = selectedIsToday ? service.title : "Ementa publicada";
+    var heroDetail = selectedIsToday ? service.detail : "Escolheste " + longDate;
+    var heroTitle = selectedIsToday ? "Hoje na cantina" : "Menu de " + longDate;
+    var hero = '<section class="canteen-hero ' + (selectedIsToday && service.open ? 'is-open' : '') + '"><div class="canteen-hero-orb orb-one"></div><div class="canteen-hero-orb orb-two"></div><div class="canteen-hero-copy"><span class="canteen-hero-eyebrow"><i data-lucide="sparkles"></i>' + (selectedIsToday ? 'O menu de hoje' : 'Ementa selecionada') + '</span><h2>' + esc(heroTitle.charAt(0).toUpperCase() + heroTitle.slice(1)) + '</h2><p>' + esc(heroDetail) + '</p><div class="canteen-hero-status"><span class="' + (selectedIsToday && service.open ? 'is-open' : '') + '"><i data-lucide="' + (selectedIsToday ? service.icon : 'calendar-check-2') + '"></i>' + esc(heroStatus) + '</span><a href="' + attr(canteenMenu.pageUrl || CANTEEN_PAGE_URL) + '" target="_blank" rel="noopener noreferrer">Fonte oficial <i data-lucide="arrow-up-right"></i></a></div></div><aside class="canteen-price-card"><small>Refeição social</small><strong>' + esc(price) + '</strong><span>Preço em vigor desde ' + esc(effectiveFrom) + '</span><div><i data-lucide="badge-check"></i><p>Inclui ' + esc(includes) + '.</p></div></aside></section>';
+    var includedStrip = '<section class="canteen-included-strip" aria-label="O que inclui a refeição"><span><i data-lucide="soup"></i>Sopa</span><span><i data-lucide="utensils"></i>Prato</span><span><i data-lucide="wheat"></i>Pão</span><span><i data-lucide="cup-soda"></i>Bebida</span><span><i data-lucide="cake-slice"></i>Sobremesa</span></section>';
+    var footer = '<div class="canteen-info-grid"><article class="card canteen-info-card canteen-allergens"><div class="card-title-row"><div><p class="card-label">Antes de escolheres</p><h3>Alergénios</h3></div><span class="metric-icon"><i data-lucide="shield-alert"></i></span></div><details><summary>Ver legenda completa</summary><div class="canteen-allergen-grid">' + allergenEntries + '</div></details><p>' + esc(canteenMenu.allergenNotice || "Confirma sempre os alergénios com o responsável da unidade.") + '</p></article><article class="card canteen-info-card canteen-closures"><div class="card-title-row"><div><p class="card-label">Planeia com antecedência</p><h3>Funcionamento</h3></div><span class="metric-icon"><i data-lucide="calendar-off"></i></span></div><div class="canteen-closure-list"><p>' + esc(summerCopy) + '</p><p>' + esc(seasonalCopy) + '</p><small>' + esc(alternativesCopy) + '</small></div></article></div><section class="canteen-verification ' + statusClass + '"><span class="canteen-verified-icon"><i data-lucide="' + (allOfficial ? "badge-check" : "cloud-off") + '"></i></span><div><strong>' + esc(verificationTitle) + '</strong><p>' + esc(verificationCopy) + '</p></div><div class="canteen-source-meta"><time>' + esc(verificationTime) + '</time><span><a href="' + attr(canteenMenu.pageUrl || CANTEEN_PAGE_URL) + '" target="_blank" rel="noopener noreferrer">Ementa <i data-lucide="arrow-up-right"></i></a><a href="' + attr(info.pageUrl || CANTEEN_INFO_PAGE_URL) + '" target="_blank" rel="noopener noreferrer">Condições <i data-lucide="arrow-up-right"></i></a></span></div></section>';
+    return head + hero + '<div class="canteen-day-rail"><div><span>Escolhe o dia</span><small>A semana inteira, sem perder o menu de hoje.</small></div><div class="canteen-days" role="group" aria-label="Escolher dia">' + days.map(canteenDayChip).join("") + '</div></div><section class="canteen-selected-day"><div><span>' + (selectedIsToday ? 'Hoje' : 'Ementa') + '</span><h3>' + esc(longDate.charAt(0).toUpperCase() + longDate.slice(1)) + '</h3></div><i data-lucide="calendar-days"></i></section>' + lunchCard + includedStrip + renderCanteenDinner(dinner, canteenMenu, hours) + footer;
   }
 
   function renderSettings() {
@@ -5792,13 +5777,6 @@
     quiz.lastScore = score;
     quiz.completedOnce = true;
     quiz.lastCompletedAt = new Date().toISOString();
-    quiz.attemptCount = Number(quiz.attemptCount || 0) + 1;
-    quiz.attempts = asArray(quiz.attempts).concat({
-      completedAt: quiz.lastCompletedAt,
-      score: score,
-      correct: correct,
-      total: questions.length
-    }).slice(-10);
     if (quiz.lessonId) completeLessonBeOnline(quiz.lessonId);
     ensureBeOnlineTasks();
     await save(true);

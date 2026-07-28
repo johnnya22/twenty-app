@@ -1,16 +1,16 @@
 "use strict";
 
-var CACHE = "twenty-study-os-v24-1-home-state";
+var CACHE = "twenty-study-os-v25-canteen";
 var APP_SHELL = [
   "./",
   "./index.html",
-  "./styles.css?v=24-1-home-state",
-  "./sync.js?v=24-1-home-state",
-  "./db.js?v=24-1-home-state",
-  "./ai.js?v=24-1-home-state",
-  "./ai-worker.js?v=24-1-home-state",
-  "./app.js?v=24-1-home-state",
-  "./lucide.min.js?v=24-1-home-state",
+  "./styles.css?v=25-canteen",
+  "./sync.js?v=25-canteen",
+  "./db.js?v=25-canteen",
+  "./ai.js?v=25-canteen",
+  "./ai-worker.js?v=25-canteen",
+  "./app.js?v=25-canteen",
+  "./lucide.min.js?v=25-canteen",
   "./manifest.webmanifest",
   "./icon.svg",
   "./icon-192.png",
