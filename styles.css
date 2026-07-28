@@ -3246,3 +3246,415 @@ article.diner-menu-entry, span.diner-menu-entry, .diner-menu-entry.is-readonly {
   }
   .diner-ticket-button { min-height: 48px; }
 }
+
+
+/* =========================================================
+   Twenty v0.27.0 · Campus Dining rebrand
+   Replicação fiel do mockup fornecido pelo utilizador.
+   ========================================================= */
+body[data-route="canteen"] { background: #f8f7fb; }
+body[data-route="canteen"] .ambient { display: none; }
+body[data-route="canteen"] .topbar { display: none; }
+body[data-route="canteen"] .app-stage { min-height: 100vh; }
+body[data-route="canteen"] .view { min-height: 100vh; padding: 0 34px 48px; background: #f8f7fb; }
+body[data-route="canteen"] .view-enter { min-height: 100%; }
+
+.campus-dining-page {
+  --campus-ink: #050505;
+  --campus-paper: #f8f7fb;
+  --campus-dark: #2c2d32;
+  --campus-green: #80dc00;
+  width: min(1165px, 100%);
+  min-height: 930px;
+  margin: 0 auto;
+  padding: 44px 0 38px;
+  color: var(--campus-ink);
+  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", "SF Pro Text", "Helvetica Neue", Arial, sans-serif;
+}
+.campus-dining-page button { font-family: inherit; }
+.campus-dining-hero {
+  display: grid;
+  grid-template-columns: minmax(330px, 1fr) minmax(330px, 1fr) 242px;
+  align-items: start;
+  column-gap: clamp(48px, 6vw, 82px);
+  min-height: 196px;
+  position: relative;
+}
+.campus-dining-brand h2,
+.campus-menu-section h3,
+.campus-dining-stamp,
+.campus-order-button,
+.campus-dining-state h3,
+.campus-dining-loading h2 {
+  font-family: "Londrina Solid", Impact, Haettenschweiler, sans-serif;
+}
+.campus-dining-brand h2 {
+  margin: 0;
+  font-size: clamp(62px, 6.25vw, 82px);
+  font-weight: 900;
+  line-height: .78;
+  letter-spacing: -.045em;
+}
+.campus-dining-brand p {
+  margin: 16px 0 0;
+  font-size: 15px;
+  font-weight: 500;
+  letter-spacing: -.01em;
+}
+.campus-dining-stamp {
+  justify-self: center;
+  min-width: 286px;
+  margin-top: 8px;
+  padding: 7px 18px 12px;
+  border: 3px solid var(--campus-ink);
+  border-radius: 8px;
+  transform: rotate(5deg);
+  background: transparent;
+  font-size: clamp(58px, 5.3vw, 78px);
+  font-weight: 900;
+  line-height: .93;
+  letter-spacing: -.035em;
+  text-align: center;
+}
+.campus-dining-info {
+  justify-self: end;
+  width: 36px;
+  height: 36px;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  color: #fff;
+  background: #000;
+  font-family: Georgia, serif !important;
+  font-size: 23px;
+  font-weight: 700;
+  line-height: 1;
+  cursor: pointer;
+}
+.campus-dining-columns {
+  display: grid;
+  grid-template-columns: minmax(330px, 1fr) minmax(330px, 1fr) 242px;
+  align-items: start;
+  column-gap: clamp(48px, 6vw, 82px);
+}
+.campus-dining-column { min-width: 0; }
+.campus-menu-section { margin: 0 0 42px; }
+.campus-menu-section > header {
+  min-height: 51px;
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 18px;
+  padding-bottom: 7px;
+  border-bottom: 3px solid var(--campus-ink);
+}
+.campus-menu-section > header h3 {
+  margin: 0;
+  font-size: 43px;
+  font-weight: 900;
+  line-height: .85;
+  letter-spacing: -.035em;
+}
+.campus-menu-section > header span {
+  padding-bottom: 2px;
+  font-size: 14px;
+  font-weight: 500;
+}
+.campus-menu-section > div { padding-top: 8px; }
+.campus-menu-item {
+  width: 100%;
+  min-width: 0;
+  position: relative;
+  display: block;
+  padding: 9px 0 11px;
+  border: 0;
+  color: var(--campus-ink);
+  background: transparent;
+  text-align: left;
+}
+button.campus-menu-item { cursor: pointer; }
+.campus-menu-item-main {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto 44px;
+  align-items: center;
+  gap: 10px;
+}
+.campus-menu-item-main strong {
+  min-width: 0;
+  font-size: 15px;
+  font-weight: 500;
+  line-height: 1.12;
+  letter-spacing: -.018em;
+}
+.campus-menu-item > small {
+  width: min(94%, 345px);
+  display: block;
+  margin-top: 3px;
+  font-size: 9.4px;
+  font-weight: 500;
+  line-height: 1.06;
+  letter-spacing: -.015em;
+}
+.campus-menu-kcal {
+  min-width: 42px;
+  font-size: 15px;
+  font-weight: 500;
+  text-align: right;
+}
+.campus-menu-item-icons {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 5px;
+}
+.campus-menu-item-icons > svg { width: 17px; height: 17px; stroke-width: 2.4; }
+.campus-menu-allergen-icons { display: inline-flex; align-items: center; gap: 3px; }
+.campus-menu-allergen-icons svg { width: 16px; height: 16px; stroke-width: 2.5; }
+.campus-recommended {
+  width: fit-content;
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  margin: 1px 0 2px;
+  padding: 2px 7px 2px 5px;
+  border-radius: 999px;
+  color: #fff;
+  background: var(--campus-green);
+  font-size: 8px;
+  font-weight: 700;
+  line-height: 1.2;
+}
+.campus-recommended svg { width: 9px; height: 9px; stroke-width: 3; }
+.campus-menu-subdivider {
+  margin: 18px 0 0;
+  padding: 0 0 3px !important;
+  border-bottom: 1px solid rgba(0,0,0,.6);
+}
+.campus-menu-subdivider span {
+  font-size: 9px;
+  font-weight: 500;
+  text-transform: uppercase;
+}
+.campus-pencil-outline {
+  position: absolute;
+  inset: 1px -7px 2px -7px;
+  z-index: 0;
+  pointer-events: none;
+  opacity: 0;
+  border: 2px solid rgba(12,12,12,.76);
+  border-radius: 13px 11px 14px 12px;
+  transform: rotate(-.25deg);
+}
+.campus-pencil-outline::after {
+  content: "";
+  position: absolute;
+  inset: -4px 2px 1px -3px;
+  border: 1px solid rgba(12,12,12,.35);
+  border-radius: 11px 15px 12px 14px;
+  transform: rotate(.55deg);
+}
+.campus-menu-item.is-selected { padding-inline: 7px; }
+.campus-menu-item.is-selected .campus-pencil-outline { opacity: 1; }
+.campus-menu-item > *:not(.campus-pencil-outline) { position: relative; z-index: 1; }
+.campus-dessert-item { padding: 7px 0; }
+.campus-dessert-item .campus-menu-item-main { grid-template-columns: minmax(0,1fr) 48px; }
+.campus-dessert-item .campus-menu-item-main strong { font-size: 15px; }
+.campus-drinks { width: 158px; margin-top: 20px; }
+.campus-drink-row { padding: 13px 1px 0 !important; font-size: 15px; }
+.campus-chef-note {
+  min-height: 352px;
+  margin-top: -1px;
+  padding: 16px 22px 20px;
+  border: 1.6px solid var(--campus-ink);
+  border-radius: 24px;
+  background: transparent;
+}
+.campus-chef-note h3 {
+  margin: 0 0 18px;
+  font-family: "Londrina Solid", Impact, sans-serif;
+  font-size: 38px;
+  font-weight: 900;
+  line-height: .92;
+  letter-spacing: -.025em;
+}
+.campus-chef-note p {
+  margin: 0;
+  font-family: "Swanky and Moo Moo", "Comic Sans MS", cursive;
+  font-size: 25px;
+  font-weight: 400;
+  line-height: 1.14;
+  letter-spacing: .01em;
+}
+.campus-chef-thinking {
+  display: block;
+  margin-top: 14px;
+  font-family: "Swanky and Moo Moo", cursive;
+  font-size: 17px;
+}
+.campus-order-button {
+  min-width: 225px;
+  min-height: 55px;
+  display: inline-grid;
+  place-items: center;
+  margin: 80px auto 0;
+  padding: 7px 20px 10px;
+  border: 0;
+  border-radius: 9px;
+  color: #fff;
+  background: var(--campus-dark);
+  font-size: 36px;
+  font-weight: 400;
+  line-height: .9;
+  letter-spacing: -.025em;
+  cursor: pointer;
+}
+.campus-center-column > .campus-order-button { display: grid; }
+.campus-order-button:disabled { opacity: .3; cursor: not-allowed; }
+.campus-readonly-actions,
+.campus-state-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 9px;
+  margin-top: 50px;
+}
+.campus-readonly-actions button,
+.campus-state-actions button,
+.campus-modal-secondary,
+.campus-info-close,
+.campus-info-action,
+.campus-info-source button,
+.campus-info-source a,
+.campus-dining-loading button {
+  min-height: 42px;
+  padding: 9px 15px;
+  border: 1.5px solid #000;
+  border-radius: 8px;
+  color: #000;
+  background: transparent;
+  font-weight: 700;
+  text-decoration: none;
+  cursor: pointer;
+}
+.campus-menu-empty { margin: 15px 0; font-size: 13px; }
+
+.campus-dining-state {
+  min-height: 520px;
+  display: grid;
+  place-items: center;
+  align-content: center;
+  gap: 26px;
+  text-align: center;
+}
+.campus-dining-state > div:first-child small { font-size: 12px; font-weight: 800; letter-spacing: .12em; }
+.campus-dining-state h3 { margin: 5px 0 8px; font-size: 52px; line-height: .9; }
+.campus-dining-state p { margin: 0; font-size: 15px; }
+.campus-order-active { grid-template-columns: minmax(230px, .8fr) minmax(280px, 430px); }
+.campus-order-active > .campus-order-button { grid-column: 1 / -1; margin-top: 0; }
+.campus-order-complete { min-height: 470px; }
+.campus-order-complete .campus-state-actions { margin-top: 0; }
+
+.campus-dining-loading {
+  min-height: 760px;
+  display: grid;
+  place-items: center;
+  align-content: center;
+  text-align: center;
+}
+.campus-dining-loading > span { width: 42px; height: 42px; border: 3px solid #000; border-top-color: transparent; border-radius: 50%; animation: spin .8s linear infinite; }
+.campus-dining-loading h2 { margin: 18px 0 7px; font-size: 48px; }
+.campus-dining-loading p { margin: 0 0 16px; }
+
+/* Info modal gathers everything removed from the clean menu. */
+.canteen-info-modal { max-width: 760px; color: #050505; background: #f8f7fb; border: 2px solid #050505; border-radius: 18px; }
+.canteen-info-modal .modal-head { border-bottom: 2px solid #050505; }
+.canteen-info-modal .modal-head h2 { font-family: "Londrina Solid", Impact, sans-serif; font-size: 38px; }
+.canteen-info-modal .modal-body { display: grid; gap: 16px; }
+.campus-info-days > strong { display: block; margin-bottom: 8px; }
+.campus-info-days > div { display: flex; gap: 7px; overflow-x: auto; padding-bottom: 4px; }
+.canteen-info-modal .canteen-day-chip { min-width: 94px; min-height: 52px; padding: 8px 11px; border: 1.5px solid #000; border-radius: 9px; box-shadow: none; background: transparent; }
+.canteen-info-modal .canteen-day-chip.is-active { color: #fff; background: #000; }
+.canteen-info-modal .canteen-day-chip.is-active strong { color: #fff; }
+.campus-info-section { padding: 15px 0 0; border-top: 1px solid rgba(0,0,0,.28); }
+.campus-info-section h3 { margin: 0 0 7px; font-family: "Londrina Solid", Impact, sans-serif; font-size: 27px; }
+.campus-info-section p { margin: 5px 0; font-size: 13px; line-height: 1.5; }
+.campus-info-facts { display: grid; grid-template-columns: repeat(3, minmax(0,1fr)); gap: 10px; }
+.campus-info-facts > div { padding: 12px; border: 1.5px solid #000; border-radius: 10px; }
+.campus-info-facts span { display: block; font-size: 10px; text-transform: uppercase; }
+.campus-info-facts strong { display: block; margin-top: 3px; font-size: 14px; }
+.campus-info-meal-list { display: grid; gap: 8px; margin-top: 10px; }
+.campus-info-meal-list > div { display: grid; grid-template-columns: 80px minmax(0,1fr) auto; gap: 9px; padding-bottom: 7px; border-bottom: 1px solid rgba(0,0,0,.17); }
+.campus-info-meal-list span, .campus-info-meal-list small { font-size: 11px; }
+.campus-info-meal-list strong { font-size: 13px; }
+.campus-info-allergens { display: grid; grid-template-columns: repeat(2, minmax(0,1fr)); gap: 6px 15px; }
+.campus-info-allergens span { display: flex; gap: 7px; font-size: 12px; }
+.campus-info-allergens b { min-width: 22px; }
+.campus-info-notice { opacity: .65; }
+.campus-info-source { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.campus-info-source a { display: inline-flex; align-items: center; }
+.campus-info-close { min-width: 120px; }
+
+/* Ticket flow in the same black and white language. */
+.canteen-ticket-confirm-modal,
+.canteen-ticket-modal { color: #050505; background: #f8f7fb; border: 2px solid #050505; border-radius: 18px; }
+.canteen-ticket-confirm-modal .modal-head,
+.canteen-ticket-modal .modal-head { border-bottom: 2px solid #050505; }
+.canteen-ticket-confirm-modal .modal-head h2,
+.canteen-ticket-modal .modal-head h2 { font-family: "Londrina Solid", Impact, sans-serif; font-size: 36px; }
+.canteen-ticket-confirm-modal .campus-order-button { min-width: 190px; min-height: 46px; margin: 0; font-size: 28px; }
+.canteen-ticket-modal .diner-ticket { filter: grayscale(1); }
+.canteen-ticket-modal .button-dark { border-radius: 8px; background: #2c2d32; }
+
+@media (max-width: 1180px) {
+  .campus-dining-page { width: min(1000px, 100%); }
+  .campus-dining-hero,
+  .campus-dining-columns { grid-template-columns: minmax(280px,1fr) minmax(280px,1fr) 220px; column-gap: 38px; }
+  .campus-dining-stamp { min-width: 238px; }
+  .campus-menu-section > header h3 { font-size: 38px; }
+  .campus-chef-note p { font-size: 22px; }
+}
+
+@media (max-width: 900px) {
+  body[data-route="canteen"] .view { padding: 0 22px 112px; }
+  .campus-dining-page { min-height: 0; padding-top: 28px; }
+  .campus-dining-hero { grid-template-columns: minmax(0,1fr) auto; min-height: 170px; column-gap: 18px; }
+  .campus-dining-brand { grid-column: 1; }
+  .campus-dining-stamp { grid-column: 1 / -1; grid-row: 2; justify-self: start; min-width: 190px; margin-top: 19px; font-size: 50px; transform: rotate(3deg); }
+  .campus-dining-info { grid-column: 2; grid-row: 1; }
+  .campus-dining-columns { display: flex; flex-direction: column; gap: 0; }
+  .campus-chef-note { width: 100%; }
+  .campus-left-column,
+  .campus-center-column { display: contents; }
+  .campus-soups { order: 1; }
+  .campus-mains { order: 2; }
+  .campus-desserts { order: 3; }
+  .campus-drinks { order: 4; width: 100%; }
+  .campus-chef-note { order: 5; min-height: 0; margin: 0 0 30px; }
+  .campus-order-button,
+  .campus-readonly-actions { order: 6; align-self: center; margin-top: 10px; }
+  .campus-menu-section { margin-bottom: 34px; }
+  .campus-menu-item-main strong { font-size: 16px; }
+  .campus-menu-item > small { font-size: 10px; }
+  .campus-chef-note p { font-size: 26px; }
+  .campus-order-active { grid-template-columns: 1fr; }
+  .campus-info-facts { grid-template-columns: 1fr; }
+}
+
+@media (max-width: 560px) {
+  body[data-route="canteen"] .view { padding-inline: 17px; }
+  .campus-dining-brand h2 { font-size: 62px; }
+  .campus-dining-brand p { font-size: 13px; }
+  .campus-dining-hero { min-height: 180px; }
+  .campus-menu-section > header h3 { font-size: 39px; }
+  .campus-menu-item-main { grid-template-columns: minmax(0,1fr) auto 42px; }
+  .campus-menu-item > small { width: 96%; }
+  .campus-chef-note { padding: 17px 19px; border-radius: 21px; }
+  .campus-chef-note h3 { font-size: 36px; }
+  .campus-chef-note p { font-size: 24px; }
+  .campus-order-button { width: 100%; min-width: 0; font-size: 34px; }
+  .campus-info-allergens { grid-template-columns: 1fr; }
+  .campus-info-meal-list > div { grid-template-columns: 66px minmax(0,1fr); }
+  .campus-info-meal-list small { grid-column: 2; }
+}

@@ -695,7 +695,12 @@
         aiDifficulty: "auto",
         canteenAIEnabled: true,
         canteenAIDescriptions: true,
-        canteenAIChefNote: true
+        canteenAIChefNote: true,
+        canteenFoodPreferences: {
+          dislikes: ["ervilhas"],
+          lowPreference: ["peixe da cantina"],
+          goal: "ganhar peso"
+        }
       },
       currentSemesterId: null,
       semesters: [],
@@ -740,6 +745,9 @@
     base.settings.canteenAIEnabled = base.settings.canteenAIEnabled !== false;
     base.settings.canteenAIDescriptions = base.settings.canteenAIDescriptions !== false;
     base.settings.canteenAIChefNote = base.settings.canteenAIChefNote !== false;
+    base.settings.canteenFoodPreferences = Object.assign({ dislikes: ["ervilhas"], lowPreference: ["peixe da cantina"], goal: "ganhar peso" }, base.settings.canteenFoodPreferences || {});
+    base.settings.canteenFoodPreferences.dislikes = asArray(base.settings.canteenFoodPreferences.dislikes).map(cleanText).filter(Boolean);
+    base.settings.canteenFoodPreferences.lowPreference = asArray(base.settings.canteenFoodPreferences.lowPreference).map(cleanText).filter(Boolean);
     base.currentSemesterId = source.currentSemesterId || null;
     ENTITY_ARRAYS.forEach(function (key) {
       base[key] = asArray(source[key]).filter(function (item) { return item && typeof item === "object"; });
@@ -1326,6 +1334,7 @@
       homeworkClockTimer = null;
     }
     renderShell();
+    document.body.dataset.route = route.name || "home";
     var html;
     if (route.name === "home") html = renderHome();
     else if (route.name === "courses") html = renderCourses();
@@ -4396,10 +4405,10 @@
       return [item.type || "", item.description || "", Number(item.kcal) || 0, asArray(item.allergens).join(",")];
     });
     var weatherContext = canteenWeatherContext(weather);
+    var dayContext = canteenPersonalContext(date);
     var weatherSignature = weatherContext.kind + "-" + (weatherContext.temperature == null ? "x" : Math.round(weatherContext.temperature / 3));
-    return String(date || "") + "-" + String(mealType || "") + "-" + weatherSignature + "-" + hashText(JSON.stringify(compact));
+    return String(date || "") + "-" + String(mealType || "") + "-" + weatherSignature + "-" + hashText(JSON.stringify(compact) + "|" + dayContext.signature);
   }
-
   function canteenAIFallbackDish(item) {
     var tone = canteenDishTone(item.type, item.description);
     var descriptions = {
@@ -4439,21 +4448,23 @@
 
   function canteenFallbackRecommendedItem(items, weatherContext) {
     if (!items.length) return null;
-    var withKcal = items.slice().sort(function (a, b) { return (Number(b.kcal) || 0) - (Number(a.kcal) || 0); });
-    if (["rainy", "snowy", "cold", "cloudy"].indexOf(weatherContext.kind) >= 0) return withKcal[0] || items[0];
-    if (weatherContext.kind === "hot") {
-      var lighter = items.slice().sort(function (a, b) {
-        var aTone = canteenDishTone(a.type, a.description);
-        var bTone = canteenDishTone(b.type, b.description);
-        var aScore = (aTone === "fish" || aTone === "vegetarian" ? -500 : 0) + (Number(a.kcal) || 9999);
-        var bScore = (bTone === "fish" || bTone === "vegetarian" ? -500 : 0) + (Number(b.kcal) || 9999);
-        return aScore - bScore;
-      });
-      return lighter[0] || items[0];
-    }
-    return items.find(function (item) { return canteenDishTone(item.type, item.description) === "fish"; }) || items[0];
+    var preferences = state && state.settings && state.settings.canteenFoodPreferences || {};
+    return items.slice().sort(function (a, b) {
+      function score(item) {
+        var name = cleanText(item && item.description || "").toLowerCase();
+        var tone = canteenDishTone(item && item.type, item && item.description);
+        var value = Number(item && item.kcal) || 0;
+        if (/ervilha/.test(name)) value -= 1200;
+        if (tone === "fish") value -= weatherContext.kind === "hot" ? 35 : 150;
+        if (tone === "meat" || tone === "poultry") value += 65;
+        if (tone === "vegetarian") value += 15;
+        if (["rainy", "snowy", "cold", "cloudy", "foggy"].indexOf(weatherContext.kind) >= 0) value += Number(item && item.kcal) * .08;
+        if (weatherContext.kind === "hot" && tone !== "fish" && tone !== "vegetarian") value -= 45;
+        return value;
+      }
+      return score(b) - score(a);
+    })[0] || items[0];
   }
-
   function canteenSafeCompleteCopy(value, fallback, maxChars) {
     var text = cleanText(value || fallback || "");
     if (!text) return cleanText(fallback || "");
@@ -4465,32 +4476,109 @@
     return (words || cleanText(fallback || "")).replace(/[,:;\-–—]+$/, "") + ".";
   }
 
+  function canteenPersonalContext(date) {
+    var selectedDate = localDate(date) || new Date();
+    var weekday = selectedDate.getDay();
+    var assessments = semesterItems("assessments").filter(function (item) {
+      return item.date === date;
+    }).sort(function (a, b) {
+      return timeMinutes(a.time || "23:59") - timeMinutes(b.time || "23:59");
+    });
+    var afternoonAssessment = assessments.find(function (item) {
+      return !item.time || timeMinutes(item.time) >= 12 * 60 + 30;
+    }) || null;
+    var assessmentCourse = afternoonAssessment ? courseById(afternoonAssessment.courseId) : null;
+    var classes = semesterItems("schedule").filter(function (entry) {
+      return Number(entry.weekday) === weekday;
+    }).sort(function (a, b) {
+      return timeMinutes(a.start) - timeMinutes(b.start);
+    });
+    var nextClass = classes.find(function (entry) {
+      return timeMinutes(entry.start) >= 13 * 60;
+    }) || null;
+    var nextClassCourse = nextClass ? courseById(nextClass.courseId) : null;
+    var lastClass = classes.length ? classes[classes.length - 1] : null;
+    var preferences = state && state.settings && state.settings.canteenFoodPreferences || {};
+    var academicBits = [];
+    if (afternoonAssessment) {
+      academicBits.push("Há " + cleanText(afternoonAssessment.type || "uma avaliação").toLowerCase() + " " + cleanText(afternoonAssessment.title || "") + (assessmentCourse ? " de " + cleanText(assessmentCourse.name) : "") + (afternoonAssessment.time ? " às " + afternoonAssessment.time : "") + " depois do almoço.");
+    } else if (nextClass) {
+      academicBits.push("A próxima aula depois do almoço é " + (nextClassCourse ? cleanText(nextClassCourse.name) : cleanText(nextClass.type || "aula")) + " às " + cleanText(nextClass.start || "") + ".");
+    }
+    if (lastClass && timeMinutes(lastClass.end || lastClass.start) >= 17 * 60) {
+      academicBits.push("O dia de aulas termina às " + cleanText(lastClass.end || lastClass.start) + ".");
+    }
+    var privateBits = [
+      "Evita recomendar pratos com ervilhas.",
+      "Os pratos de peixe da cantina têm preferência baixa, mas podem ganhar se forem claramente a melhor escolha.",
+      "O objetivo pessoal é ganhar peso, por isso privilegia opções mais energéticas quando fizer sentido."
+    ];
+    return {
+      assessment: afternoonAssessment,
+      assessmentCourse: assessmentCourse,
+      nextClass: nextClass,
+      nextClassCourse: nextClassCourse,
+      academicPrompt: academicBits.length ? academicBits.join(" ") : "Sem teste ou aula relevante registada depois do almoço.",
+      privatePrompt: privateBits.join(" "),
+      signature: hashText(JSON.stringify({
+        academic: academicBits,
+        dislikes: asArray(preferences.dislikes),
+        lowPreference: asArray(preferences.lowPreference),
+        goal: preferences.goal || ""
+      }))
+    };
+  }
+
+  function canteenChefNoteSanitize(value, fallback) {
+    var text = canteenSafeCompleteCopy(value, fallback, 260)
+      .replace(/[“”"]/g, "")
+      .replace(/[–—]/g, ". ")
+      .replace(/^\s*-\s*/, "")
+      .replace(/\s-\s/g, ". ")
+      .replace(/[\u2600-\u27BF]/g, "")
+      .replace(/[\uD83C-\uDBFF][\uDC00-\uDFFF]/g, "")
+      .replace(/\s{2,}/g, " ")
+      .trim();
+    return text || cleanText(fallback || "");
+  }
+
+  function canteenDishWithArticle(value) {
+    var name = cleanText(value || "prato do dia");
+    var lower = name.charAt(0).toLowerCase() + name.slice(1);
+    if (/^(febras|lentilhas|ervilhas|almôndegas|massas|salsichas|iscas)\b/i.test(lower)) return "as " + lower;
+    if (/^(douradinhos|hambúrgueres|carapauzinhos|filetes|bifes)\b/i.test(lower)) return "os " + lower;
+    if (/^(pescada|solha|salada|lasanha|massinha|perninha|perna|massa|omelete)\b/i.test(lower)) return "a " + lower;
+    return "o " + lower;
+  }
+
+  function canteenFallbackChefNote(recommended, dayContext, weatherContext) {
+    var name = canteenDishWithArticle(recommended && recommended.description || "prato do dia");
+    if (dayContext.assessment) {
+      var kind = cleanText(dayContext.assessment.type || "teste").toLowerCase();
+      return "Hoje eu ia " + name + ". É a opção mais composta para chegares bem ao " + kind + " depois do almoço. Boa sorte :)";
+    }
+    if (dayContext.nextClass && dayContext.nextClassCourse) {
+      return "Hoje eu escolhia " + name + ". É uma refeição mais composta para chegares à aula de " + cleanText(dayContext.nextClassCourse.name) + " com a tarde bem encaminhada.";
+    }
+    if (["rainy", "snowy", "cold", "cloudy", "foggy"].indexOf(weatherContext.kind) >= 0) {
+      return "Hoje eu ia " + name + ". Com este tempo, é a escolha mais reconfortante da ementa.";
+    }
+    return "Hoje eu ia " + name + ". É a escolha mais composta do menu e a que eu servia sem pensar duas vezes.";
+  }
+
   function canteenAIFallbackData(meal, weather) {
     var items = canteenMainItems(meal);
     var weatherContext = canteenWeatherContext(weather);
+    var dayContext = canteenPersonalContext(canteenSelectedDate || todayISO());
     var recommended = canteenFallbackRecommendedItem(items, weatherContext);
     var energetic = items.slice().sort(function (a, b) { return (Number(b.kcal) || 0) - (Number(a.kcal) || 0); })[0] || null;
     var proteinDishes = items.filter(canteenHasProteinSource).map(function (item) { return cleanText(item.description); });
     var recommendedName = cleanText(recommended && recommended.description || "");
-    var intro = {
-      rainy: "Hoje a chuva pede pratos mais cozy :)",
-      snowy: "Hoje o frio pede uma pausa bem quentinha.",
-      foggy: "Hoje o Campus está com aquele mood calmo de café.",
-      hot: "Hoje está calor, por isso apetece uma escolha mais leve.",
-      cold: "Hoje está fresco e o almoço pede algo mais reconfortante.",
-      cloudy: "Hoje o céu nublado combina com uma refeição cozy.",
-      mild: "Hoje a pausa de almoço está com mood tranquilo."
-    }[weatherContext.kind] || "Hoje a pausa de almoço merece um bocadinho de cerimónia.";
-    var reason = weatherContext.kind === "hot"
-      ? "Uma escolha mais leve para o tempo quente."
-      : ["rainy", "snowy", "cold", "cloudy"].indexOf(weatherContext.kind) >= 0
-        ? "A escolha mais cozy e composta da ementa."
-        : "A escolha do chef para o menu de hoje.";
-    var note = recommendedName ? intro + " Recomendo " + recommendedName + "." : intro;
+    var note = canteenFallbackChefNote(recommended, dayContext, weatherContext);
     return {
-      chefNote: note,
+      chefNote: canteenChefNoteSanitize(note, note),
       recommendedDish: recommendedName,
-      recommendationReason: reason,
+      recommendationReason: "A escolha do chef para o teu dia.",
       weatherLabel: weatherContext.label,
       mostEnergeticDish: cleanText(energetic && energetic.description || ""),
       proteinDishes: proteinDishes,
@@ -4498,7 +4586,6 @@
       generatedBy: "rules"
     };
   }
-
   function parseCanteenAIJSON(value) {
     var text = String(value || "").trim().replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "");
     var parsed = JSON.parse(text);
@@ -4525,7 +4612,7 @@
       };
     });
     return {
-      chefNote: canteenSafeCompleteCopy(raw && raw.chefNote, fallback.chefNote, 360),
+      chefNote: canteenChefNoteSanitize(raw && raw.chefNote, fallback.chefNote),
       recommendedDish: recommended,
       recommendationReason: canteenSafeCompleteCopy(raw && raw.recommendationReason, fallback.recommendationReason, 150),
       weatherLabel: fallback.weatherLabel,
@@ -4608,6 +4695,7 @@
 
   async function generateCanteenAIData(provider, meal, weather) {
     var weatherContext = canteenWeatherContext(weather);
+    var dayContext = canteenPersonalContext(canteenSelectedDate || todayISO());
     var dishes = canteenMainItems(meal).map(function (item, index) {
       return {
         id: index,
@@ -4622,13 +4710,20 @@
       return [item.id, item.officialName, item.category, item.kcal];
     });
     var prompt = [
-      "Escolhe um único prato da Cantina FCT e escreve uma Chef's Note curta em português europeu.",
+      "És o chef que preparou hoje as refeições da Cantina FCT.",
+      "Escolhe um prato e escreve uma nota humana em português europeu.",
       "Responde apenas no JSON pedido.",
-      "chefNote: uma frase natural de 10 a 22 palavras; liga o tempo ao menu quando fizer sentido; sem cumprimentos; no máximo um emoji ou smiley.",
-      "dishId: copia apenas o número do prato escolhido.",
+      "chefNote: 18 a 34 palavras, uma ou duas frases, primeira pessoa, natural e calorosa.",
+      "Podes desejar boa sorte quando existir teste depois do almoço.",
+      "Não uses emojis. Podes usar apenas :) uma vez.",
+      "Não uses travessões. Não expliques como recebeste o contexto.",
+      "As preferências privadas servem apenas para escolher. Nunca as reveles nem digas que o utilizador não gosta de algo ou quer ganhar peso.",
       "Não inventes ingredientes, alergénios, kcal, benefícios de saúde nem efeitos no corpo.",
+      "Contexto académico que podes mencionar naturalmente: " + dayContext.academicPrompt,
+      "Contexto privado que não podes expor: " + dayContext.privatePrompt,
       "Tempo no Campus: " + weatherContext.prompt,
-      "Pratos [id, nome, categoria, kcal]: " + JSON.stringify(compactDishes)
+      "Pratos [id, nome, categoria, kcal]: " + JSON.stringify(compactDishes),
+      "dishId: copia apenas o número do prato escolhido."
     ].join("\n");
 
     var session = await getCanteenAISession(provider, function (progress) {
@@ -4645,8 +4740,6 @@
     };
     var startedAt = performance.now();
     try {
-      // Uma única geração. A versão anterior podia repetir o prompt inteiro
-      // quando a saída estruturada falhava, duplicando facilmente a espera.
       var raw = await session.prompt(prompt, {
         responseConstraint: schema,
         omitResponseConstraintInput: true
@@ -4657,11 +4750,7 @@
       var result = normalizeCanteenAIData({
         chefNote: parsed && parsed.chefNote,
         recommendedDish: selected.officialName,
-        recommendationReason: weatherContext.kind === "hot"
-          ? "Uma escolha equilibrada para o ambiente quente de hoje."
-          : ["rainy", "snowy", "cold", "cloudy", "foggy"].indexOf(weatherContext.kind) >= 0
-            ? "A escolha mais cozy do chef para o ambiente de hoje."
-            : "A escolha do chef para a ementa de hoje."
+        recommendationReason: "A escolha do chef para o teu dia."
       }, meal, weather);
       console.info("[Twenty Cantina AI] geração concluída", {
         durationMs: Math.round(performance.now() - startedAt),
@@ -4674,16 +4763,14 @@
         durationMs: Math.round(performance.now() - startedAt),
         error: error && error.message || String(error)
       });
-      // Não repetir uma segunda geração completa: o fallback local é imediato.
       destroyCanteenAISession();
       throw error;
     }
   }
-
   async function ensureCanteenAIForCurrentMeal(forceDownload) {
     if (!state || !state.settings.canteenAIEnabled || !canteenMenu || route.name !== "canteen") return;
     var day = canteenDayForDate(canteenSelectedDate);
-    var mealType = canteenMealTab || "lunch";
+    var mealType = "lunch";
     var meal = day && asArray(day.meals).find(function (candidate) { return canteenMealType(candidate) === mealType; });
     if (!meal) return;
     var weather = await ensureCanteenWeather(canteenSelectedDate);
@@ -4744,7 +4831,6 @@
     })();
     return canteenAIPromise;
   }
-
   function renderCanteenAICard(meal) {
     if (!state.settings.canteenAIEnabled || !meal) return "";
     var data = canteenAIState.data || canteenAIFallbackData(meal, canteenWeatherState);
@@ -4768,13 +4854,16 @@
 
   function canteenDesserts() {
     return [
-      { id: "fruit", emoji: "🍎", label: "Fruta da época", kcal: 80 },
-      { id: "yogurt", emoji: "🥛", label: "Iogurte Mimosa", kcal: 95 },
-      { id: "gelatin", emoji: "🍮", label: "Gelatina", kcal: 60 },
-      { id: "special", emoji: "✨", label: "Especial do dia", kcal: 160 }
+      { id: "gelatin", label: "Gelatina", kcal: 60, seasonal: false },
+      { id: "yogurt", label: "Iogurte Mimosa", kcal: 95, seasonal: false },
+      { id: "fruit", label: "Fruta à disposição", kcal: 80, seasonal: false },
+      { id: "mousse", label: "Mousse de chocolate", kcal: null, seasonal: true },
+      { id: "aletria", label: "Aletria", kcal: null, seasonal: true },
+      { id: "rice-pudding", label: "Arroz doce", kcal: null, seasonal: true },
+      { id: "cake", label: "Bolo", kcal: null, seasonal: true },
+      { id: "semifreddo", label: "Semifrio", kcal: null, seasonal: true }
     ];
   }
-
   function canteenDessertById(id) {
     return canteenDesserts().find(function (item) { return item.id === id; }) || null;
   }
@@ -4845,45 +4934,62 @@
     return '<button class="canteen-day-chip ' + (day.date === canteenSelectedDate ? "is-active" : "") + '" type="button" data-action="canteen-day" data-date="' + attr(day.date) + '"><span>' + esc(label) + '</span><strong>' + esc(dateLabel) + '</strong>' + (isToday ? '<i aria-hidden="true"></i>' : '') + '</button>';
   }
 
+  function canteenDishIconName(item) {
+    var tone = canteenDishTone(item && item.type, item && item.description);
+    if (tone === "fish") return "fish-symbol";
+    if (tone === "vegetarian") return "sprout";
+    if (tone === "poultry") return "drumstick";
+    if (tone === "meat") return "beef";
+    if (tone === "soup") return "soup";
+    return "utensils";
+  }
+
+  function canteenDishAllergenIcons(item, menu) {
+    var icons = asArray(item && item.allergens).slice(0, 3).map(function (id) {
+      var name = menu && menu.allergens && menu.allergens[id] ? menu.allergens[id] : "Alergénio " + id;
+      var value = String(name).toLowerCase();
+      var icon = /glúten|cereal/.test(value) ? "wheat" : /peixe/.test(value) ? "fish-symbol" : /ovo/.test(value) ? "egg" : /leite/.test(value) ? "milk" : /soja|sésamo|aipo/.test(value) ? "sprout" : "circle-alert";
+      return '<i data-lucide="' + icon + '" title="' + attr(name) + '"></i>';
+    });
+    return icons.length ? '<span class="campus-menu-allergen-icons">' + icons.join("") + '</span>' : "";
+  }
+
   function canteenDishCard(item, menu, options) {
     options = options || {};
     var tone = canteenDishTone(item.type, item.description);
-    var insight = canteenAIInsightFor(item.description);
+    var insight = canteenAIInsightFor(item.description) || canteenAIFallbackDish(item);
     var recommendation = canteenAIRecommendationFor(item.description);
-    var displayName = insight && insight.displayName || item.description || "Descrição indisponível";
-    var officialName = insight && insight.displayName && cleanText(insight.displayName).toLowerCase() !== cleanText(item.description).toLowerCase()
-      ? '<small class="diner-official-name">' + esc(item.description || "") + '</small>'
-      : "";
-    var tags = insight && asArray(insight.tags).length
-      ? '<div class="diner-entry-tags">' + asArray(insight.tags).map(function (tag) { return '<span>' + esc(tag) + '</span>'; }).join("") + '</div>'
-      : "";
-    var smartBadges = canteenDishSmartBadges(item);
-    var recommendationCopy = recommendation ? '<p class="diner-chef-reason"><i data-lucide="sparkles"></i>' + esc(recommendation.reason) + '</p>' : "";
-    var kcalText = item.kcal ? Number(item.kcal) + ' kcal' : '— kcal';
+    var displayName = item.description || "Descrição indisponível";
+    var description = insight && insight.description || "Uma escolha simples da ementa de hoje.";
+    var kcalText = item.kcal ? Number(item.kcal) : "—";
     var tagName = options.interactive ? "button" : "article";
-    var attrs = options.interactive ? ' type="button" data-action="canteen-select-dish" data-index="' + Number(options.index) + '"' : "";
+    var attrs = options.interactive ? ' type="button" data-action="canteen-select-dish" data-index="' + Number(options.index) + '" aria-pressed="' + (!!options.selected) + '"' : "";
     var selected = options.selected ? " is-selected" : "";
-    var readonly = options.readonly ? " is-readonly" : "";
     var recommended = recommendation ? " is-chef-recommended" : "";
-    return '<' + tagName + ' class="diner-menu-entry is-' + tone + selected + readonly + recommended + '"' + attrs + '>' +
-      '<span class="diner-hand-mark" aria-hidden="true"></span>' +
-      '<div class="diner-entry-line"><span class="diner-entry-icon" aria-hidden="true">' + canteenDishEmoji(item.type, item.description) + '</span><strong>' + esc(displayName) + '</strong><span class="diner-dot-leader"></span><span class="diner-entry-kcal">' + esc(kcalText) + '</span></div>' +
-      officialName + tags + smartBadges + recommendationCopy + '<div class="diner-allergens">' + canteenAllergenPills(item, menu) + '</div>' +
+    var badge = recommendation ? '<span class="campus-recommended"><i data-lucide="map-pin"></i>RECOMENDADO</span>' : "";
+    return '<' + tagName + ' class="campus-menu-item is-' + tone + selected + recommended + '"' + attrs + '>' +
+      '<span class="campus-pencil-outline" aria-hidden="true"></span>' + badge +
+      '<span class="campus-menu-item-main"><strong>' + esc(displayName) + '</strong><span class="campus-menu-item-icons"><i data-lucide="' + canteenDishIconName(item) + '"></i>' + canteenDishAllergenIcons(item, menu) + '</span><span class="campus-menu-kcal">' + esc(kcalText) + '</span></span>' +
+      '<small>' + esc(description) + '</small>' +
       '</' + tagName + '>';
   }
-
   function canteenDessertChips(selection, readonly, chosenId) {
-    return canteenDesserts().map(function (dessert) {
-      var selected = (readonly ? chosenId : selection.dessertId) === dessert.id;
-      var tagName = readonly ? "span" : "button";
-      var attrs = readonly ? "" : ' type="button" data-action="canteen-select-dessert" data-dessert="' + attr(dessert.id) + '"';
-      return '<' + tagName + ' class="diner-menu-entry diner-dessert-entry' + (selected ? ' is-selected' : '') + '"' + attrs + '>' +
-        '<span class="diner-hand-mark" aria-hidden="true"></span>' +
-        '<div class="diner-entry-line"><span class="diner-entry-icon">' + dessert.emoji + '</span><strong>' + esc(dessert.label) + '</strong><span class="diner-dot-leader"></span><span class="diner-entry-kcal">≈ ' + dessert.kcal + ' kcal</span></div>' +
-        '</' + tagName + '>';
-    }).join("");
+    var desserts = canteenDesserts();
+    var standard = desserts.filter(function (dessert) { return !dessert.seasonal; });
+    var seasonal = desserts.filter(function (dessert) { return dessert.seasonal; });
+    function rows(list) {
+      return list.map(function (dessert) {
+        var selected = (readonly ? chosenId : selection.dessertId) === dessert.id;
+        var tagName = readonly ? "span" : "button";
+        var attrs = readonly ? "" : ' type="button" data-action="canteen-select-dessert" data-dessert="' + attr(dessert.id) + '" aria-pressed="' + selected + '"';
+        return '<' + tagName + ' class="campus-menu-item campus-dessert-item' + (selected ? ' is-selected' : '') + '"' + attrs + '>' +
+          '<span class="campus-pencil-outline" aria-hidden="true"></span>' +
+          '<span class="campus-menu-item-main"><strong>' + esc(dessert.label) + '</strong><span class="campus-menu-kcal">' + (dessert.kcal == null ? '—' : '≈ ' + dessert.kcal) + '</span></span>' +
+          '</' + tagName + '>';
+      }).join("");
+    }
+    return rows(standard) + '<div class="campus-menu-subdivider"><span>SAZONAIS</span></div>' + rows(seasonal);
   }
-
   function canteenTicketOrderNumber(date, mealType) {
     var seed = String(date || "") + '|' + String(mealType || "lunch") + '|' + String(Date.now()) + '|' + String(Math.random());
     return String((parseInt(hashText(seed).slice(-6), 16) % 900) + 100);
@@ -5008,33 +5114,71 @@
   }
 
   function renderCanteenActiveTicket(visit) {
-    return '<section class="diner-active-ticket-stage"><div class="diner-active-ticket-copy"><span>Ticket ativo</span><h3>O teu passe está pronto.</h3><p>Quando pegares no tabuleiro, conclui o ritual para fechar a refeição no teu dia.</p></div>' + canteenReceiptHTML(visit) + '<button class="diner-pickup-button" type="button" data-action="canteen-finish-meal" data-id="' + attr(visit.id) + '"><i data-lucide="target"></i>TABULEIRO SACIADO!</button><small>Toca no botão depois de levantares a refeição.</small></section>';
+    return '<section class="campus-dining-state campus-order-active"><div><small>PEDIDO FEITO</small><h3>O teu ticket está pronto.</h3><p>Quando terminares a refeição, fecha o almoço no teu dia.</p></div>' + canteenReceiptHTML(visit) + '<button class="campus-order-button" type="button" data-action="canteen-finish-meal" data-id="' + attr(visit.id) + '">Já almocei</button></section>';
   }
-
   function renderCanteenCompletedCard(visit, expanded) {
     var mealType = visit.mealType || "lunch";
     if (!expanded) {
-      return '<section class="diner-complete-card"><span class="diner-complete-seal"><i data-lucide="badge-check"></i></span><div><small>' + esc(visit.mealLabel || canteenMealLabel(mealType)) + '</small><h3>Refeição concluída</h3><p>' + esc(visit.dish && visit.dish.description || "Prato escolhido") + ' · ≈ ' + Number(visit.totalKcal || 0) + ' kcal</p></div><div class="diner-complete-actions"><button class="button button-small" type="button" data-action="canteen-open-receipt" data-id="' + attr(visit.id) + '"><i data-lucide="ticket-check"></i>Ticket</button><button class="button button-dark button-small" type="button" data-action="canteen-expand-completed" data-key="' + attr(canteenSelectionKey(visit.date, mealType)) + '"><i data-lucide="menu"></i>Ver ementa</button></div></section>';
+      return '<section class="campus-dining-state campus-order-complete"><div><small>ALMOÇO FEITO</small><h3>Refeição concluída.</h3><p>' + esc(visit.dish && visit.dish.description || "Prato escolhido") + ' · ≈ ' + Number(visit.totalKcal || 0) + ' kcal</p></div><div class="campus-state-actions"><button type="button" data-action="canteen-open-receipt" data-id="' + attr(visit.id) + '">Ver ticket</button><button type="button" data-action="canteen-expand-completed" data-key="' + attr(canteenSelectionKey(visit.date, mealType)) + '">Ver ementa</button></div></section>';
     }
     return "";
   }
-
   function renderCanteenPosterAINote(meal) {
     if (!state.settings.canteenAIEnabled || !meal) return "";
     var data = canteenAIState.data || canteenAIFallbackData(meal, canteenWeatherState);
-    var note = state.settings.canteenAIChefNote ? data.chefNote : "";
+    var note = state.settings.canteenAIChefNote ? canteenChefNoteSanitize(data.chefNote, "Hoje eu ia no prato recomendado. É a escolha que eu servia sem pensar duas vezes.") : "";
     if (!note) return "";
-    var action = canteenAIState.status === "downloadable"
-      ? '<button type="button" data-action="canteen-ai-prepare"><i data-lucide="sparkles"></i>Preparar IA local</button>'
+    var loading = canteenAIState.status === "loading" ? '<span class="campus-chef-thinking">a provar o menu...</span>' : "";
+    return '<aside class="campus-chef-note"><h3>Chef’s Note</h3><p>' + esc(note) + '</p>' + loading + '</aside>';
+  }
+  function canteenMealComparable(meal) {
+    return asArray(meal && meal.items).map(function (item) {
+      return [cleanText(item.type || "").toLowerCase(), cleanText(item.description || "").toLowerCase(), Number(item.kcal) || 0];
+    });
+  }
+
+  function canteenMealsEqual(first, second) {
+    return JSON.stringify(canteenMealComparable(first)) === JSON.stringify(canteenMealComparable(second));
+  }
+
+  function canteenInfoMealRows(meal) {
+    if (!meal) return '<p>Sem ementa publicada.</p>';
+    return '<div class="campus-info-meal-list">' + asArray(meal.items).map(function (item) {
+      return '<div><span>' + esc(canteenDishLabel(item.type)) + '</span><strong>' + esc(item.description || "—") + '</strong><small>' + (item.kcal ? Number(item.kcal) + ' kcal' : '—') + '</small></div>';
+    }).join("") + '</div>';
+  }
+
+  function showCanteenInfo() {
+    var day = canteenDayForDate(canteenSelectedDate);
+    var meals = day ? asArray(day.meals) : [];
+    var lunch = meals.find(function (meal) { return canteenMealType(meal) === "lunch"; });
+    var dinner = meals.find(function (meal) { return canteenMealType(meal) === "dinner"; });
+    var hours = canteenServiceHours(canteenMenu);
+    var info = canteenMenu.info || {};
+    var social = info.socialMeal || {};
+    var closures = info.closures || {};
+    var days = asArray(canteenMenu.days).slice().sort(function (a, b) { return String(a.date).localeCompare(String(b.date)); });
+    var dinnerDifference = dinner && !canteenMealsEqual(lunch, dinner)
+      ? '<section class="campus-info-section"><h3>Jantar diferente</h3><p>A ementa principal mostra o almoço. Para este dia, o jantar muda para:</p>' + canteenInfoMealRows(dinner) + '</section>'
       : "";
-    var weather = data.weatherLabel ? '<small class="diner-chef-weather"><i data-lucide="cloud-sun"></i>' + esc(data.weatherLabel) + '</small>' : "";
-    var choice = data.recommendedDish ? '<small class="diner-chef-choice"><i data-lucide="chef-hat"></i>Escolha do chef · ' + esc(data.recommendedDish) + '</small>' : "";
-    return '<aside class="diner-chef-note"><div class="diner-chef-note-label"><span>CHEF’S NOTE</span>' + weather + '</div><div><p>“' + esc(note) + '”</p>' + choice + '</div>' + action + '</aside>';
+    var allergenRows = Object.keys(canteenMenu.allergens || {}).map(function (id) {
+      return '<span><b>' + esc(id) + '</b>' + esc(canteenMenu.allergens[id]) + '</span>';
+    }).join("");
+    var aiAction = canteenAIState.status === "downloadable" ? '<button class="campus-info-action" type="button" data-action="canteen-ai-prepare">Preparar IA local</button>' : "";
+    var source = canteenMenu.pageUrl || CANTEEN_PAGE_URL;
+    var body = '<div class="campus-info-days"><strong>Escolher dia</strong><div>' + days.map(canteenDayChip).join("") + '</div></div>' +
+      '<section class="campus-info-section campus-info-facts"><div><span>Almoço</span><strong>' + esc(hours.lunch.start) + ' às ' + esc(hours.lunch.end) + '</strong></div><div><span>Jantar</span><strong>' + esc(hours.dinner.start) + ' às ' + esc(hours.dinner.end) + '</strong></div><div><span>Preço social</span><strong>' + esc(social.amount || '3,10 €') + '</strong></div></section>' +
+      (social.includes ? '<section class="campus-info-section"><h3>Incluído na refeição</h3><p>' + esc(social.includes) + '</p></section>' : '') +
+      dinnerDifference +
+      '<section class="campus-info-section"><h3>Alergénios</h3><div class="campus-info-allergens">' + allergenRows + '</div><p class="campus-info-notice">' + esc(canteenMenu.allergenNotice || 'Confirma sempre os alergénios junto da unidade.') + '</p></section>' +
+      '<section class="campus-info-section"><h3>Funcionamento</h3><p>' + esc(closures.summer || 'O funcionamento pode mudar durante férias e pausas letivas.') + '</p>' + (closures.seasonal ? '<p>' + esc(closures.seasonal) + '</p>' : '') + (closures.alternatives ? '<p>' + esc(closures.alternatives) + '</p>' : '') + '</section>' +
+      '<section class="campus-info-section campus-info-source"><a href="' + attr(source) + '" target="_blank" rel="noopener noreferrer">Abrir fonte oficial</a><button type="button" data-action="refresh-canteen">Atualizar ementa</button>' + aiAction + '</section>';
+    openModal('Informação da cantina', body, { className: 'canteen-info-modal', footer: '<footer class="modal-foot"><button class="campus-info-close" type="button" data-action="close-modal">Fechar</button></footer>' });
   }
 
   function renderCanteenMeal(meal, menu, options) {
     options = options || {};
-    var mealType = canteenMealType(meal);
+    var mealType = "lunch";
     var date = options.date || canteenSelectedDate;
     var visit = canteenVisitFor(date, mealType);
     var expandKey = canteenSelectionKey(date, mealType);
@@ -5051,74 +5195,64 @@
       selection.dishIndex = mainDishes.findIndex(function (item) { return item.description === selectedDescription; });
       selection.dessertId = visit.dessert && visit.dessert.id || "";
     }
-    var soupLines = soups.length ? soups.map(function (item) { return canteenDishCard(item, menu, { readonly: true }); }).join("") : '<div class="diner-empty-line">Sem sopa indicada.</div>';
+    var soupLines = soups.length ? soups.map(function (item) { return canteenDishCard(item, menu, { readonly: true }); }).join("") : '<p class="campus-menu-empty">Sem sopa indicada.</p>';
+    var veganDividerShown = false;
     var dishLines = mainDishes.length ? mainDishes.map(function (item, index) {
-      return canteenDishCard(item, menu, { interactive: !visit, readonly: !!visit, index: index, selected: visit ? item.description === selectedDescription : (selection.dishIndex !== null && Number(selection.dishIndex) === index) });
-    }).join("") : '<div class="diner-empty-line">Sem pratos publicados.</div>';
+      var divider = "";
+      if (!veganDividerShown && canteenDishTone(item.type, item.description) === "vegetarian") {
+        veganDividerShown = true;
+        divider = '<div class="campus-menu-subdivider"><span>ALTERNATIVA VEGAN</span></div>';
+      }
+      return divider + canteenDishCard(item, menu, { interactive: !visit, readonly: !!visit, index: index, selected: visit ? item.description === selectedDescription : (selection.dishIndex !== null && Number(selection.dishIndex) === index) });
+    }).join("") : '<p class="campus-menu-empty">Sem pratos publicados.</p>';
     var ready = selection.dishIndex !== null && selection.dishIndex !== "" && Number.isInteger(Number(selection.dishIndex)) && Number(selection.dishIndex) >= 0 && !!selection.dessertId;
-    var mealLabel = canteenMealLabel(mealType);
-    var chosenDish = ready ? mainDishes[Number(selection.dishIndex)] : null;
-    var chosenDessert = ready ? canteenDessertById(selection.dessertId) : null;
-    var summary = ready
-      ? '1x Sopa + 1x ' + cleanText(chosenDish && chosenDish.description || 'Prato') + ' + 1x ' + cleanText(chosenDessert && chosenDessert.label || 'Sobremesa')
-      : 'Seleciona um prato e uma sobremesa';
-    var service = options.service || { open: false, title: "Fechada" };
-    var hours = options.hours || canteenServiceHours(menu);
-    var period = mealType === "dinner" ? hours.dinner : hours.lunch;
-    var statusLabel = options.selectedIsToday ? (service.open ? "OPEN" : "CLOSED") : "MENU";
-    var readonlyFooter = visit && expanded
-      ? '<div class="diner-poster-footer is-readonly"><div><span>Refeição concluída</span><strong>O ticket está guardado no teu dia.</strong></div><div><button class="button" type="button" data-action="canteen-open-receipt" data-id="' + attr(visit.id) + '"><i data-lucide="ticket-check"></i>Ver ticket</button><button class="button button-dark" type="button" data-action="canteen-collapse-completed" data-key="' + attr(expandKey) + '"><i data-lucide="chevron-up"></i>Recolher</button></div></div>'
-      : '<footer class="diner-poster-footer"><div><span>O teu pedido</span><strong>' + esc(summary) + '</strong><small>Total · ' + esc(options.price || "3,10 €") + '</small></div><button class="diner-ticket-button" type="button" data-action="canteen-issue-ticket" ' + (ready ? "" : "disabled") + '><i data-lucide="ticket"></i>EMITIR TICKET DE ' + esc(mealLabel.toUpperCase()) + '</button></footer>';
+    var readonlyActions = visit && expanded
+      ? '<div class="campus-readonly-actions"><button type="button" data-action="canteen-open-receipt" data-id="' + attr(visit.id) + '">Ver ticket</button><button type="button" data-action="canteen-collapse-completed" data-key="' + attr(expandKey) + '">Esconder ementa</button></div>'
+      : '<button class="campus-order-button" type="button" data-action="canteen-issue-ticket" ' + (ready ? "" : "disabled") + '>Fazer pedido</button>';
 
-    return '<section class="diner-poster canteen-' + mealType + (visit ? ' is-readonly' : '') + '">' +
-      '<header class="diner-poster-head"><div class="diner-poster-brand"><small>CAMPUS DINER FCT</small><h3><span>MENU</span><em>Cantina</em></h3><p>' + esc(mealLabel.toUpperCase()) + ' · ' + esc(date) + '</p></div><div class="diner-poster-meta"><span>' + esc(options.price || "3,10 €") + ' · PREÇO SOCIAL</span><strong class="' + (service.open ? 'is-open' : '') + '">' + statusLabel + ' ' + esc(period.start) + '–' + esc(period.end) + '</strong></div></header>' +
-      '<div class="diner-poster-grid"><section class="diner-poster-panel diner-soups"><header><span>01</span><h4>SOPAS</h4></header><div class="diner-menu-list">' + soupLines + '</div></section><section class="diner-poster-panel diner-desserts"><header><span>02</span><h4>SOBREMESAS</h4></header><div class="diner-menu-list">' + canteenDessertChips(selection, !!visit, visit && visit.dessert && visit.dessert.id) + '</div></section><section class="diner-poster-panel diner-mains"><header><span>03</span><h4>PRATOS PRINCIPAIS</h4><small>Assinala a tua escolha</small></header><div class="diner-menu-list">' + dishLines + '</div></section></div>' +
-      renderCanteenPosterAINote(meal) + readonlyFooter + '</section>';
+    return '<div class="campus-dining-columns">' +
+      '<div class="campus-dining-column campus-left-column">' +
+        '<section class="campus-menu-section campus-soups"><header><h3>SOPAS</h3><span>calorias</span></header><div>' + soupLines + '</div></section>' +
+        '<section class="campus-menu-section campus-mains"><header><h3>PRATOS</h3><span>calorias</span></header><div>' + dishLines + '</div></section>' +
+        '<section class="campus-menu-section campus-drinks"><header><h3>BEBIDAS</h3></header><div class="campus-drink-row">Água</div></section>' +
+      '</div>' +
+      '<div class="campus-dining-column campus-center-column">' +
+        '<section class="campus-menu-section campus-desserts"><header><h3>SOBREMESAS</h3><span>calorias</span></header><div>' + canteenDessertChips(selection, !!visit, visit && visit.dessert && visit.dessert.id) + '</div></section>' +
+        readonlyActions +
+      '</div>' +
+      renderCanteenPosterAINote(meal) +
+      '</div>';
   }
-
   function renderCanteen() {
     setHeader("Cantina", "Campus · SAS NOVA");
-    var refreshButton = '<button class="button canteen-refresh-button" type="button" data-action="refresh-canteen" ' + (canteenStatus === "loading" ? "disabled" : "") + '><i data-lucide="refresh-cw"></i>' + (canteenStatus === "loading" ? "A atualizar…" : "Atualizar") + '</button>';
-    var head = '<div class="page-head canteen-page-head diner-page-head"><div><p class="canteen-page-kicker">Campus Diner FCT</p><h2>A ementa de hoje, com ar de poster.</h2><p>Escolhe o prato, marca a sobremesa e guarda o teu ticket do dia.</p></div><div class="page-actions">' + refreshButton + '</div></div>';
     if (!canteenMenu && (canteenStatus === "idle" || canteenStatus === "loading")) {
-      return head + '<section class="card canteen-loading canteen-loading-revamp"><span class="loading-orb"></span><div><p class="canteen-loading-label">A montar o poster</p><h3>A carregar a ementa</h3><p>A consultar a informação oficial da SAS NOVA.</p></div></section>';
+      return '<section class="campus-dining-page"><div class="campus-dining-loading"><span></span><h2>A preparar a ementa</h2><p>A consultar a informação oficial da SAS NOVA.</p></div></section>';
     }
     if (!canteenMenu) {
-      return head + '<section class="card canteen-error canteen-error-revamp"><span class="canteen-empty-icon"><i data-lucide="wifi-off"></i></span><div><h3>A ementa não chegou à impressora.</h3><p>' + esc(canteenError || "A fonte oficial está temporariamente indisponível.") + '</p><button class="button button-dark" type="button" data-action="refresh-canteen"><i data-lucide="refresh-cw"></i>Tentar novamente</button></div></section>';
+      return '<section class="campus-dining-page"><div class="campus-dining-loading is-error"><h2>A ementa não chegou.</h2><p>' + esc(canteenError || "A fonte oficial está temporariamente indisponível.") + '</p><button type="button" data-action="refresh-canteen">Tentar novamente</button></div></section>';
     }
     var now = canteenPortugalParts(new Date());
     var hours = canteenServiceHours(canteenMenu);
     var service = canteenOpeningStatus(new Date(), hours);
-    var info = canteenMenu.info || {};
-    var socialMeal = info.socialMeal || {};
-    var closures = info.closures || {};
-    var price = socialMeal.amount || "3,10 €";
     var days = asArray(canteenMenu.days).slice().sort(function (a, b) { return String(a.date).localeCompare(String(b.date)); });
     if (!canteenSelectedDate || !days.some(function (day) { return day.date === canteenSelectedDate; })) {
       var bestDay = days.find(function (day) { return day.date === now.iso; }) || days.find(function (day) { return day.date >= now.iso; }) || days[days.length - 1];
       canteenSelectedDate = bestDay ? bestDay.date : "";
     }
+    canteenMealTab = "lunch";
     var selected = days.find(function (day) { return day.date === canteenSelectedDate; }) || days[0];
-    var selectedDate = selected && localDate(selected.date);
-    var longDate = selectedDate ? new Intl.DateTimeFormat("pt-PT", { weekday: "long", day: "numeric", month: "long" }).format(selectedDate) : selected.label;
     var selectedIsToday = selected && selected.date === now.iso;
     var meals = selected ? asArray(selected.meals) : [];
     var lunch = meals.find(function (meal) { return canteenMealType(meal) === "lunch"; });
-    var dinner = meals.find(function (meal) { return canteenMealType(meal) === "dinner"; });
-    if (!canteenMealTab) canteenMealTab = selectedIsToday && now.minutes >= timeMinutes(hours.dinner.start) - 45 ? "dinner" : "lunch";
-    if (canteenMealTab === "dinner" && !dinner && lunch) canteenMealTab = "lunch";
-    if (canteenMealTab === "lunch" && !lunch && dinner) canteenMealTab = "dinner";
-    var activeMeal = canteenMealTab === "dinner" ? dinner : lunch;
-    var activeMealCard = activeMeal
-      ? renderCanteenMeal(activeMeal, canteenMenu, { date: selected.date, price: price, hours: hours, service: service, selectedIsToday: selectedIsToday })
-      : '<article class="card canteen-no-menu"><i data-lucide="utensils-crossed"></i><div><h3>Sem ' + canteenMealLabel(canteenMealTab).toLowerCase() + ' publicado</h3><p>Confirma a informação na SAS NOVA.</p></div></article>';
-    var mealToggle = '<div class="canteen-meal-toggle diner-meal-toggle" role="tablist" aria-label="Escolher refeição"><button type="button" role="tab" aria-selected="' + (canteenMealTab === 'lunch') + '" class="' + (canteenMealTab === 'lunch' ? 'is-active' : '') + '" data-action="canteen-meal-tab" data-meal="lunch"><i data-lucide="sun"></i><span>Almoço</span><small>' + esc(hours.lunch.start) + '–' + esc(hours.lunch.end) + '</small></button><button type="button" role="tab" aria-selected="' + (canteenMealTab === 'dinner') + '" class="' + (canteenMealTab === 'dinner' ? 'is-active' : '') + '" data-action="canteen-meal-tab" data-meal="dinner"><i data-lucide="moon-star"></i><span>Jantar</span><small>' + esc(hours.dinner.start) + '–' + esc(hours.dinner.end) + '</small></button></div>';
-    var dayRail = '<section class="diner-day-rail"><div><span>SEMANA DA CANTINA</span><strong>' + esc(longDate.charAt(0).toUpperCase() + longDate.slice(1)) + '</strong></div><div class="canteen-days" role="group" aria-label="Escolher dia">' + days.map(canteenDayChip).join("") + '</div></section>';
-    var sourceFooter = '<section class="diner-source-note"><div><i data-lucide="badge-check"></i><span><strong>Ementa oficial SAS NOVA</strong><small>As escolhas e o ticket são um registo pessoal dentro da Twenty.</small></span></div><a href="' + attr(canteenMenu.pageUrl || CANTEEN_PAGE_URL) + '" target="_blank" rel="noopener noreferrer">Ver fonte <i data-lucide="arrow-up-right"></i></a></section>';
-    var closureCopy = closures.summer || "O funcionamento pode mudar em períodos de férias e pausas letivas.";
-    return head + dayRail + mealToggle + activeMealCard + '<p class="diner-closure-note">' + esc(closureCopy) + '</p>' + sourceFooter;
+    var statusLabel = selectedIsToday ? (service.open ? "ABERTO" : "FECHADO") : "EMENTA";
+    var body = lunch
+      ? renderCanteenMeal(lunch, canteenMenu, { date: selected.date, hours: hours, service: service, selectedIsToday: selectedIsToday })
+      : '<div class="campus-dining-state"><div><small>SEM ALMOÇO</small><h3>Não há ementa publicada para este dia.</h3><p>Consulta outro dia no botão de informação.</p></div></div>';
+    return '<section class="campus-dining-page">' +
+      '<header class="campus-dining-hero"><div class="campus-dining-brand"><h2>CAMPUS<br>DINING</h2><p>DINE IN CAFETERIA</p></div><div class="campus-dining-stamp ' + (service.open && selectedIsToday ? 'is-open' : '') + '">' + esc(statusLabel) + '</div><button class="campus-dining-info" type="button" data-action="canteen-open-info" aria-label="Informação da cantina">i</button></header>' +
+      body +
+      '</section>';
   }
-
   function settingsNavButton(id, icon, label, active) {
     return '<button type="button" class="settings-nav-button' + (active === id ? ' is-active' : '') + '" data-action="settings-section" data-section="' + attr(id) + '"><i data-lucide="' + attr(icon) + '"></i><span>' + esc(label) + '</span><i data-lucide="chevron-right"></i></button>';
   }
@@ -7333,6 +7467,8 @@
       showTaskDetail(button.dataset.id);
     } else if (action === "schedule-detail") {
       showScheduleDetail(button.dataset.id);
+    } else if (action === "canteen-open-info") {
+      showCanteenInfo();
     } else if (action === "canteen-ai-prepare") {
       await ensureCanteenAIForCurrentMeal(true);
     } else if (action === "canteen-ai-clear-cache") {
@@ -7341,18 +7477,21 @@
       toast("Cache da IA da Cantina limpa.");
     } else if (action === "canteen-day") {
       canteenSelectedDate = button.dataset.date || canteenSelectedDate;
-      canteenMealTab = null;
+      canteenMealTab = "lunch";
+      if (modalRoot && modalRoot.innerHTML) closeModal();
       render();
     } else if (action === "canteen-meal-tab") {
       canteenMealTab = button.dataset.meal === "dinner" ? "dinner" : "lunch";
       render();
     } else if (action === "canteen-select-dish") {
       var canteenDishSelection = canteenSelectionFor(canteenSelectedDate, canteenMealTab || "lunch");
-      canteenDishSelection.dishIndex = Number(button.dataset.index);
+      var nextDishIndex = Number(button.dataset.index);
+      canteenDishSelection.dishIndex = Number(canteenDishSelection.dishIndex) === nextDishIndex ? null : nextDishIndex;
       render();
     } else if (action === "canteen-select-dessert") {
       var canteenDessertSelection = canteenSelectionFor(canteenSelectedDate, canteenMealTab || "lunch");
-      canteenDessertSelection.dessertId = button.dataset.dessert || "";
+      var nextDessertId = button.dataset.dessert || "";
+      canteenDessertSelection.dessertId = canteenDessertSelection.dessertId === nextDessertId ? "" : nextDessertId;
       render();
     } else if (action === "canteen-issue-ticket") {
       var ticketDraft = canteenTicketDraft(canteenSelectedDate, canteenMealTab || "lunch");
@@ -7360,7 +7499,7 @@
         toast("Escolhe um prato e uma sobremesa antes de emitir o ticket.", "warning");
       } else {
         var ticketSummary = '<div class="diner-campus-card-confirm"><span class="diner-campus-card-icon"><i data-lucide="credit-card"></i></span><div><small>CARTÃO DO CAMPUS</small><h3>Validar ' + esc(ticketDraft.mealLabel.toLowerCase()) + '</h3><p>' + esc(ticketDraft.dish.description) + ' · ' + esc(ticketDraft.dessert.label) + '</p><strong>' + esc(ticketDraft.price) + '</strong></div></div>';
-        openModal("Emitir ticket", ticketSummary, { className: "canteen-ticket-confirm-modal", footer: '<footer class="modal-foot"><button class="button" type="button" data-action="close-modal">Voltar</button><button class="button button-dark" type="button" data-action="canteen-confirm-ticket"><i data-lucide="scan-line"></i>Validar e imprimir</button></footer>' });
+        openModal("Confirmar pedido", ticketSummary, { className: "canteen-ticket-confirm-modal", footer: '<footer class="modal-foot"><button class="campus-modal-secondary" type="button" data-action="close-modal">Voltar</button><button class="campus-order-button" type="button" data-action="canteen-confirm-ticket">Confirmar pedido</button></footer>' });
       }
     } else if (action === "canteen-confirm-ticket") {
       var confirmedTicket = canteenTicketDraft(canteenSelectedDate, canteenMealTab || "lunch");
@@ -7667,7 +7806,7 @@
       }, 60000);
       if (!state.profile.onboardingComplete || !state.currentSemesterId || !activeCourses().length) startOnboarding(state.semesters.length ? "new-semester" : "first");
       if ("serviceWorker" in navigator && location.protocol !== "file:") {
-        navigator.serviceWorker.register("sw.js?v=22-notebook-stickers", { updateViaCache: "none" }).then(function () {
+        navigator.serviceWorker.register("sw.js?v=27.0-campus-dining", { updateViaCache: "none" }).then(function () {
           if (Sync && Sync.getStatus().configured) Sync.startAutoSync();
         }).catch(function () {
           if (Sync && Sync.getStatus().configured) Sync.startAutoSync();
