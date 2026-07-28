@@ -39,6 +39,9 @@
   var CANTEEN_PAGE_URL = "https://sas.unl.pt/alimentacao/cantina-da-faculdade-de-ciencias-e-tecnologia-fct/";
   var CANTEEN_INFO_PAGE_URL = "https://sas.unl.pt/alimentacao/";
   var CANTEEN_CACHE_KEY = "twenty-canteen-menu-v2";
+  var CANTEEN_AI_CACHE_KEY = "twenty-canteen-ai-v1";
+  var canteenAIState = { key: "", status: "idle", availability: "unknown", source: "rules", data: null, error: "", progress: null };
+  var canteenAIPromise = null;
   var canteenMenu = loadCachedCanteen();
   var canteenStatus = canteenMenu ? "ready" : "idle";
   var canteenError = "";
@@ -682,7 +685,10 @@
         aiModelMode: "auto",
         aiOutput: "all",
         aiQuestionCount: 10,
-        aiDifficulty: "auto"
+        aiDifficulty: "auto",
+        canteenAIEnabled: true,
+        canteenAIDescriptions: true,
+        canteenAIChefNote: true
       },
       currentSemesterId: null,
       semesters: [],
@@ -724,6 +730,9 @@
     if (["all", "notes", "summary", "quiz", "flashcards"].indexOf(base.settings.aiOutput) < 0) base.settings.aiOutput = "all";
     base.settings.aiQuestionCount = clamp(base.settings.aiQuestionCount || 10, 5, 30);
     if (["auto", "easy", "medium", "hard"].indexOf(base.settings.aiDifficulty) < 0) base.settings.aiDifficulty = "auto";
+    base.settings.canteenAIEnabled = base.settings.canteenAIEnabled !== false;
+    base.settings.canteenAIDescriptions = base.settings.canteenAIDescriptions !== false;
+    base.settings.canteenAIChefNote = base.settings.canteenAIChefNote !== false;
     base.currentSemesterId = source.currentSemesterId || null;
     ENTITY_ARRAYS.forEach(function (key) {
       base[key] = asArray(source[key]).filter(function (item) { return item && typeof item === "object"; });
@@ -1330,6 +1339,7 @@
       setTimeout(function () { ensureCanteenMenu(false); }, 0);
     }
     if (route.name === "canteen") {
+      setTimeout(function () { ensureCanteenAIForCurrentMeal(false); }, 0);
       canteenClockTimer = setTimeout(function () {
         if (route.name === "canteen") render();
       }, 60000 - (Date.now() % 60000) + 250);
@@ -4257,6 +4267,278 @@
     return canteenSelections[key];
   }
 
+  function loadCanteenAICache() {
+    try {
+      var parsed = JSON.parse(localStorage.getItem(CANTEEN_AI_CACHE_KEY) || "{}");
+      return parsed && typeof parsed === "object" ? parsed : {};
+    } catch (error) { return {}; }
+  }
+
+  function saveCanteenAICache(cache) {
+    try { localStorage.setItem(CANTEEN_AI_CACHE_KEY, JSON.stringify(cache || {})); } catch (error) {}
+  }
+
+  function clearCanteenAICache() {
+    try { localStorage.removeItem(CANTEEN_AI_CACHE_KEY); } catch (error) {}
+    canteenAIState = { key: "", status: "idle", availability: "unknown", source: "rules", data: null, error: "", progress: null };
+  }
+
+  function canteenBuiltInAIProvider() {
+    if (typeof self.LanguageModel !== "undefined" && self.LanguageModel && typeof self.LanguageModel.create === "function") {
+      return { kind: "language-model", api: self.LanguageModel };
+    }
+    if (window.ai && window.ai.languageModel && typeof window.ai.languageModel.create === "function") {
+      return { kind: "legacy-window-ai", api: window.ai.languageModel };
+    }
+    return null;
+  }
+
+  function canteenAIKey(date, mealType, meal) {
+    var compact = asArray(meal && meal.items).map(function (item) {
+      return [item.type || "", item.description || "", Number(item.kcal) || 0, asArray(item.allergens).join(",")];
+    });
+    return String(date || "") + "-" + String(mealType || "") + "-" + hashText(JSON.stringify(compact));
+  }
+
+  function canteenAIFallbackDish(item) {
+    var tone = canteenDishTone(item.type, item.description);
+    var descriptions = {
+      soup: "Uma entrada quente e simples para começar a refeição.",
+      vegetarian: "Uma opção vegetal com aquele conforto de almoço no campus.",
+      fish: "Um clássico de peixe apresentado de forma simples e familiar.",
+      meat: "Um prato reconfortante para uma pausa de almoço mais composta.",
+      poultry: "Uma opção familiar e versátil para o menu do dia.",
+      classic: "Uma escolha clássica da ementa, sem complicações."
+    };
+    var tags = {
+      soup: ["Quente", "Entrada"],
+      vegetarian: ["Vegetal", "Campus comfort"],
+      fish: ["Peixe", "Clássico"],
+      meat: ["Reconfortante", "Clássico"],
+      poultry: ["Familiar", "Clássico"],
+      classic: ["Menu do dia", "Clássico"]
+    };
+    return {
+      officialName: cleanText(item.description || "Prato do dia"),
+      displayName: cleanText(item.description || "Prato do dia"),
+      description: descriptions[tone] || descriptions.classic,
+      tags: tags[tone] || tags.classic
+    };
+  }
+
+  function canteenAIFallbackData(meal) {
+    var items = asArray(meal && meal.items);
+    var dishes = items.filter(function (item) { return !/sopa|creme|caldo/i.test(String(item.type || "") + " " + String(item.description || "")); });
+    var hasVegetarian = dishes.some(function (item) { return canteenDishTone(item.type, item.description) === "vegetarian"; });
+    var hasFish = dishes.some(function (item) { return canteenDishTone(item.type, item.description) === "fish"; });
+    var note = hasVegetarian && hasFish
+      ? "Hoje a mesa mistura uma opção vegetal e um clássico de peixe — escolhe o mood da tua tarde."
+      : hasVegetarian
+        ? "A opção vegetal dá ao menu de hoje aquele ar de almoço calmo entre aulas."
+        : "O menu de hoje está com energia de pausa merecida entre aulas.";
+    return { chefNote: note, dishes: dishes.map(canteenAIFallbackDish), generatedBy: "rules" };
+  }
+
+  function parseCanteenAIJSON(value) {
+    var text = String(value || "").trim().replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "");
+    var parsed = JSON.parse(text);
+    if (!parsed || typeof parsed !== "object") throw new Error("Resposta inválida da IA local.");
+    return parsed;
+  }
+
+  function normalizeCanteenAIData(raw, meal) {
+    var fallback = canteenAIFallbackData(meal);
+    var rawDishes = asArray(raw && raw.dishes);
+    var dishes = fallback.dishes.map(function (base) {
+      var match = rawDishes.find(function (item) {
+        return cleanText(item && (item.officialName || item.name || "")).toLowerCase() === base.officialName.toLowerCase();
+      });
+      if (!match) return base;
+      return {
+        officialName: base.officialName,
+        displayName: cleanText(match.displayName || base.displayName).slice(0, 90) || base.displayName,
+        description: cleanText(match.description || base.description).slice(0, 180) || base.description,
+        tags: asArray(match.tags).map(cleanText).filter(Boolean).slice(0, 3)
+      };
+    });
+    return {
+      chefNote: cleanText(raw && raw.chefNote || fallback.chefNote).slice(0, 220) || fallback.chefNote,
+      dishes: dishes,
+      generatedBy: "built-in-ai"
+    };
+  }
+
+  function canteenAIInsightFor(description) {
+    var data = canteenAIState && canteenAIState.data;
+    if (!data || !state.settings.canteenAIDescriptions) return null;
+    var key = cleanText(description || "").toLowerCase();
+    return asArray(data.dishes).find(function (item) { return cleanText(item.officialName || "").toLowerCase() === key; }) || null;
+  }
+
+  function canteenAIAvailabilityLabel() {
+    var provider = canteenBuiltInAIProvider();
+    if (!state.settings.canteenAIEnabled) return { label: "Desativada", className: "badge" };
+    if (!provider) return { label: "Fallback local", className: "badge badge-yellow" };
+    if (canteenAIState.status === "ready" && canteenAIState.source === "built-in-ai") return { label: "IA no dispositivo", className: "badge badge-mint" };
+    if (canteenAIState.status === "loading") return { label: "A preparar", className: "badge badge-violet" };
+    if (canteenAIState.status === "downloadable") return { label: "Modelo disponível", className: "badge badge-violet" };
+    return { label: "Chrome AI compatível", className: "badge badge-mint" };
+  }
+
+  async function createCanteenAISession(provider, progressCallback) {
+    if (provider.kind === "language-model") {
+      return provider.api.create({
+        monitor: function (monitor) {
+          monitor.addEventListener("downloadprogress", function (event) {
+            progressCallback(Math.round((Number(event.loaded) || 0) * 100));
+          });
+        }
+      });
+    }
+    return provider.api.create({
+      monitor: function (monitor) {
+        if (monitor && monitor.addEventListener) monitor.addEventListener("downloadprogress", function (event) {
+          progressCallback(Math.round((Number(event.loaded) || 0) * 100));
+        });
+      }
+    });
+  }
+
+  async function generateCanteenAIData(provider, meal) {
+    var dishes = canteenAIFallbackData(meal).dishes.map(function (item) { return item.officialName; });
+    var prompt = [
+      "You are enhancing a Portuguese university canteen menu for a modern bistro-style student app.",
+      "Return ONLY valid JSON in European Portuguese.",
+      "Never invent or infer allergens, dietary safety, medical benefits, nutritional values, ingredients, or health claims.",
+      "Do not change the factual dish name. You may make the display name slightly more elegant while keeping the same meaning.",
+      "Write one short Chef's Note with warm campus energy, without claiming that food improves focus or health.",
+      "For each dish, provide a short appetising description and up to 3 mood/style tags such as Clássico, Reconfortante, Vegetal, Fresco, Menu do dia.",
+      "Expected JSON: {\"chefNote\":\"...\",\"dishes\":[{\"officialName\":\"exact original\",\"displayName\":\"...\",\"description\":\"...\",\"tags\":[\"...\"]}]}",
+      "Official dish names:",
+      JSON.stringify(dishes)
+    ].join("\n");
+    var session = await createCanteenAISession(provider, function (progress) {
+      canteenAIState.progress = progress;
+      if (route.name === "canteen") render();
+    });
+    try {
+      var raw;
+      var schema = {
+        type: "object",
+        properties: {
+          chefNote: { type: "string" },
+          dishes: {
+            type: "array",
+            items: {
+              type: "object",
+              properties: {
+                officialName: { type: "string" },
+                displayName: { type: "string" },
+                description: { type: "string" },
+                tags: { type: "array", items: { type: "string" }, maxItems: 3 }
+              },
+              required: ["officialName", "displayName", "description", "tags"]
+            }
+          }
+        },
+        required: ["chefNote", "dishes"]
+      };
+      try {
+        raw = await session.prompt(prompt, { responseConstraint: schema, omitResponseConstraintInput: true });
+      } catch (constraintError) {
+        raw = await session.prompt(prompt);
+      }
+      return normalizeCanteenAIData(parseCanteenAIJSON(raw), meal);
+    } finally {
+      if (session && typeof session.destroy === "function") session.destroy();
+    }
+  }
+
+  async function ensureCanteenAIForCurrentMeal(forceDownload) {
+    if (!state || !state.settings.canteenAIEnabled || !canteenMenu || route.name !== "canteen") return;
+    var day = canteenDayForDate(canteenSelectedDate);
+    var mealType = canteenMealTab || "lunch";
+    var meal = day && asArray(day.meals).find(function (candidate) { return canteenMealType(candidate) === mealType; });
+    if (!meal) return;
+    var key = canteenAIKey(canteenSelectedDate, mealType, meal);
+    if (canteenAIPromise && canteenAIState.key === key) return canteenAIPromise;
+    if (canteenAIState.key === key && ["ready", "fallback", "downloadable", "loading"].indexOf(canteenAIState.status) >= 0 && !forceDownload) return;
+
+    var fallback = canteenAIFallbackData(meal);
+    var cache = loadCanteenAICache();
+    if (!forceDownload && cache[key]) {
+      canteenAIState = { key: key, status: "ready", availability: "available", source: cache[key].generatedBy || "built-in-ai", data: cache[key], error: "", progress: 100 };
+      if (route.name === "canteen") render();
+      return;
+    }
+
+    var provider = canteenBuiltInAIProvider();
+    if (!provider) {
+      canteenAIState = { key: key, status: "fallback", availability: "unavailable", source: "rules", data: fallback, error: "", progress: null };
+      if (route.name === "canteen") render();
+      return;
+    }
+
+    canteenAIPromise = (async function () {
+      try {
+        var availability = "available";
+        if (provider.api && typeof provider.api.availability === "function") {
+          availability = await provider.api.availability();
+        } else if (provider.api && typeof provider.api.capabilities === "function") {
+          var capabilities = await provider.api.capabilities();
+          availability = capabilities && (capabilities.available || capabilities.availability) || "available";
+        }
+        canteenAIState = { key: key, status: "idle", availability: availability, source: "rules", data: fallback, error: "", progress: null };
+        if ((availability === "downloadable" || availability === "downloading" || availability === "after-download") && !forceDownload) {
+          canteenAIState.status = "downloadable";
+          if (route.name === "canteen") render();
+          return;
+        }
+        if (availability === "unavailable" || availability === "no") {
+          canteenAIState.status = "fallback";
+          if (route.name === "canteen") render();
+          return;
+        }
+        canteenAIState.status = "loading";
+        canteenAIState.progress = 0;
+        if (route.name === "canteen") render();
+        var result = await generateCanteenAIData(provider, meal);
+        canteenAIState = { key: key, status: "ready", availability: "available", source: "built-in-ai", data: result, error: "", progress: 100 };
+        cache[key] = result;
+        var keys = Object.keys(cache);
+        if (keys.length > 24) keys.slice(0, keys.length - 24).forEach(function (oldKey) { delete cache[oldKey]; });
+        saveCanteenAICache(cache);
+      } catch (error) {
+        canteenAIState = { key: key, status: "fallback", availability: "error", source: "rules", data: fallback, error: error && error.message || "A IA local não ficou disponível.", progress: null };
+      } finally {
+        canteenAIPromise = null;
+        if (route.name === "canteen") render();
+      }
+    })();
+    return canteenAIPromise;
+  }
+
+  function renderCanteenAICard(meal) {
+    if (!state.settings.canteenAIEnabled || !meal) return "";
+    var data = canteenAIState.data || canteenAIFallbackData(meal);
+    var status = canteenAIAvailabilityLabel();
+    var progress = canteenAIState.status === "loading"
+      ? '<div class="canteen-ai-progress"><span style="width:' + (canteenAIState.progress == null ? 34 : clamp(canteenAIState.progress, 4, 100)) + '%"></span></div>'
+      : "";
+    var action = canteenAIState.status === "downloadable"
+      ? '<button class="button button-small" type="button" data-action="canteen-ai-prepare"><i data-lucide="sparkles"></i>Preparar IA local</button>'
+      : canteenAIState.status === "fallback" && canteenBuiltInAIProvider()
+        ? '<button class="button button-small" type="button" data-action="canteen-ai-prepare"><i data-lucide="rotate-cw"></i>Tentar IA local</button>'
+        : "";
+    var copy = canteenAIState.status === "loading"
+      ? "O Chrome está a preparar o modelo no dispositivo. A ementa continua utilizável."
+      : canteenAIState.source === "built-in-ai"
+        ? "Criada no teu dispositivo. Os alergénios continuam a vir apenas da fonte oficial."
+        : "Criada com regras locais. Os alergénios continuam a vir apenas da fonte oficial.";
+    var note = state.settings.canteenAIChefNote ? '<blockquote>“' + esc(data.chefNote || "Hoje a pausa de almoço merece um bocadinho de cerimónia.") + '”</blockquote>' : "";
+    return '<section class="canteen-ai-card"><div class="canteen-ai-mark"><i data-lucide="sparkles"></i></div><div class="canteen-ai-copy"><div class="canteen-ai-title"><span>Chef\'s Note</span><span class="' + status.className + '">' + esc(status.label) + '</span></div>' + note + '<p>' + esc(copy) + '</p>' + progress + '</div>' + action + '</section>';
+  }
+
   function canteenDesserts() {
     return [
       { id: "fruit", emoji: "🍎", label: "Fruta da época", kcal: 80 },
@@ -4339,12 +4621,21 @@
   function canteenDishCard(item, menu, options) {
     options = options || {};
     var tone = canteenDishTone(item.type, item.description);
+    var insight = canteenAIInsightFor(item.description);
+    var displayName = insight && insight.displayName || item.description || "Descrição indisponível";
+    var description = insight && insight.description ? '<p class="canteen-dish-description">' + esc(insight.description) + '</p>' : "";
+    var officialName = insight && insight.displayName && cleanText(insight.displayName).toLowerCase() !== cleanText(item.description).toLowerCase()
+      ? '<small class="canteen-official-name">Ementa oficial: ' + esc(item.description || "") + '</small>'
+      : "";
+    var tags = insight && asArray(insight.tags).length
+      ? '<div class="canteen-ai-tags">' + asArray(insight.tags).map(function (tag) { return '<span>' + esc(tag) + '</span>'; }).join("") + '</div>'
+      : "";
     var kcal = item.kcal ? '<span class="canteen-kcal"><strong>' + Number(item.kcal) + '</strong><small>kcal</small></span>' : '<span class="canteen-kcal is-unknown"><strong>—</strong><small>kcal</small></span>';
     var tag = options.interactive ? "button" : "article";
     var attrs = options.interactive ? ' type="button" data-action="canteen-select-dish" data-index="' + Number(options.index) + '"' : "";
     var selected = options.selected ? " is-selected" : "";
     var readonly = options.readonly ? " is-readonly" : "";
-    return '<' + tag + ' class="canteen-dish-card is-' + tone + selected + readonly + '"' + attrs + '><span class="canteen-dish-check"><i data-lucide="check"></i></span><div class="canteen-dish-card-top"><span class="canteen-dish-visual" aria-hidden="true">' + canteenDishEmoji(item.type, item.description) + '</span><span class="canteen-kind">' + esc(canteenDishLabel(item.type)) + '</span>' + kcal + '</div><h4>' + esc(item.description || "Descrição indisponível") + '</h4><footer class="canteen-allergen-pills">' + canteenAllergenPills(item, menu) + '</footer></' + tag + '>';
+    return '<' + tag + ' class="canteen-dish-card is-' + tone + selected + readonly + '"' + attrs + '><span class="canteen-dish-check"><i data-lucide="check"></i></span><div class="canteen-dish-card-top"><span class="canteen-dish-visual" aria-hidden="true">' + canteenDishEmoji(item.type, item.description) + '</span><span class="canteen-kind">' + esc(canteenDishLabel(item.type)) + '</span>' + kcal + '</div><h4>' + esc(displayName) + '</h4>' + officialName + description + tags + '<footer class="canteen-allergen-pills">' + canteenAllergenPills(item, menu) + '</footer></' + tag + '>';
   }
 
   function canteenDessertChips(selection, readonly, chosenId) {
@@ -4484,11 +4775,17 @@
     var mealToggle = '<div class="canteen-meal-toggle" role="tablist" aria-label="Escolher refeição"><button type="button" role="tab" aria-selected="' + (canteenMealTab === 'lunch') + '" class="' + (canteenMealTab === 'lunch' ? 'is-active' : '') + '" data-action="canteen-meal-tab" data-meal="lunch"><i data-lucide="sun"></i><span>Almoço</span><small>' + esc(hours.lunch.start) + '–' + esc(hours.lunch.end) + '</small></button><button type="button" role="tab" aria-selected="' + (canteenMealTab === 'dinner') + '" class="' + (canteenMealTab === 'dinner' ? 'is-active' : '') + '" data-action="canteen-meal-tab" data-meal="dinner"><i data-lucide="moon-star"></i><span>Jantar</span><small>' + esc(hours.dinner.start) + '–' + esc(hours.dinner.end) + '</small></button></div>';
     var includedStrip = '<section class="canteen-included-strip" aria-label="O que inclui a refeição"><span><i data-lucide="soup"></i>Sopa</span><span><i data-lucide="utensils"></i>Prato</span><span><i data-lucide="wheat"></i>Pão</span><span><i data-lucide="cup-soda"></i>Bebida</span><span><i data-lucide="cake-slice"></i>Sobremesa</span></section>';
     var footer = '<div class="canteen-info-grid"><article class="card canteen-info-card canteen-allergens"><div class="card-title-row"><div><p class="card-label">Antes de escolheres</p><h3>Alergénios</h3></div><span class="metric-icon"><i data-lucide="shield-alert"></i></span></div><details><summary>Ver legenda completa</summary><div class="canteen-allergen-grid">' + allergenEntries + '</div></details><p>' + esc(canteenMenu.allergenNotice || "Confirma sempre os alergénios com o responsável da unidade.") + '</p></article><article class="card canteen-info-card canteen-closures"><div class="card-title-row"><div><p class="card-label">Planeia com antecedência</p><h3>Funcionamento</h3></div><span class="metric-icon"><i data-lucide="calendar-off"></i></span></div><div class="canteen-closure-list"><p>' + esc(summerCopy) + '</p><p>' + esc(seasonalCopy) + '</p><small>' + esc(alternativesCopy) + '</small></div></article></div><section class="canteen-verification ' + statusClass + '"><span class="canteen-verified-icon"><i data-lucide="' + (allOfficial ? "badge-check" : "cloud-off") + '"></i></span><div><strong>' + esc(verificationTitle) + '</strong><p>' + esc(verificationCopy) + '</p></div><div class="canteen-source-meta"><time>' + esc(verificationTime) + '</time><span><a href="' + attr(canteenMenu.pageUrl || CANTEEN_PAGE_URL) + '" target="_blank" rel="noopener noreferrer">Ementa <i data-lucide="arrow-up-right"></i></a><a href="' + attr(info.pageUrl || CANTEEN_INFO_PAGE_URL) + '" target="_blank" rel="noopener noreferrer">Condições <i data-lucide="arrow-up-right"></i></a></span></div></section>';
-    return head + hero + '<div class="canteen-day-rail"><div><span>Escolhe o dia</span><small>A semana inteira, sem perder o menu de hoje.</small></div><div class="canteen-days" role="group" aria-label="Escolher dia">' + days.map(canteenDayChip).join("") + '</div></div><section class="canteen-selected-day"><div><span>' + (selectedIsToday ? 'Hoje' : 'Ementa') + '</span><h3>' + esc(longDate.charAt(0).toUpperCase() + longDate.slice(1)) + '</h3></div><i data-lucide="calendar-days"></i></section>' + mealToggle + activeMealCard + includedStrip + footer;
+    var aiCard = renderCanteenAICard(activeMeal);
+    return head + hero + '<div class="canteen-day-rail"><div><span>Escolhe o dia</span><small>A semana inteira, sem perder o menu de hoje.</small></div><div class="canteen-days" role="group" aria-label="Escolher dia">' + days.map(canteenDayChip).join("") + '</div></div><section class="canteen-selected-day"><div><span>' + (selectedIsToday ? 'Hoje' : 'Ementa') + '</span><h3>' + esc(longDate.charAt(0).toUpperCase() + longDate.slice(1)) + '</h3></div><i data-lucide="calendar-days"></i></section>' + mealToggle + aiCard + activeMealCard + includedStrip + footer;
+  }
+
+  function settingsNavButton(id, icon, label, active) {
+    return '<button type="button" class="settings-nav-button' + (active === id ? ' is-active' : '') + '" data-action="settings-section" data-section="' + attr(id) + '"><i data-lucide="' + attr(icon) + '"></i><span>' + esc(label) + '</span><i data-lucide="chevron-right"></i></button>';
   }
 
   function renderSettings() {
-    setHeader("Admin & dados", "Configuração local-first");
+    setHeader("Definições", "Twenty · controlo do sistema");
+    var section = ["overview", "academic", "data", "experience", "developer"].indexOf(route.tab) >= 0 ? route.tab : "overview";
     var semester = currentSemester();
     var archived = state.semesters.filter(function (item) { return item.archived; }).length;
     var lastCheck = state.meta.externalCheckedAt ? new Intl.DateTimeFormat("pt-PT", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" }).format(new Date(state.meta.externalCheckedAt)) : "Nunca";
@@ -4499,12 +4796,41 @@
     var syncVersionSummary = syncInfo.pending ? syncInfo.pending + " por enviar" : syncRemoteVersion ? (syncInfo.outdated || (syncLocalVersion && syncLocalVersion !== syncRemoteVersion) ? "v" + syncLocalVersion + " → v" + syncRemoteVersion : "Versão Git v" + syncRemoteVersion) : "PC + telemóvel";
     var syncVersionBadge = syncInfo.conflicts ? syncInfo.conflicts + " conflito(s)" : syncInfo.outdated ? "Desatualizado" : syncRemoteVersion ? "Atualizado" : "Protegido";
     var forceDisabled = syncInfo.configured && syncInfo.state !== "syncing" ? "" : " disabled";
-    var forceControls = '<span class="sync-force-actions" role="group" aria-label="Substituição manual de dados"><button class="button button-small sync-icon-button" type="button" data-action="force-git-pull" aria-label="Forçar pull: substituir este dispositivo pelos dados do Git" title="Forçar pull"' + forceDisabled + '><i data-lucide="arrow-down-to-line"></i></button><button class="button button-dark button-small sync-icon-button" type="button" data-action="force-git-push" aria-label="Forçar push: substituir o Git pelos dados deste dispositivo" title="Forçar push"' + forceDisabled + '><i data-lucide="arrow-up-to-line"></i></button></span>';
+    var forceControls = '<span class="sync-force-actions" role="group" aria-label="Substituição manual de dados"><button class="button button-small sync-icon-button" type="button" data-action="force-git-pull" aria-label="Forçar pull" title="Forçar pull"' + forceDisabled + '><i data-lucide="arrow-down-to-line"></i></button><button class="button button-dark button-small sync-icon-button" type="button" data-action="force-git-push" aria-label="Forçar push" title="Forçar push"' + forceDisabled + '><i data-lucide="arrow-up-to-line"></i></button></span>';
     var syncProgress = '<div id="gitSyncInlineProgress" class="sync-inline-progress ' + (syncInfo.state === "syncing" ? "is-active is-indeterminate" : "") + '"><span></span></div>';
     var syncCard = '<article id="gitSyncCard" class="card settings-card card-violet" aria-busy="' + (syncInfo.state === "syncing" ? "true" : "false") + '"><div class="card-title-row"><div><p class="card-label">Git como base de dados</p><h3 id="gitSyncTitle">' + esc(syncDisplay.title) + '</h3><p id="gitSyncDetail" class="card-subtitle">' + esc(syncDisplay.detail) + '</p></div><span class="metric-icon"><i data-lucide="git-commit-horizontal"></i></span></div><div class="settings-row"><div><strong id="gitSyncSummary">' + esc(syncVersionSummary) + '</strong><small>Fusão por campos · fila offline · histórico em commits.</small></div><span id="gitSyncBadge" class="badge ' + syncDisplay.badgeClass + '">' + esc(syncVersionBadge) + '</span></div>' + syncProgress + '<div class="list-actions"><button class="button button-small" type="button" data-action="configure-git-sync"><i data-lucide="settings-2"></i>Configurar</button><button class="button button-dark button-small" type="button" data-action="sync-now"><i data-lucide="refresh-cw"></i>Sincronizar agora</button>' + forceControls + (syncInfo.configured ? '<button class="button button-small" type="button" data-action="disable-git-sync"><i data-lucide="pause"></i>Pausar</button>' : '') + '</div></article>';
     var debugSnapshot = homeDebugSnapshot();
-    var debugCard = '<article class="card settings-card debug-admin-card"><div class="card-title-row"><div><p class="card-label">Ferramentas de desenvolvimento</p><h3>Laboratório da Home</h3><p class="card-subtitle">Testa manhã, aulas coladas, primeiros 10 minutos, TPC e Report Card sem esperar pela hora real.</p></div><span class="metric-icon"><i data-lucide="flask-conical"></i></span></div><div class="settings-row"><div><strong>' + esc(debugSnapshot.label) + '</strong><small>' + esc(debugSnapshot.time) + ' · motor: ' + esc(debugSnapshot.phase) + '</small></div><span class="badge ' + (homeDebug && homeDebug.active ? "badge-yellow" : "badge-mint") + '">' + (homeDebug && homeDebug.active ? "Simulação ativa" : "Dados reais") + '</span></div><div class="list-actions"><button class="button button-dark button-small" type="button" data-action="debug-start-tutorial"><i data-lucide="play"></i>Tutorial do dia</button><button class="button button-small" type="button" data-action="debug-open-lab"><i data-lucide="bug"></i>Abrir debug</button>' + (homeDebug && homeDebug.active ? '<button class="button button-danger button-small" type="button" data-action="debug-exit"><i data-lucide="x"></i>Sair</button>' : '') + '</div></article>';
-    return '<div class="page-head"><div><h2>Definições</h2><p>Perfil, semestres, conteúdo e dados locais.</p></div><div class="page-actions"><button class="button" type="button" data-action="show-tutorial"><i data-lucide="map"></i>Visita guiada</button><button class="button button-dark" type="button" data-action="quick-add"><i data-lucide="plus"></i>Adicionar conteúdo</button></div></div><div class="settings-grid">' + syncCard + debugCard + '<article class="card settings-card"><div class="card-title-row"><div><p class="card-label">Perfil académico</p><h3>' + esc(state.profile.name || "Estudante") + '</h3><p class="card-subtitle">' + esc(state.profile.degree || "Curso por configurar") + (state.profile.institution ? " · " + esc(state.profile.institution) : "") + '</p></div><span class="metric-icon"><i data-lucide="user-round"></i></span></div><div class="settings-row"><div><strong>Meta</strong><small>Objetivo utilizado nos indicadores de desempenho.</small></div><span class="badge badge-yellow">' + (Number(state.profile.targetGrade) || 20) + '/20</span></div><button class="button button-small" type="button" data-action="edit-profile"><i data-lucide="pencil"></i>Editar perfil</button></article><article class="card settings-card card-violet"><div class="card-title-row"><div><p class="card-label">Semestre ativo</p><h3>' + esc(semester ? semester.name : "Nenhum") + '</h3><p class="card-subtitle">' + esc(semester ? semester.academicYear : "Cria o próximo semestre") + '</p></div><span class="metric-icon"><i data-lucide="calendar-range"></i></span></div><div class="settings-row"><div><strong>' + activeCourses().length + ' cadeiras</strong><small>' + archived + ' semestre(s) no arquivo.</small></div><span class="badge badge-dark">' + activeCourses().reduce(function (sum, course) { return sum + (Number(course.ects) || 0); }, 0) + ' ECTS</span></div><div class="list-actions"><button class="button button-small" type="button" data-action="new-semester"><i data-lucide="calendar-plus"></i>Novo</button>' + (semester ? '<button class="button button-danger button-small" type="button" data-action="archive-semester"><i data-lucide="archive"></i>Arquivar semestre</button>' : "") + '</div></article><article class="card settings-card"><div class="card-title-row"><div><p class="card-label">Ficheiro JSON</p><h3>academic-data.json</h3><p class="card-subtitle">Editável fora da app; relido ao abrir ou regressar à janela.</p></div><span class="metric-icon"><i data-lucide="braces"></i></span></div><div class="settings-row"><div><strong>Última verificação</strong><small>' + esc(lastCheck) + ' · revisão local ' + (Number(state.meta.revision) || 0) + '</small></div><button class="switch ' + (state.settings.jsonSync ? "is-on" : "") + '" type="button" data-action="toggle-json-sync" aria-label="Ativar sincronização JSON"><span></span></button></div><div class="list-actions"><button class="button button-small" type="button" data-action="reload-json"><i data-lucide="refresh-cw"></i>Reler</button><button class="button button-small" type="button" data-action="export-json"><i data-lucide="download"></i>Exportar</button><button class="button button-small" type="button" data-action="import-json"><i data-lucide="upload"></i>Importar</button></div></article><article class="card settings-card card-yellow"><div class="card-title-row"><div><h3>Atividade simulada no campus</h3><p class="card-subtitle">Apresenta indicadores simulados de atividade no campus.</p></div><span class="metric-icon"><i data-lucide="users-round"></i></span></div><div class="settings-row"><div><strong>Contador simulado</strong><small>Mostra “pessoas a acompanhar” com etiqueta de simulação.</small></div><button class="switch ' + (state.settings.campusSimulation ? "is-on" : "") + '" type="button" data-action="toggle-campus"><span></span></button></div><span class="badge badge-dark">Local · privado · transparente</span></article><article class="card settings-card"><div class="card-title-row"><div><h3>Dados no dispositivo</h3><p class="card-subtitle">Os metadados ficam em IndexedDB; os PDFs enviados ficam separados do JSON.</p></div><span class="metric-icon"><i data-lucide="hard-drive"></i></span></div><div class="settings-row"><div><strong id="storageFileCount">A contar ficheiros…</strong><small>PDFs e documentos enviados na app.</small></div><span class="badge badge-mint">Local-first</span></div><button class="button button-small" type="button" data-action="export-json"><i data-lucide="shield-check"></i>Criar backup JSON</button></article><article class="card settings-card card-dark"><div class="card-title-row"><div><h3>Adicionar conteúdo</h3><p class="card-subtitle">Aulas, materiais, perguntas antigas, quizzes, notas e avaliações.</p></div><span class="metric-icon"><i data-lucide="wrench"></i></span></div><div class="quick-grid" style="grid-template-columns:repeat(3,1fr);margin-top:17px"><button type="button" data-action="create-lesson"><i data-lucide="presentation"></i>Aula</button><button type="button" data-action="add-material"><i data-lucide="file-up"></i>PDF</button><button type="button" data-action="add-question"><i data-lucide="message-circle-question"></i>Pergunta</button><button type="button" data-action="add-quiz"><i data-lucide="sparkles"></i>Quiz</button><button type="button" data-action="add-grade"><i data-lucide="chart-no-axes-combined"></i>Nota</button><button type="button" data-action="add-assessment"><i data-lucide="file-pen-line"></i>Avaliação</button></div></article><article class="card settings-card span-12"><div class="card-title-row"><div><p class="card-label">Segurança</p><h3>Recomeçar neste dispositivo</h3><p class="card-subtitle">Remove o estado local e os PDFs guardados. O ficheiro academic-data.json não é apagado.</p></div><button class="button button-danger" type="button" data-action="reset-app"><i data-lucide="trash-2"></i>Apagar dados locais</button></div></article></div>';
+    var debugCard = '<article class="card settings-card debug-admin-card"><div class="card-title-row"><div><p class="card-label">Ferramentas de desenvolvimento</p><h3>Laboratório da Home</h3><p class="card-subtitle">Simula manhã, aulas coladas, TPC e Report Card sem esperar pela hora real.</p></div><span class="metric-icon"><i data-lucide="flask-conical"></i></span></div><div class="settings-row"><div><strong>' + esc(debugSnapshot.label) + '</strong><small>' + esc(debugSnapshot.time) + ' · motor: ' + esc(debugSnapshot.phase) + '</small></div><span class="badge ' + (homeDebug && homeDebug.active ? "badge-yellow" : "badge-mint") + '">' + (homeDebug && homeDebug.active ? "Simulação ativa" : "Dados reais") + '</span></div><div class="list-actions"><button class="button button-dark button-small" type="button" data-action="debug-start-tutorial"><i data-lucide="play"></i>Tutorial do dia</button><button class="button button-small" type="button" data-action="debug-open-lab"><i data-lucide="bug"></i>Abrir debug</button>' + (homeDebug && homeDebug.active ? '<button class="button button-danger button-small" type="button" data-action="debug-exit"><i data-lucide="x"></i>Sair</button>' : '') + '</div></article>';
+    var profileCard = '<article class="card settings-card"><div class="card-title-row"><div><p class="card-label">Perfil académico</p><h3>' + esc(state.profile.name || "Estudante") + '</h3><p class="card-subtitle">' + esc(state.profile.degree || "Curso por configurar") + (state.profile.institution ? " · " + esc(state.profile.institution) : "") + '</p></div><span class="metric-icon"><i data-lucide="user-round"></i></span></div><div class="settings-row"><div><strong>Meta académica</strong><small>Usada nos indicadores de desempenho.</small></div><span class="badge badge-yellow">' + (Number(state.profile.targetGrade) || 20) + '/20</span></div><button class="button button-small" type="button" data-action="edit-profile"><i data-lucide="pencil"></i>Editar perfil</button></article>';
+    var semesterCard = '<article class="card settings-card card-violet"><div class="card-title-row"><div><p class="card-label">Semestre ativo</p><h3>' + esc(semester ? semester.name : "Nenhum") + '</h3><p class="card-subtitle">' + esc(semester ? semester.academicYear : "Cria o próximo semestre") + '</p></div><span class="metric-icon"><i data-lucide="calendar-range"></i></span></div><div class="settings-row"><div><strong>' + activeCourses().length + ' cadeiras</strong><small>' + archived + ' semestre(s) no arquivo.</small></div><span class="badge badge-dark">' + activeCourses().reduce(function (sum, course) { return sum + (Number(course.ects) || 0); }, 0) + ' ECTS</span></div><div class="list-actions"><button class="button button-small" type="button" data-action="new-semester"><i data-lucide="calendar-plus"></i>Novo</button>' + (semester ? '<button class="button button-danger button-small" type="button" data-action="archive-semester"><i data-lucide="archive"></i>Arquivar</button>' : "") + '</div></article>';
+    var quickCard = '<article class="card settings-card card-dark span-12"><div class="card-title-row"><div><p class="card-label">Criação rápida</p><h3>Adicionar conteúdo</h3><p class="card-subtitle">Atalhos para o que normalmente configuras no início da semana.</p></div><span class="metric-icon"><i data-lucide="wand-sparkles"></i></span></div><div class="quick-grid"><button type="button" data-action="create-lesson"><i data-lucide="presentation"></i>Aula</button><button type="button" data-action="add-material"><i data-lucide="file-up"></i>Material</button><button type="button" data-action="add-question"><i data-lucide="message-circle-question"></i>Pergunta</button><button type="button" data-action="add-quiz"><i data-lucide="circle-check-big"></i>Quiz</button><button type="button" data-action="add-grade"><i data-lucide="chart-no-axes-combined"></i>Nota</button><button type="button" data-action="add-assessment"><i data-lucide="file-pen-line"></i>Avaliação</button></div></article>';
+    var jsonCard = '<article class="card settings-card"><div class="card-title-row"><div><p class="card-label">Ficheiro local</p><h3>academic-data.json</h3><p class="card-subtitle">Importação e exportação manual, separada do Git.</p></div><span class="metric-icon"><i data-lucide="braces"></i></span></div><div class="settings-row"><div><strong>Última verificação</strong><small>' + esc(lastCheck) + ' · revisão local ' + (Number(state.meta.revision) || 0) + '</small></div><button class="switch ' + (state.settings.jsonSync ? "is-on" : "") + '" type="button" data-action="toggle-json-sync" aria-label="Ativar sincronização JSON"><span></span></button></div><div class="list-actions"><button class="button button-small" type="button" data-action="reload-json"><i data-lucide="refresh-cw"></i>Reler</button><button class="button button-small" type="button" data-action="export-json"><i data-lucide="download"></i>Exportar</button><button class="button button-small" type="button" data-action="import-json"><i data-lucide="upload"></i>Importar</button></div></article>';
+    var storageCard = '<article class="card settings-card"><div class="card-title-row"><div><p class="card-label">Neste dispositivo</p><h3>Armazenamento local</h3><p class="card-subtitle">Documentos, imagens e cache usados por esta instalação.</p></div><span class="metric-icon"><i data-lucide="hard-drive"></i></span></div><div class="settings-row"><div><strong id="storageFileCount">A contar ficheiros…</strong><small>Ficheiros guardados no browser.</small></div><span class="badge badge-mint">Local-first</span></div><button class="button button-small" type="button" data-action="export-json"><i data-lucide="shield-check"></i>Criar backup JSON</button></article>';
+    var canteenAIStatus = canteenAIAvailabilityLabel();
+    var canteenAICard = '<article class="card settings-card settings-feature-card"><div class="card-title-row"><div><p class="card-label">Cantina</p><h3>Brilho com IA local</h3><p class="card-subtitle">Nota do chef, nomes mais bonitos e tags. A ementa e os alergénios oficiais nunca são alterados.</p></div><span class="metric-icon"><i data-lucide="sparkles"></i></span></div><div class="settings-row"><div><strong>IA integrada do Chrome</strong><small>Quando não existe, a Twenty usa regras locais automaticamente.</small></div><span class="' + canteenAIStatus.className + '">' + esc(canteenAIStatus.label) + '</span></div><div class="settings-toggle-list"><div class="settings-row"><div><strong>Ativar enriquecimento</strong><small>Permite usar IA local ou fallback determinístico.</small></div><button class="switch ' + (state.settings.canteenAIEnabled ? "is-on" : "") + '" type="button" data-action="toggle-canteen-ai"><span></span></button></div><div class="settings-row"><div><strong>Chef\'s Note</strong><small>Uma frase curta com energia de bistro do campus.</small></div><button class="switch ' + (state.settings.canteenAIChefNote ? "is-on" : "") + '" type="button" data-action="toggle-canteen-ai-note"><span></span></button></div><div class="settings-row"><div><strong>Descrições e tags</strong><small>Acrescenta contexto visual sem substituir o nome oficial.</small></div><button class="switch ' + (state.settings.canteenAIDescriptions ? "is-on" : "") + '" type="button" data-action="toggle-canteen-ai-descriptions"><span></span></button></div></div><div class="list-actions"><button class="button button-dark button-small" type="button" data-route="canteen"><i data-lucide="utensils"></i>Abrir Cantina</button><button class="button button-small" type="button" data-action="canteen-ai-clear-cache"><i data-lucide="eraser"></i>Limpar cache IA</button></div></article>';
+    var motionCard = '<article class="card settings-card"><div class="card-title-row"><div><p class="card-label">Interface</p><h3>Movimento e conforto</h3><p class="card-subtitle">Controla animações sem perder a informação importante.</p></div><span class="metric-icon"><i data-lucide="accessibility"></i></span></div><div class="settings-row"><div><strong>Reduzir movimento</strong><small>Desativa transições e celebrações mais intensas.</small></div><button class="switch ' + (state.settings.reduceMotion ? "is-on" : "") + '" type="button" data-action="toggle-reduce-motion"><span></span></button></div></article>';
+    var campusCard = '<article class="card settings-card card-yellow"><div class="card-title-row"><div><p class="card-label">Home</p><h3>Atividade simulada</h3><p class="card-subtitle">Mostra indicadores de presença no campus claramente assinalados como simulação.</p></div><span class="metric-icon"><i data-lucide="users-round"></i></span></div><div class="settings-row"><div><strong>Contador simulado</strong><small>É apenas ambiente visual; não representa utilizadores reais.</small></div><button class="switch ' + (state.settings.campusSimulation ? "is-on" : "") + '" type="button" data-action="toggle-campus"><span></span></button></div></article>';
+    var tutorialCard = '<article class="card settings-card"><div class="card-title-row"><div><p class="card-label">Ajuda</p><h3>Aprender a Twenty</h3><p class="card-subtitle">Revê a visita guiada ou testa um dia escolar completo.</p></div><span class="metric-icon"><i data-lucide="map"></i></span></div><div class="list-actions"><button class="button button-dark button-small" type="button" data-action="show-tutorial"><i data-lucide="map"></i>Visita guiada</button><button class="button button-small" type="button" data-action="debug-start-tutorial"><i data-lucide="play"></i>Simular dia</button></div></article>';
+    var planningCard = '<article class="card settings-card"><div class="card-title-row"><div><p class="card-label">Rotina</p><h3>Planeamento de estudo</h3><p class="card-subtitle">' + Number(state.settings.weeklyStudyHours || 16) + ' h/semana · sessões de ' + Number(state.settings.studySessionMinutes || 50) + ' min.</p></div><span class="metric-icon"><i data-lucide="timer-reset"></i></span></div><div class="settings-row"><div><strong>' + esc(state.settings.studyDayStart || "09:00") + '–' + esc(state.settings.studyDayEnd || "19:00") + '</strong><small>Pausa de ' + Number(state.settings.studyBreakMinutes || 10) + ' minutos entre sessões.</small></div><span class="badge badge-violet">Plano ativo</span></div><button class="button button-small" type="button" data-action="study-planner-settings"><i data-lucide="sliders-horizontal"></i>Configurar rotina</button></article>';
+    var safetyCard = '<article class="card settings-card span-12 settings-danger-zone"><div class="card-title-row"><div><p class="card-label">Zona de segurança</p><h3>Recomeçar neste dispositivo</h3><p class="card-subtitle">Remove o estado local e os ficheiros deste browser. O repositório Git não é apagado.</p></div><button class="button button-danger" type="button" data-action="reset-app"><i data-lucide="trash-2"></i>Apagar dados locais</button></div></article>';
+    var systemCard = '<article class="card settings-card settings-system-card"><div class="card-title-row"><div><p class="card-label">Resumo</p><h3>Estado da Twenty</h3><p class="card-subtitle">Um olhar rápido antes de entrares nos detalhes.</p></div><span class="metric-icon"><i data-lucide="gauge"></i></span></div><div class="settings-system-grid"><div><span>Git</span><strong>' + esc(syncVersionBadge) + '</strong></div><div><span>Semestre</span><strong>' + activeCourses().length + ' cadeiras</strong></div><div><span>IA Cantina</span><strong>' + esc(canteenAIStatus.label) + '</strong></div><div><span>Dados</span><strong>Revisão ' + (Number(state.meta.revision) || 0) + '</strong></div></div></article>';
+
+    var titles = {
+      overview: ["Visão geral", "O essencial da tua conta académica e do sistema."],
+      academic: ["Académico", "Perfil, semestre, rotina e criação de conteúdo."],
+      data: ["Dados e sincronização", "Git, JSON, armazenamento e backups num só lugar."],
+      experience: ["Experiência", "Cantina inteligente, movimento, ambiente e ajuda."],
+      developer: ["Laboratório", "Debug, simulação e ferramentas avançadas."]
+    };
+    var content = {
+      overview: systemCard + profileCard + semesterCard + quickCard,
+      academic: profileCard + semesterCard + planningCard + quickCard,
+      data: syncCard + jsonCard + storageCard + safetyCard,
+      experience: canteenAICard + motionCard + campusCard + tutorialCard,
+      developer: debugCard + jsonCard + storageCard + safetyCard
+    }[section];
+    var nav = settingsNavButton("overview", "layout-dashboard", "Visão geral", section) + settingsNavButton("academic", "graduation-cap", "Académico", section) + settingsNavButton("data", "database", "Dados e sync", section) + settingsNavButton("experience", "sparkles", "Experiência", section) + settingsNavButton("developer", "flask-conical", "Laboratório", section);
+    return '<div class="page-head settings-page-head"><div><p class="settings-eyebrow">Twenty control room</p><h2>Definições</h2><p>Organizadas por contexto, não por ordem aleatória de cartões.</p></div><div class="page-actions"><button class="button button-dark" type="button" data-action="quick-add"><i data-lucide="plus"></i>Adicionar conteúdo</button></div></div><div class="settings-shell"><aside class="settings-nav"><div class="settings-nav-title"><span><i data-lucide="sliders-horizontal"></i></span><div><strong>Definições</strong><small>Escolhe uma área</small></div></div>' + nav + '</aside><section class="settings-panel"><header class="settings-section-head"><div><span>' + esc(titles[section][0]) + '</span><h3>' + esc(titles[section][0]) + '</h3><p>' + esc(titles[section][1]) + '</p></div><i data-lucide="' + (section === "overview" ? "layout-dashboard" : section === "academic" ? "graduation-cap" : section === "data" ? "database" : section === "experience" ? "sparkles" : "flask-conical") + '"></i></header><div class="settings-grid">' + content + '</div></section></div>';
   }
 
   function updateStorageCount() {
@@ -6667,6 +6993,12 @@
       showTaskDetail(button.dataset.id);
     } else if (action === "schedule-detail") {
       showScheduleDetail(button.dataset.id);
+    } else if (action === "canteen-ai-prepare") {
+      await ensureCanteenAIForCurrentMeal(true);
+    } else if (action === "canteen-ai-clear-cache") {
+      clearCanteenAICache();
+      render();
+      toast("Cache da IA da Cantina limpa.");
     } else if (action === "canteen-day") {
       canteenSelectedDate = button.dataset.date || canteenSelectedDate;
       canteenMealTab = null;
@@ -6803,6 +7135,22 @@
       else prepareHomeDebugScenario(homeDebug.index + 1);
     } else if (action === "debug-exit") {
       stopHomeDebug();
+    } else if (action === "settings-section") {
+      route.tab = ["overview", "academic", "data", "experience", "developer"].indexOf(button.dataset.section) >= 0 ? button.dataset.section : "overview";
+      render();
+    } else if (action === "toggle-canteen-ai") {
+      state.settings.canteenAIEnabled = !state.settings.canteenAIEnabled;
+      if (!state.settings.canteenAIEnabled) canteenAIState = { key: "", status: "idle", availability: "unknown", source: "rules", data: null, error: "", progress: null };
+      await save(true); render();
+    } else if (action === "toggle-canteen-ai-note") {
+      state.settings.canteenAIChefNote = !state.settings.canteenAIChefNote;
+      await save(true); render();
+    } else if (action === "toggle-canteen-ai-descriptions") {
+      state.settings.canteenAIDescriptions = !state.settings.canteenAIDescriptions;
+      await save(true); render();
+    } else if (action === "toggle-reduce-motion") {
+      state.settings.reduceMotion = !state.settings.reduceMotion;
+      await save(true); render();
     } else if (action === "toggle-campus") {
       state.settings.campusSimulation = !state.settings.campusSimulation;
       await save(true); render();
