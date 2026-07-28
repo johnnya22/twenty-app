@@ -3713,3 +3713,16 @@ button.campus-menu-item { cursor: pointer; }
 @media (prefers-reduced-motion: reduce) {
   .campus-chef-skeleton i { animation: none; opacity: .45; }
 }
+
+
+/* v0.27.2 · Stable Chef context: no full-page flicker and no animated loading. */
+body[data-route="canteen"] .view-enter { animation: none !important; }
+.campus-chef-note .campus-chef-writing {
+  margin: 0;
+  color: rgba(5, 5, 5, .54);
+  font-family: "Swanky and Moo Moo", "Comic Sans MS", cursive;
+  font-size: 25px;
+  line-height: 1.14;
+}
+.campus-chef-note.is-loading .campus-chef-skeleton { display: none; }
+.campus-chef-note.is-loading { animation: none !important; }

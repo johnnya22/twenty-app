@@ -1,16 +1,16 @@
 "use strict";
 
-var CACHE = "twenty-study-os-v27-0-campus-dining";
+var CACHE = "twenty-study-os-v27-2-stable-chef-context";
 var APP_SHELL = [
   "./",
   "./index.html",
-  "./styles.css?v=27.1-live-chef-context",
-  "./sync.js?v=27.1-live-chef-context",
-  "./db.js?v=27.1-live-chef-context",
-  "./ai.js?v=27.1-live-chef-context",
-  "./ai-worker.js?v=27.1-live-chef-context",
-  "./app.js?v=27.1-live-chef-context",
-  "./lucide.min.js?v=27.1-live-chef-context",
+  "./styles.css?v=27.2-stable-chef-context",
+  "./sync.js?v=27.2-stable-chef-context",
+  "./db.js?v=27.2-stable-chef-context",
+  "./ai.js?v=27.2-stable-chef-context",
+  "./ai-worker.js?v=27.2-stable-chef-context",
+  "./app.js?v=27.2-stable-chef-context",
+  "./lucide.min.js?v=27.2-stable-chef-context",
   "./manifest.webmanifest",
   "./icon.svg",
   "./icon-192.png",
