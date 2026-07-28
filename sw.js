@@ -1,16 +1,16 @@
 "use strict";
 
-var CACHE = "twenty-study-os-v25-canteen";
+var CACHE = "twenty-study-os-v26-canteen-bistro";
 var APP_SHELL = [
   "./",
   "./index.html",
-  "./styles.css?v=25-canteen",
-  "./sync.js?v=25-canteen",
-  "./db.js?v=25-canteen",
-  "./ai.js?v=25-canteen",
-  "./ai-worker.js?v=25-canteen",
-  "./app.js?v=25-canteen",
-  "./lucide.min.js?v=25-canteen",
+  "./styles.css?v=26-canteen-bistro",
+  "./sync.js?v=26-canteen-bistro",
+  "./db.js?v=26-canteen-bistro",
+  "./ai.js?v=26-canteen-bistro",
+  "./ai-worker.js?v=26-canteen-bistro",
+  "./app.js?v=26-canteen-bistro",
+  "./lucide.min.js?v=26-canteen-bistro",
   "./manifest.webmanifest",
   "./icon.svg",
   "./icon-192.png",
