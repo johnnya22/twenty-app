@@ -3855,3 +3855,414 @@ body[data-route="canteen"] .campus-chef-writing.has-stream {
 
 
 /* v0.27.7 · escolha do prato primeiro e Chef’s Note com voz real de cozinha */
+
+
+/* v0.27.8 · escolha e nota em duas chamadas sequenciais para garantir o destaque primeiro */
+
+
+/* =========================================================
+   Twenty v0.27.9 · Cantina Leaf theme
+   Tema alternativo inspirado num menu acolhedor de café,
+   mantendo o Diner exatamente como estava.
+   ========================================================= */
+.canteen-theme-settings-card {
+  background: linear-gradient(145deg, #fffdf6, #f3f0df);
+}
+.canteen-theme-picker {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 13px;
+  margin-top: 17px;
+}
+.canteen-theme-option {
+  min-width: 0;
+  display: grid;
+  gap: 7px;
+  padding: 10px;
+  border: 2px solid rgba(31, 31, 36, .12);
+  border-radius: 18px;
+  color: var(--ink);
+  background: rgba(255,255,255,.72);
+  text-align: left;
+  cursor: pointer;
+  transition: transform .16s ease, border-color .16s ease, box-shadow .16s ease;
+}
+.canteen-theme-option:hover { transform: translateY(-2px); }
+.canteen-theme-option.is-selected {
+  border-color: #25262d;
+  box-shadow: 0 0 0 3px rgba(128, 220, 0, .18), 0 10px 22px rgba(32,32,38,.09);
+}
+.canteen-theme-option > strong { font-size: .8rem; }
+.canteen-theme-option > small { color: var(--muted); font-size: .57rem; line-height: 1.4; }
+.canteen-theme-preview {
+  height: 112px;
+  position: relative;
+  overflow: hidden;
+  display: grid;
+  align-content: center;
+  padding: 14px;
+  border-radius: 13px;
+}
+.canteen-theme-preview b { font-size: 1.18rem; line-height: .82; }
+.canteen-theme-preview em { margin-top: 7px; font-size: .47rem; font-style: normal; letter-spacing: .08em; }
+.canteen-theme-preview.is-diner { color: #050505; background: #f8f7fb; }
+.canteen-theme-preview.is-diner b { font-family: "Londrina Solid", Impact, sans-serif; font-size: 1.55rem; }
+.canteen-theme-preview.is-diner i { position: absolute; right: 13px; top: 14px; width: 42px; height: 24px; border: 2px solid #050505; border-radius: 4px; transform: rotate(5deg); }
+.canteen-theme-preview.is-leaf {
+  color: #563821;
+  background: radial-gradient(circle at 10% 12%, rgba(126,151,67,.18), transparent 24%), #f5efdc;
+  border: 1px solid rgba(87,56,33,.22);
+}
+.canteen-theme-preview.is-leaf b { font-family: Georgia, "Times New Roman", serif; letter-spacing: .03em; }
+.canteen-theme-preview.is-leaf > svg { position: absolute; right: 14px; top: 14px; width: 25px; color: #779348; transform: rotate(16deg); }
+
+body[data-route="canteen"][data-canteen-theme="leaf"] {
+  background:
+    radial-gradient(circle at 8% 16%, rgba(131,170,83,.34), transparent 24%),
+    radial-gradient(circle at 87% 18%, rgba(120,159,74,.25), transparent 24%),
+    linear-gradient(145deg, #bcd69a 0%, #e7d5aa 55%, #d7ad78 100%);
+}
+body[data-route="canteen"][data-canteen-theme="leaf"] .view {
+  background: transparent;
+}
+.campus-dining-page.is-leaf-theme {
+  --campus-ink: #50331f;
+  --campus-paper: #f6f0df;
+  --campus-dark: #5c3a24;
+  --campus-green: #78964b;
+  width: min(1200px, 100%);
+  padding: 30px 0 46px;
+  color: var(--campus-ink);
+  font-family: "Avenir Next", -apple-system, BlinkMacSystemFont, "SF Pro Text", sans-serif;
+}
+.leaf-browser-shell {
+  overflow: hidden;
+  border: 1px solid rgba(83,53,31,.34);
+  border-radius: 16px;
+  background: rgba(246,240,223,.97);
+  box-shadow: 0 24px 65px rgba(72,54,29,.29), 0 3px 0 rgba(255,255,255,.58) inset;
+}
+.leaf-browser-bar {
+  min-height: 38px;
+  display: grid;
+  grid-template-columns: auto minmax(130px, 310px) 1fr;
+  align-items: center;
+  gap: 16px;
+  padding: 7px 15px;
+  border-bottom: 1px solid rgba(83,53,31,.14);
+  background: #ece4cd;
+}
+.leaf-window-dots { display: inline-flex; gap: 6px; }
+.leaf-window-dots i { width: 9px; height: 9px; border-radius: 50%; background: #df8c61; }
+.leaf-window-dots i:nth-child(2) { background: #e2bb62; }
+.leaf-window-dots i:nth-child(3) { background: #7da25a; }
+.leaf-address-bar { height: 21px; border-radius: 5px; background: rgba(255,255,255,.62); box-shadow: inset 0 1px 2px rgba(80,55,30,.08); }
+.leaf-browser-bar > svg { justify-self: end; width: 21px; color: #6f8f43; transform: rotate(15deg); }
+.leaf-browser-nav {
+  display: flex;
+  gap: 13px;
+  padding: 8px 24px;
+  border-bottom: 1px solid rgba(83,53,31,.17);
+  color: #412a1c;
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: .1em;
+}
+.leaf-browser-nav span:not(:last-child)::after { content: "|"; margin-left: 13px; opacity: .45; }
+.leaf-menu-surface { padding: 25px 28px 16px; }
+.leaf-menu-footer {
+  min-height: 42px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 15px;
+  padding: 8px 22px;
+  border-top: 1px solid rgba(83,53,31,.13);
+  background: #ede5cf;
+}
+.leaf-menu-footer span { display: inline-flex; gap: 5px; }
+.leaf-menu-footer svg { width: 16px; color: #5d3a25; }
+.leaf-menu-footer svg:nth-child(2) { color: #718e45; transform: rotate(18deg); }
+.leaf-menu-footer small { font-size: 9px; font-weight: 700; letter-spacing: .1em; }
+
+.is-leaf-theme .campus-dining-hero {
+  grid-template-columns: minmax(360px, 1fr) minmax(260px, .72fr) 46px;
+  min-height: 160px;
+  column-gap: 34px;
+  padding: 0 4px 14px;
+}
+.leaf-menu-kicker {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+  color: #6d8d42;
+  font-family: Georgia, "Times New Roman", serif;
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: .09em;
+}
+.leaf-menu-kicker svg { width: 18px; }
+.leaf-menu-kicker svg:last-child { transform: scaleX(-1) rotate(10deg); }
+.is-leaf-theme .campus-dining-brand h2 {
+  color: #573822;
+  font-family: Georgia, "Times New Roman", serif;
+  font-size: clamp(43px, 4.6vw, 64px);
+  font-weight: 900;
+  line-height: .9;
+  letter-spacing: .015em;
+}
+.is-leaf-theme .campus-dining-brand p {
+  margin-top: 10px;
+  color: #76563d;
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: .14em;
+}
+.is-leaf-theme .campus-dining-stamp {
+  min-width: 230px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 9px;
+  margin-top: 24px;
+  padding: 11px 18px;
+  border: 2px solid #6b472d;
+  border-radius: 999px;
+  color: #fff9e9;
+  background: #6b472d;
+  box-shadow: 0 5px 0 #d4b28b;
+  font-family: Georgia, "Times New Roman", serif;
+  font-size: 27px;
+  letter-spacing: .08em;
+  transform: rotate(-1deg);
+}
+.is-leaf-theme .campus-dining-stamp svg { width: 20px; color: #dbe9b9; }
+.is-leaf-theme .campus-dining-info {
+  margin-top: 5px;
+  color: #f9f3df;
+  background: #6c8b43;
+  box-shadow: 0 3px 0 #4c632f;
+}
+.is-leaf-theme .campus-dining-columns {
+  grid-template-columns: minmax(330px, 1fr) minmax(330px, 1fr) 250px;
+  column-gap: 24px;
+  padding-top: 8px;
+}
+.is-leaf-theme .campus-dining-column {
+  display: grid;
+  align-content: start;
+  gap: 20px;
+}
+.is-leaf-theme .campus-menu-section {
+  margin: 0;
+  padding: 15px 16px 13px;
+  border: 1px solid rgba(83,53,31,.18);
+  border-radius: 16px;
+  background: rgba(255,252,239,.7);
+  box-shadow: 0 5px 13px rgba(77,57,32,.08);
+}
+.is-leaf-theme .campus-menu-section > header {
+  min-height: 38px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid rgba(83,53,31,.35);
+}
+.is-leaf-theme .campus-menu-section > header h3 {
+  color: #563821;
+  font-family: Georgia, "Times New Roman", serif;
+  font-size: 20px;
+  letter-spacing: .045em;
+}
+.is-leaf-theme .campus-menu-section > header span {
+  color: #7d644e;
+  font-size: 10px;
+}
+.is-leaf-theme .campus-menu-section > div { padding-top: 5px; }
+.is-leaf-theme .campus-menu-item {
+  padding: 10px 7px 11px;
+  border-bottom: 1px dashed rgba(83,53,31,.18);
+}
+.is-leaf-theme .campus-menu-item:last-child { border-bottom: 0; }
+.is-leaf-theme .campus-menu-item-main {
+  grid-template-columns: minmax(0,1fr) auto 44px;
+  gap: 8px;
+}
+.is-leaf-theme .campus-menu-item-main strong {
+  color: #40281a;
+  font-size: 13px;
+  font-weight: 750;
+  line-height: 1.16;
+}
+.is-leaf-theme .campus-menu-item > small {
+  width: 92%;
+  color: #765f4c;
+  font-size: 8.5px;
+  line-height: 1.18;
+}
+.is-leaf-theme .campus-menu-kcal { color: #725138; font-size: 12px; font-weight: 800; }
+.is-leaf-theme .campus-menu-item-icons {
+  min-width: 32px;
+  min-height: 32px;
+  justify-content: center;
+  padding: 6px;
+  border: 1px solid rgba(85,55,32,.2);
+  border-radius: 50%;
+  color: #5d7c3b;
+  background: #edf0d7;
+}
+.is-leaf-theme .campus-menu-item-icons > svg { width: 17px; height: 17px; }
+.is-leaf-theme .campus-menu-allergen-icons { display: none; }
+.is-leaf-theme .campus-recommended {
+  color: #fff9e8;
+  background: #759448;
+  box-shadow: 0 2px 0 #536c32;
+}
+.is-leaf-theme .campus-menu-subdivider { border-color: rgba(83,53,31,.28); }
+.is-leaf-theme .campus-menu-subdivider span { color: #6e8c42; font-weight: 800; }
+.is-leaf-theme .campus-pencil-outline {
+  inset: 2px -2px 3px -2px;
+  border-color: rgba(100,126,56,.84);
+  border-radius: 18px 15px 17px 16px;
+}
+.is-leaf-theme .campus-pencil-outline::after { border-color: rgba(92,67,41,.26); }
+.is-leaf-theme .campus-menu-item.is-selected {
+  padding-inline: 10px;
+  background: rgba(220,230,185,.35);
+  border-radius: 15px;
+}
+.is-leaf-theme .campus-drinks { width: 100%; margin-top: 0; }
+.is-leaf-theme .campus-drink-row { color: #50331f; }
+.is-leaf-theme .campus-chef-note {
+  min-height: 360px;
+  margin: 0;
+  padding: 18px 18px 22px;
+  border: 1px solid rgba(83,53,31,.23);
+  border-radius: 16px;
+  color: #4b2f1e;
+  background:
+    radial-gradient(circle at 88% 10%, rgba(118,148,72,.18), transparent 21%),
+    #fffaf0;
+  box-shadow: 0 6px 16px rgba(75,53,29,.1);
+}
+.is-leaf-theme .campus-chef-note::before {
+  content: "";
+  width: 42px;
+  height: 42px;
+  display: block;
+  float: right;
+  margin: -4px -2px 5px 6px;
+  border-radius: 50%;
+  background: radial-gradient(circle at 36% 35%, #edf3cf 0 20%, #8da85e 22% 45%, #657f3d 47% 100%);
+  opacity: .7;
+}
+.is-leaf-theme .campus-chef-note h3 {
+  color: #583822;
+  font-family: Georgia, "Times New Roman", serif;
+  font-size: 27px;
+  letter-spacing: .01em;
+}
+.is-leaf-theme .campus-chef-note p,
+.is-leaf-theme .campus-chef-note .campus-chef-writing,
+.is-leaf-theme .campus-chef-status {
+  color: #513421;
+  font-size: 23px;
+}
+.is-leaf-theme .campus-order-button {
+  min-width: 205px;
+  min-height: 48px;
+  margin-top: 30px;
+  border-radius: 999px;
+  color: #fff7e3;
+  background: #6a432b;
+  box-shadow: 0 5px 0 #d3ae82;
+  font-family: Georgia, "Times New Roman", serif;
+  font-size: 18px;
+  font-weight: 800;
+  letter-spacing: .04em;
+}
+.is-leaf-theme .campus-order-button:hover:not(:disabled) { transform: translateY(-1px); box-shadow: 0 7px 0 #d3ae82; }
+.is-leaf-theme .campus-allergen-hidden-note {
+  border-color: rgba(83,53,31,.2);
+  color: #593a25;
+  background: #f1ecd5;
+}
+.is-leaf-theme .campus-dining-state {
+  min-height: 470px;
+  padding: 30px;
+  border: 1px solid rgba(83,53,31,.18);
+  border-radius: 16px;
+  background: rgba(255,250,238,.74);
+}
+.is-leaf-theme .campus-dining-state h3 { color: #583822; font-family: Georgia, "Times New Roman", serif; font-size: 40px; }
+
+body[data-canteen-theme="leaf"] .canteen-info-modal,
+body[data-canteen-theme="leaf"] .canteen-ticket-confirm-modal,
+body[data-canteen-theme="leaf"] .canteen-ticket-modal {
+  color: #50331f;
+  border-color: #6d4930;
+  background: #f6f0df;
+}
+body[data-canteen-theme="leaf"] .canteen-info-modal .modal-head,
+body[data-canteen-theme="leaf"] .canteen-ticket-confirm-modal .modal-head,
+body[data-canteen-theme="leaf"] .canteen-ticket-modal .modal-head { border-color: rgba(83,53,31,.35); }
+body[data-canteen-theme="leaf"] .canteen-info-modal .modal-head h2,
+body[data-canteen-theme="leaf"] .canteen-ticket-modal .modal-head h2,
+body[data-canteen-theme="leaf"] .canteen-ticket-confirm-modal .modal-head h2,
+body[data-canteen-theme="leaf"] .campus-info-section h3 {
+  color: #573822;
+  font-family: Georgia, "Times New Roman", serif;
+}
+body[data-canteen-theme="leaf"] .canteen-info-modal .canteen-day-chip,
+body[data-canteen-theme="leaf"] .campus-info-facts > div,
+body[data-canteen-theme="leaf"] .campus-info-close,
+body[data-canteen-theme="leaf"] .campus-info-action,
+body[data-canteen-theme="leaf"] .campus-info-source button,
+body[data-canteen-theme="leaf"] .campus-info-source a {
+  border-color: #705038;
+  color: #50331f;
+}
+body[data-canteen-theme="leaf"] .canteen-info-modal .canteen-day-chip.is-active { color: #fff8e7; background: #6f8d43; }
+body[data-canteen-theme="leaf"] .canteen-ticket-modal .diner-ticket { filter: sepia(.18) saturate(.9); }
+
+@media (max-width: 900px) {
+  .canteen-theme-picker { grid-template-columns: 1fr; }
+  .leaf-menu-surface { padding: 20px 18px 10px; }
+  .is-leaf-theme .campus-dining-hero {
+    grid-template-columns: minmax(0,1fr) auto;
+    min-height: 190px;
+  }
+  .is-leaf-theme .campus-dining-stamp {
+    grid-column: 1 / -1;
+    grid-row: 2;
+    justify-self: start;
+    min-width: 180px;
+    margin-top: 14px;
+    font-size: 22px;
+  }
+  .is-leaf-theme .campus-dining-columns { display: flex; flex-direction: column; gap: 17px; }
+  .is-leaf-theme .campus-left-column,
+  .is-leaf-theme .campus-center-column { display: contents; }
+  .is-leaf-theme .campus-menu-section { width: 100%; }
+  .is-leaf-theme .campus-soups { order: 1; }
+  .is-leaf-theme .campus-mains { order: 2; }
+  .is-leaf-theme .campus-desserts { order: 3; }
+  .is-leaf-theme .campus-drinks { order: 4; }
+  .is-leaf-theme .campus-chef-note { order: 5; width: 100%; min-height: 0; }
+  .is-leaf-theme .campus-order-button,
+  .is-leaf-theme .campus-readonly-actions { order: 6; width: 100%; margin-top: 0; }
+}
+@media (max-width: 560px) {
+  .leaf-browser-shell { border-radius: 13px; }
+  .leaf-browser-nav { overflow-x: auto; padding-inline: 14px; }
+  .leaf-browser-nav span { white-space: nowrap; }
+  .leaf-menu-surface { padding: 17px 13px 8px; }
+  .leaf-menu-footer { padding-inline: 14px; }
+  .is-leaf-theme .campus-dining-brand h2 { font-size: 41px; }
+  .leaf-menu-kicker { font-size: 9px; }
+  .is-leaf-theme .campus-dining-hero { min-height: 176px; }
+  .is-leaf-theme .campus-menu-section { padding: 13px 12px 11px; }
+  .is-leaf-theme .campus-menu-item-main { grid-template-columns: minmax(0,1fr) auto 39px; }
+  .is-leaf-theme .campus-menu-item-icons { min-width: 29px; min-height: 29px; padding: 5px; }
+  .is-leaf-theme .campus-chef-note p,
+  .is-leaf-theme .campus-chef-note .campus-chef-writing { font-size: 22px; }
+}
