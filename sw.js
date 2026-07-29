@@ -1,16 +1,16 @@
 "use strict";
 
-var CACHE = "twenty-study-os-v27-9-canteen-leaf-theme";
+var CACHE = "twenty-study-os-v27-10-chef-resilient-stream";
 var APP_SHELL = [
   "./",
   "./index.html",
-  "./styles.css?v=27.9-canteen-leaf-theme",
-  "./sync.js?v=27.9-canteen-leaf-theme",
-  "./db.js?v=27.9-canteen-leaf-theme",
-  "./ai.js?v=27.9-canteen-leaf-theme",
-  "./ai-worker.js?v=27.9-canteen-leaf-theme",
-  "./app.js?v=27.9-canteen-leaf-theme",
-  "./lucide.min.js?v=27.9-canteen-leaf-theme",
+  "./styles.css?v=27.10-chef-resilient-stream",
+  "./sync.js?v=27.10-chef-resilient-stream",
+  "./db.js?v=27.10-chef-resilient-stream",
+  "./ai.js?v=27.10-chef-resilient-stream",
+  "./ai-worker.js?v=27.10-chef-resilient-stream",
+  "./app.js?v=27.10-chef-resilient-stream",
+  "./lucide.min.js?v=27.10-chef-resilient-stream",
   "./manifest.webmanifest",
   "./icon.svg",
   "./icon-192.png",

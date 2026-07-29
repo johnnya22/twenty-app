@@ -39,7 +39,7 @@
   var CANTEEN_PAGE_URL = "https://sas.unl.pt/alimentacao/cantina-da-faculdade-de-ciencias-e-tecnologia-fct/";
   var CANTEEN_INFO_PAGE_URL = "https://sas.unl.pt/alimentacao/";
   var CANTEEN_CACHE_KEY = "twenty-canteen-menu-v2";
-  var CANTEEN_AI_CACHE_KEY = "twenty-canteen-ai-v11-two-stage";
+  var CANTEEN_AI_CACHE_KEY = "twenty-canteen-ai-v12-resilient-stream";
   var CANTEEN_WEATHER_CACHE_KEY = "twenty-canteen-weather-v1";
   var CANTEEN_WEATHER_URL = "https://api.open-meteo.com/v1/forecast?latitude=38.661150&longitude=-9.205777&current=temperature_2m,apparent_temperature,precipitation,rain,weather_code,cloud_cover&timezone=Europe%2FLisbon";
   var CANTEEN_DEFAULT_ALLERGENS = {
@@ -4819,18 +4819,9 @@
     var text = canteenChefNoteSanitize(value, "");
     var lower = text.toLowerCase();
     if (!text) throw new Error("A IA local não devolveu uma Chef’s Note válida.");
-    if (/bom dia a todos|boa tarde a todos|olá a todos|espero que gostes|espero que gostem|pessoal|malta/.test(lower)) {
-      throw new Error("A Chef’s Note veio escrita para um grupo ou como uma saudação genérica.");
-    }
-    if (/\bparece(?:-me)?\b|\bexcelente\b|\bótim[oa]s?\b|\baproveita\b/.test(lower)) {
-      throw new Error("A Chef’s Note soou a publicidade ou crítica de restaurante.");
-    }
-    if (!/\b(eu|preparei|servia|guardava|escolhia|ia)\b/.test(lower)) {
-      throw new Error("A Chef’s Note não soou a uma mensagem pessoal do Chef.");
-    }
-    if (recommendedDish && !canteenChefNoteMentionsDish(text, recommendedDish)) {
-      throw new Error("A Chef’s Note não mencionou claramente o prato escolhido.");
-    }
+
+    // Só falham a publicação regras factuais ou de privacidade. As regras de estilo
+    // continuam no prompt, mas nunca apagam uma nota que o utilizador já viu a ser escrita.
     var hasAssessmentWords = /\b(teste|testes|exame|exames|avaliação|avaliações|prova|provas|apresentação|apresentações)\b/.test(lower);
     var hasGoodLuck = /\bboa sorte\b/.test(lower);
     var hasUpcoming = !!(dayContext && dayContext.nextAssessmentAfterLunch);
@@ -4839,6 +4830,18 @@
     if (!hasUpcoming && !hasCompleted && hasAssessmentWords) throw new Error("A IA inventou uma avaliação que não existe nos dados.");
     if (/último teste|última avaliação|último exame/.test(lower) && !(dayContext && dayContext.lastAssessmentOfAcademicPeriod)) {
       throw new Error("A IA afirmou que era a última avaliação sem confirmação nos dados.");
+    }
+    if (/não gostas?|não curtes?|evitas?|queres engordar|ganhar peso|objetivo de peso|peixe da cantina|não gostas? de ervilhas/.test(lower)) {
+      throw new Error("A IA expôs uma preferência pessoal que devia permanecer privada.");
+    }
+
+    var styleIssues = [];
+    if (/bom dia a todos|boa tarde a todos|olá a todos|espero que gostes|espero que gostem|pessoal|malta/.test(lower)) styleIssues.push("saudação genérica");
+    if (/\bparece(?:-me)?\b|\bexcelente\b|\bótim[oa]s?\b|\baproveita\b/.test(lower)) styleIssues.push("tom publicitário");
+    if (!/\b(eu|preparei|servia|guardava|escolhia|ia)\b/.test(lower)) styleIssues.push("sem primeira pessoa");
+    if (recommendedDish && !canteenChefNoteMentionsDish(text, recommendedDish)) styleIssues.push("prato não mencionado literalmente");
+    if (styleIssues.length) {
+      console.info("[Twenty Cantina AI] nota aceite com avisos de estilo", { issues: styleIssues, recommendedDish: recommendedDish || "" });
     }
     return text;
   }
@@ -5202,15 +5205,28 @@
 
       var rawNote = "";
       var noteFirstChunkAt = 0;
-      if (typeof session.promptStreaming === "function") {
-        var noteStream = session.promptStreaming(notePrompt);
-        for await (var noteChunk of noteStream) {
-          if (!noteFirstChunkAt) noteFirstChunkAt = performance.now();
-          rawNote = canteenMergeAIStreamChunk(rawNote, noteChunk);
-          updateCanteenAIStreamingNote(rawNote, dayContext);
+      var noteStreamRecovered = false;
+      try {
+        if (typeof session.promptStreaming === "function") {
+          var noteStream = session.promptStreaming(notePrompt);
+          for await (var noteChunk of noteStream) {
+            if (!noteFirstChunkAt) noteFirstChunkAt = performance.now();
+            rawNote = canteenMergeAIStreamChunk(rawNote, noteChunk);
+            updateCanteenAIStreamingNote(rawNote, dayContext);
+          }
+        } else {
+          rawNote = await session.prompt(notePrompt);
         }
-      } else {
-        rawNote = await session.prompt(notePrompt);
+      } catch (noteError) {
+        var recoveredNote = canteenChefNoteSanitize(rawNote, "");
+        var recoveredWords = recoveredNote ? recoveredNote.split(/\s+/).filter(Boolean).length : 0;
+        if (recoveredWords < 8) throw noteError;
+        rawNote = recoveredNote;
+        noteStreamRecovered = true;
+        console.warn("[Twenty Cantina AI] stream interrompido; texto já recebido foi preservado", {
+          words: recoveredWords,
+          error: noteError && noteError.message || String(noteError)
+        });
       }
       canteenAISessionUses += 2;
       var chefNote = canteenChefNoteValidate(rawNote, dayContext, selected.officialName);
@@ -5224,6 +5240,8 @@
         choiceMs: Math.round(choiceAt - startedAt),
         noteFirstTextMs: noteFirstChunkAt ? Math.round(noteFirstChunkAt - choiceAt) : null,
         durationMs: Math.round(performance.now() - startedAt),
+        noArtificialTimeout: true,
+        streamRecovered: noteStreamRecovered,
         choicePromptChars: choicePrompt.length,
         notePromptChars: notePrompt.length,
         dishes: dishes.length,
@@ -8418,7 +8436,7 @@
       }, 60000);
       if (!state.profile.onboardingComplete || !state.currentSemesterId || !activeCourses().length) startOnboarding(state.semesters.length ? "new-semester" : "first");
       if ("serviceWorker" in navigator && location.protocol !== "file:") {
-        navigator.serviceWorker.register("sw.js?v=27.8-chef-two-stage", { updateViaCache: "none" }).then(function () {
+        navigator.serviceWorker.register("sw.js?v=27.10-chef-resilient-stream", { updateViaCache: "none" }).then(function () {
           if (Sync && Sync.getStatus().configured) Sync.startAutoSync();
         }).catch(function () {
           if (Sync && Sync.getStatus().configured) Sync.startAutoSync();
