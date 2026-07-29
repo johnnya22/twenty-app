@@ -39,10 +39,10 @@
   var CANTEEN_PAGE_URL = "https://sas.unl.pt/alimentacao/cantina-da-faculdade-de-ciencias-e-tecnologia-fct/";
   var CANTEEN_INFO_PAGE_URL = "https://sas.unl.pt/alimentacao/";
   var CANTEEN_CACHE_KEY = "twenty-canteen-menu-v2";
-  var CANTEEN_AI_CACHE_KEY = "twenty-canteen-ai-v6-single-run";
+  var CANTEEN_AI_CACHE_KEY = "twenty-canteen-ai-v7-streaming";
   var CANTEEN_WEATHER_CACHE_KEY = "twenty-canteen-weather-v1";
   var CANTEEN_WEATHER_URL = "https://api.open-meteo.com/v1/forecast?latitude=38.661150&longitude=-9.205777&current=temperature_2m,apparent_temperature,precipitation,rain,weather_code,cloud_cover&timezone=Europe%2FLisbon";
-  var canteenAIState = { key: "", status: "idle", availability: "unknown", source: "rules", data: null, error: "", progress: null };
+  var canteenAIState = { key: "", status: "idle", availability: "unknown", source: "rules", data: null, error: "", progress: null, streamText: "" };
   var canteenAIPromise = null;
   var canteenAIAbortController = null;
   var canteenAIRequestKey = "";
@@ -4342,7 +4342,7 @@
   function clearCanteenAICache() {
     try { localStorage.removeItem(CANTEEN_AI_CACHE_KEY); } catch (error) {}
     destroyCanteenAISession();
-    canteenAIState = { key: "", status: "idle", availability: "unknown", source: "rules", data: null, error: "", progress: null };
+    canteenAIState = { key: "", status: "idle", availability: "unknown", source: "rules", data: null, error: "", progress: null, streamText: "" };
   }
 
   function loadCachedCanteenWeather() {
@@ -4746,6 +4746,81 @@
     return parsed;
   }
 
+  function canteenMergeAIStreamChunk(current, chunk) {
+    var previous = String(current || "");
+    var next = String(chunk || "");
+    if (!next) return previous;
+    if (!previous) return next;
+    if (next.indexOf(previous) === 0) return next;
+    if (previous.indexOf(next) === 0) return previous;
+    var maxOverlap = Math.min(previous.length, next.length, 120);
+    for (var size = maxOverlap; size > 0; size -= 1) {
+      if (previous.slice(-size) === next.slice(0, size)) return previous + next.slice(size);
+    }
+    return previous + next;
+  }
+
+  function canteenStreamingChefNote(value) {
+    var text = String(value || "");
+    var match = /"chefNote"\s*:\s*"/.exec(text);
+    if (!match) return "";
+    var index = match.index + match[0].length;
+    var output = "";
+    var escaped = false;
+    for (; index < text.length; index += 1) {
+      var character = text.charAt(index);
+      if (escaped) {
+        if (character === "n" || character === "r" || character === "t") output += " ";
+        else if (character === "u" && /^[0-9a-fA-F]{4}$/.test(text.slice(index + 1, index + 5))) {
+          output += String.fromCharCode(parseInt(text.slice(index + 1, index + 5), 16));
+          index += 4;
+        } else output += character;
+        escaped = false;
+      } else if (character === "\\") {
+        escaped = true;
+      } else if (character === '"') {
+        break;
+      } else {
+        output += character;
+      }
+    }
+    return output
+      .replace(/[“”"]/g, "")
+      .replace(/[–—]/g, ". ")
+      .replace(/^\s*-\s*/, "")
+      .replace(/\s-\s/g, ". ")
+      .replace(/[\u2600-\u27BF]/g, "")
+      .replace(/[\uD83C-\uDBFF][\uDC00-\uDFFF]/g, "")
+      .replace(/\s{2,}/g, " ")
+      .slice(0, 260)
+      .trim();
+  }
+
+  function canteenStreamingChefNoteAllowed(value, dayContext) {
+    var lower = cleanText(value || "").toLowerCase();
+    if (!lower) return false;
+    if (/bom dia a todos|boa tarde a todos|olá a todos|espero que gostem|pessoal|malta/.test(lower)) return false;
+    var hasAssessmentWords = /\b(teste|testes|exame|exames|avaliação|avaliações|prova|provas|apresentação|apresentações)\b/.test(lower);
+    var hasGoodLuck = /\bboa sorte\b/.test(lower);
+    var hasUpcoming = !!(dayContext && dayContext.nextAssessmentAfterLunch);
+    var hasCompleted = !!(dayContext && dayContext.latestCompletedAssessmentToday);
+    if (!hasUpcoming && hasGoodLuck) return false;
+    if (!hasUpcoming && !hasCompleted && hasAssessmentWords) return false;
+    if (/último teste|última avaliação|último exame/.test(lower) && !(dayContext && dayContext.lastAssessmentOfAcademicPeriod)) return false;
+    return true;
+  }
+
+  function updateCanteenAIStreamingNote(value, dayContext) {
+    var preview = canteenStreamingChefNote(value);
+    if (!canteenStreamingChefNoteAllowed(preview, dayContext)) return;
+    canteenAIState.streamText = preview;
+    if (route.name !== "canteen" || !view) return;
+    var writing = view.querySelector(".campus-chef-writing");
+    if (!writing) return;
+    writing.textContent = preview;
+    writing.classList.add("has-stream");
+  }
+
   function normalizeCanteenAIData(raw, meal, weather, dayContext) {
     var fallback = canteenAIFallbackData(meal, weather);
     var officialNames = fallback.dishes.map(function (item) { return item.officialName; });
@@ -4914,7 +4989,18 @@
         omitResponseConstraintInput: true
       };
       if (promptController) promptOptions.signal = promptController.signal;
-      var raw = await session.prompt(prompt, promptOptions);
+      var raw = "";
+      var firstChunkAt = 0;
+      if (typeof session.promptStreaming === "function") {
+        var stream = session.promptStreaming(prompt, promptOptions);
+        for await (var chunk of stream) {
+          if (!firstChunkAt) firstChunkAt = performance.now();
+          raw = canteenMergeAIStreamChunk(raw, chunk);
+          updateCanteenAIStreamingNote(raw, dayContext);
+        }
+      } else {
+        raw = await session.prompt(prompt, promptOptions);
+      }
       canteenAISessionUses += 1;
       var parsed = parseCanteenAIJSON(raw);
       var selected = dishes.find(function (item) { return item.id === Number(parsed && parsed.dishId); }) || dishes[0];
@@ -4924,6 +5010,7 @@
         recommendationReason: "A escolha do chef para o teu dia."
       }, meal, weather, dayContext);
       console.info("[Twenty Cantina AI] geração concluída", {
+        firstTextMs: firstChunkAt ? Math.round(firstChunkAt - startedAt) : null,
         durationMs: Math.round(performance.now() - startedAt),
         dishes: dishes.length,
         recommendedDish: result.recommendedDish
@@ -5029,6 +5116,7 @@
         }
         canteenAIState.status = "loading";
         canteenAIState.progress = 0;
+        canteenAIState.streamText = "";
         refreshCanteenAIView();
         var result = await generateCanteenAIData(provider, meal, weather);
         cache[key] = result;
@@ -5359,7 +5447,8 @@
     if (status === "downloadable") {
       return '<aside class="campus-chef-note is-loading"><h3>Chef’s Note</h3><div class="campus-chef-status"><span>A preparar a IA local...</span><button type="button" data-action="canteen-ai-prepare">Preparar agora</button></div></aside>';
     }
-    return '<aside class="campus-chef-note is-loading" aria-live="polite" aria-busy="true"><h3>Chef’s Note</h3><p class="campus-chef-writing">a escrever...</p></aside>';
+    var streamingNote = status === "loading" ? cleanText(canteenAIState.streamText || "") : "";
+    return '<aside class="campus-chef-note is-loading" aria-live="polite" aria-busy="true"><h3>Chef’s Note</h3><p class="campus-chef-writing' + (streamingNote ? ' has-stream' : '') + '">' + esc(streamingNote || "a escrever...") + '</p></aside>';
   }
   function canteenMealComparable(meal) {
     return asArray(meal && meal.items).map(function (item) {
@@ -7848,7 +7937,7 @@
       render();
     } else if (action === "toggle-canteen-ai") {
       state.settings.canteenAIEnabled = !state.settings.canteenAIEnabled;
-      if (!state.settings.canteenAIEnabled) canteenAIState = { key: "", status: "idle", availability: "unknown", source: "rules", data: null, error: "", progress: null };
+      if (!state.settings.canteenAIEnabled) canteenAIState = { key: "", status: "idle", availability: "unknown", source: "rules", data: null, error: "", progress: null, streamText: "" };
       await save(true); render();
     } else if (action === "toggle-canteen-ai-note") {
       state.settings.canteenAIChefNote = !state.settings.canteenAIChefNote;
@@ -8036,7 +8125,7 @@
       }, 60000);
       if (!state.profile.onboardingComplete || !state.currentSemesterId || !activeCourses().length) startOnboarding(state.semesters.length ? "new-semester" : "first");
       if ("serviceWorker" in navigator && location.protocol !== "file:") {
-        navigator.serviceWorker.register("sw.js?v=27.3-chef-single-run", { updateViaCache: "none" }).then(function () {
+        navigator.serviceWorker.register("sw.js?v=27.4-chef-streaming", { updateViaCache: "none" }).then(function () {
           if (Sync && Sync.getStatus().configured) Sync.startAutoSync();
         }).catch(function () {
           if (Sync && Sync.getStatus().configured) Sync.startAutoSync();

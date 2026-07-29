@@ -3731,3 +3731,9 @@ body[data-route="canteen"] .view-enter { animation: none !important; }
 /* v0.27.3 · One Chef request only. Minute updates change only the OPEN/CLOSED stamp. */
 body[data-route="canteen"] .campus-chef-note.is-loading { opacity: 1 !important; }
 body[data-route="canteen"] .campus-chef-writing { animation: none !important; }
+
+
+/* v0.27.4 · Stream the Chef's Note as Gemini Nano writes it. */
+body[data-route="canteen"] .campus-chef-writing.has-stream {
+  color: var(--campus-ink);
+}
