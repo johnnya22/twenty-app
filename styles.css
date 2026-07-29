@@ -3252,12 +3252,12 @@ article.diner-menu-entry, span.diner-menu-entry, .diner-menu-entry.is-readonly {
    Twenty v0.27.0 · Campus Dining rebrand
    Replicação fiel do mockup fornecido pelo utilizador.
    ========================================================= */
-body[data-route="canteen"] { background: #f8f7fb; }
-body[data-route="canteen"] .ambient { display: none; }
-body[data-route="canteen"] .topbar { display: none; }
-body[data-route="canteen"] .app-stage { min-height: 100vh; }
-body[data-route="canteen"] .view { min-height: 100vh; padding: 0 34px 48px; background: #f8f7fb; }
-body[data-route="canteen"] .view-enter { min-height: 100%; }
+body[data-page-route="canteen"] { background: #f8f7fb; }
+body[data-page-route="canteen"] .ambient { display: none; }
+body[data-page-route="canteen"] .topbar { display: none; }
+body[data-page-route="canteen"] .app-stage { min-height: 100vh; }
+body[data-page-route="canteen"] .view { min-height: 100vh; padding: 0 34px 48px; background: #f8f7fb; }
+body[data-page-route="canteen"] .view-enter { min-height: 100%; }
 
 .campus-dining-page {
   --campus-ink: #050505;
@@ -3617,7 +3617,7 @@ button.campus-menu-item { cursor: pointer; }
 }
 
 @media (max-width: 900px) {
-  body[data-route="canteen"] .view { padding: 0 22px 112px; }
+  body[data-page-route="canteen"] .view { padding: 0 22px 112px; }
   .campus-dining-page { min-height: 0; padding-top: 28px; }
   .campus-dining-hero { grid-template-columns: minmax(0,1fr) auto; min-height: 170px; column-gap: 18px; }
   .campus-dining-brand { grid-column: 1; }
@@ -3643,7 +3643,7 @@ button.campus-menu-item { cursor: pointer; }
 }
 
 @media (max-width: 560px) {
-  body[data-route="canteen"] .view { padding-inline: 17px; }
+  body[data-page-route="canteen"] .view { padding-inline: 17px; }
   .campus-dining-brand h2 { font-size: 62px; }
   .campus-dining-brand p { font-size: 13px; }
   .campus-dining-hero { min-height: 180px; }
@@ -3716,7 +3716,7 @@ button.campus-menu-item { cursor: pointer; }
 
 
 /* v0.27.2 · Stable Chef context: no full-page flicker and no animated loading. */
-body[data-route="canteen"] .view-enter { animation: none !important; }
+body[data-page-route="canteen"] .view-enter { animation: none !important; }
 .campus-chef-note .campus-chef-writing {
   margin: 0;
   color: rgba(5, 5, 5, .54);
@@ -3729,12 +3729,12 @@ body[data-route="canteen"] .view-enter { animation: none !important; }
 
 
 /* v0.27.3 · One Chef request only. Minute updates change only the OPEN/CLOSED stamp. */
-body[data-route="canteen"] .campus-chef-note.is-loading { opacity: 1 !important; }
-body[data-route="canteen"] .campus-chef-writing { animation: none !important; }
+body[data-page-route="canteen"] .campus-chef-note.is-loading { opacity: 1 !important; }
+body[data-page-route="canteen"] .campus-chef-writing { animation: none !important; }
 
 
 /* v0.27.4 · Stream the Chef's Note as Gemini Nano writes it. */
-body[data-route="canteen"] .campus-chef-writing.has-stream {
+body[data-page-route="canteen"] .campus-chef-writing.has-stream {
   color: var(--campus-ink);
 }
 
@@ -4331,63 +4331,63 @@ body[data-route="canteen"] .campus-chef-writing.has-stream {
 .campus-info-theme p { margin: 0; opacity: .72; }
 
 /* Night version keeps the user's exact layout and only swaps the palette. */
-body[data-route="canteen"][data-canteen-theme="night"],
-body[data-route="canteen"][data-canteen-theme="night"] .view {
+body[data-page-route="canteen"][data-canteen-theme="night"],
+body[data-page-route="canteen"][data-canteen-theme="night"] .view {
   background: #111217;
 }
-body[data-route="canteen"][data-canteen-theme="night"] .campus-dining-page {
+body[data-page-route="canteen"][data-canteen-theme="night"] .campus-dining-page {
   --campus-ink: #f8f5ef;
   --campus-paper: #111217;
   --campus-dark: #f8f5ef;
   color: #f8f5ef;
 }
-body[data-route="canteen"][data-canteen-theme="night"] .campus-dining-info {
+body[data-page-route="canteen"][data-canteen-theme="night"] .campus-dining-info {
   color: #111217;
   background: #f8f5ef;
 }
-body[data-route="canteen"][data-canteen-theme="night"] .campus-order-button {
+body[data-page-route="canteen"][data-canteen-theme="night"] .campus-order-button {
   color: #111217;
   background: #f8f5ef;
 }
-body[data-route="canteen"][data-canteen-theme="night"] .campus-menu-subdivider { border-color: rgba(255,255,255,.55); }
-body[data-route="canteen"][data-canteen-theme="night"] .campus-pencil-outline { border-color: rgba(255,255,255,.82); }
-body[data-route="canteen"][data-canteen-theme="night"] .campus-pencil-outline::after { border-color: rgba(255,255,255,.38); }
-body[data-route="canteen"][data-canteen-theme="night"] .campus-recommended { color: #111217; }
-body[data-route="canteen"][data-canteen-theme="night"] .canteen-info-modal,
-body[data-route="canteen"][data-canteen-theme="night"] .canteen-ticket-confirm-modal,
-body[data-route="canteen"][data-canteen-theme="night"] .canteen-ticket-modal {
+body[data-page-route="canteen"][data-canteen-theme="night"] .campus-menu-subdivider { border-color: rgba(255,255,255,.55); }
+body[data-page-route="canteen"][data-canteen-theme="night"] .campus-pencil-outline { border-color: rgba(255,255,255,.82); }
+body[data-page-route="canteen"][data-canteen-theme="night"] .campus-pencil-outline::after { border-color: rgba(255,255,255,.38); }
+body[data-page-route="canteen"][data-canteen-theme="night"] .campus-recommended { color: #111217; }
+body[data-page-route="canteen"][data-canteen-theme="night"] .canteen-info-modal,
+body[data-page-route="canteen"][data-canteen-theme="night"] .canteen-ticket-confirm-modal,
+body[data-page-route="canteen"][data-canteen-theme="night"] .canteen-ticket-modal {
   color: #f8f5ef;
   background: #16171c;
   border-color: #f8f5ef;
 }
-body[data-route="canteen"][data-canteen-theme="night"] .canteen-info-modal .modal-head,
-body[data-route="canteen"][data-canteen-theme="night"] .canteen-ticket-confirm-modal .modal-head,
-body[data-route="canteen"][data-canteen-theme="night"] .canteen-ticket-modal .modal-head,
-body[data-route="canteen"][data-canteen-theme="night"] .canteen-info-modal .modal-foot,
-body[data-route="canteen"][data-canteen-theme="night"] .canteen-ticket-confirm-modal .modal-foot,
-body[data-route="canteen"][data-canteen-theme="night"] .canteen-ticket-modal .modal-foot {
+body[data-page-route="canteen"][data-canteen-theme="night"] .canteen-info-modal .modal-head,
+body[data-page-route="canteen"][data-canteen-theme="night"] .canteen-ticket-confirm-modal .modal-head,
+body[data-page-route="canteen"][data-canteen-theme="night"] .canteen-ticket-modal .modal-head,
+body[data-page-route="canteen"][data-canteen-theme="night"] .canteen-info-modal .modal-foot,
+body[data-page-route="canteen"][data-canteen-theme="night"] .canteen-ticket-confirm-modal .modal-foot,
+body[data-page-route="canteen"][data-canteen-theme="night"] .canteen-ticket-modal .modal-foot {
   color: #f8f5ef;
   border-color: rgba(255,255,255,.35);
   background: rgba(22,23,28,.96);
 }
-body[data-route="canteen"][data-canteen-theme="night"] .canteen-info-modal .modal-close,
-body[data-route="canteen"][data-canteen-theme="night"] .canteen-info-modal .canteen-day-chip,
-body[data-route="canteen"][data-canteen-theme="night"] .campus-info-facts > div,
-body[data-route="canteen"][data-canteen-theme="night"] .campus-info-close,
-body[data-route="canteen"][data-canteen-theme="night"] .campus-info-action,
-body[data-route="canteen"][data-canteen-theme="night"] .campus-info-source button,
-body[data-route="canteen"][data-canteen-theme="night"] .campus-info-source a {
+body[data-page-route="canteen"][data-canteen-theme="night"] .canteen-info-modal .modal-close,
+body[data-page-route="canteen"][data-canteen-theme="night"] .canteen-info-modal .canteen-day-chip,
+body[data-page-route="canteen"][data-canteen-theme="night"] .campus-info-facts > div,
+body[data-page-route="canteen"][data-canteen-theme="night"] .campus-info-close,
+body[data-page-route="canteen"][data-canteen-theme="night"] .campus-info-action,
+body[data-page-route="canteen"][data-canteen-theme="night"] .campus-info-source button,
+body[data-page-route="canteen"][data-canteen-theme="night"] .campus-info-source a {
   color: #f8f5ef;
   border-color: #f8f5ef;
   background: transparent;
 }
-body[data-route="canteen"][data-canteen-theme="night"] .canteen-info-modal .canteen-day-chip.is-active {
+body[data-page-route="canteen"][data-canteen-theme="night"] .canteen-info-modal .canteen-day-chip.is-active {
   color: #111217;
   background: #f8f5ef;
 }
-body[data-route="canteen"][data-canteen-theme="night"] .canteen-info-modal .canteen-day-chip.is-active strong { color: #111217; }
-body[data-route="canteen"][data-canteen-theme="night"] .campus-info-section,
-body[data-route="canteen"][data-canteen-theme="night"] .campus-info-meal-list > div { border-color: rgba(255,255,255,.28); }
+body[data-page-route="canteen"][data-canteen-theme="night"] .canteen-info-modal .canteen-day-chip.is-active strong { color: #111217; }
+body[data-page-route="canteen"][data-canteen-theme="night"] .campus-info-section,
+body[data-page-route="canteen"][data-canteen-theme="night"] .campus-info-meal-list > div { border-color: rgba(255,255,255,.28); }
 
 @media (max-width: 980px) {
   .settings-profile-photo-row { grid-template-columns: 120px minmax(0,1fr); }
@@ -4498,11 +4498,11 @@ body[data-route="canteen"][data-canteen-theme="night"] .campus-info-meal-list > 
   white-space: nowrap;
 }
 .campus-order-progress + .campus-order-button { margin-top: 18px; }
-body[data-route="canteen"][data-canteen-theme="night"] .campus-meal-tabs button.is-active {
+body[data-page-route="canteen"][data-canteen-theme="night"] .campus-meal-tabs button.is-active {
   color: #111217;
   background: #f8f5ef;
 }
-body[data-route="canteen"][data-canteen-theme="night"] .campus-order-progress li { border-color: rgba(255,255,255,.34); }
+body[data-page-route="canteen"][data-canteen-theme="night"] .campus-order-progress li { border-color: rgba(255,255,255,.34); }
 @media (max-width: 720px) {
   .campus-meal-tabs { width: 100%; margin: -6px 0 24px; }
   .campus-meal-tabs button { min-width: 0; flex: 1; }
@@ -4511,3 +4511,9 @@ body[data-route="canteen"][data-canteen-theme="night"] .campus-order-progress li
   .campus-order-progress > div span { text-align: left; }
   .campus-order-progress ol { grid-template-columns: 1fr; }
 }
+
+
+/* =========================================================
+   Twenty v0.28.2 · Settings interaction fix
+   Separates page state attributes from interactive routes.
+   ========================================================= */

@@ -1359,10 +1359,10 @@
 
   function renderNav() {
     var active = navRouteName();
-    document.querySelectorAll("[data-route]").forEach(function (button) {
+    document.body.classList.remove("is-active");
+    document.querySelectorAll('.brand[data-route], #sideNav [data-route], #mobileNav [data-route], .side-settings[data-route]').forEach(function (button) {
       button.classList.toggle("is-active", button.getAttribute("data-route") === active);
     });
-    document.querySelector(".side-settings").classList.toggle("is-active", active === "settings");
   }
 
   function setHeader(title, eyebrow) {
@@ -1485,7 +1485,8 @@
       homeworkClockTimer = null;
     }
     renderShell();
-    document.body.dataset.route = route.name || "home";
+    document.body.dataset.pageRoute = route.name || "home";
+    delete document.body.dataset.route;
     if (route.name !== "canteen") delete document.body.dataset.canteenTheme;
     var html;
     if (route.name === "home") html = renderHome();
@@ -8510,8 +8511,8 @@
     } else if (action === "debug-exit") {
       stopHomeDebug();
     } else if (action === "settings-section") {
-      route.tab = ["overview", "personal", "academic", "canteen", "data", "system", "developer"].indexOf(button.dataset.section) >= 0 ? button.dataset.section : "overview";
-      render();
+      var settingsSection = ["overview", "personal", "academic", "canteen", "data", "system", "developer"].indexOf(button.dataset.section) >= 0 ? button.dataset.section : "overview";
+      setRoute("settings", null, settingsSection);
     } else if (action === "canteen-toggle-theme") {
       var reopenCanteenInfo = !!button.closest(".canteen-info-modal");
       state.settings.canteenTheme = state.settings.canteenTheme === "night" ? "light" : "night";
@@ -8640,7 +8641,7 @@
       handleAction(actionButton).catch(function (error) { console.error(error); toast("Ocorreu um erro: " + error.message, "error"); });
       return;
     }
-    var routeButton = event.target.closest("[data-route]");
+    var routeButton = event.target.closest('button[data-route], a[data-route], [role="button"][data-route]');
     if (routeButton) {
       event.preventDefault();
       closeModal();
@@ -8708,7 +8709,7 @@
       }, 60000);
       if (!state.profile.onboardingComplete || !state.currentSemesterId || !activeCourses().length) startOnboarding(state.semesters.length ? "new-semester" : "first");
       if ("serviceWorker" in navigator && location.protocol !== "file:") {
-        navigator.serviceWorker.register("sw.js?v=28.1-core-flow-stability", { updateViaCache: "none" }).then(function () {
+        navigator.serviceWorker.register("sw.js?v=28.2-settings-interaction-fix", { updateViaCache: "none" }).then(function () {
           if (Sync && Sync.getStatus().configured) Sync.startAutoSync();
         }).catch(function () {
           if (Sync && Sync.getStatus().configured) Sync.startAutoSync();

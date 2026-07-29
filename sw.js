@@ -1,16 +1,16 @@
 "use strict";
 
-var CACHE = "twenty-study-os-v28-1-core-flow-stability";
+var CACHE = "twenty-study-os-v28-2-settings-interaction-fix";
 var APP_SHELL = [
   "./",
   "./index.html",
-  "./styles.css?v=28.1-core-flow-stability",
-  "./sync.js?v=28.1-core-flow-stability",
-  "./db.js?v=28.1-core-flow-stability",
-  "./ai.js?v=28.1-core-flow-stability",
-  "./ai-worker.js?v=28.1-core-flow-stability",
-  "./app.js?v=28.1-core-flow-stability",
-  "./lucide.min.js?v=28.1-core-flow-stability",
+  "./styles.css?v=28.2-settings-interaction-fix",
+  "./sync.js?v=28.2-settings-interaction-fix",
+  "./db.js?v=28.2-settings-interaction-fix",
+  "./ai.js?v=28.2-settings-interaction-fix",
+  "./ai-worker.js?v=28.2-settings-interaction-fix",
+  "./app.js?v=28.2-settings-interaction-fix",
+  "./lucide.min.js?v=28.2-settings-interaction-fix",
   "./manifest.webmanifest",
   "./icon.svg",
   "./icon-192.png",
