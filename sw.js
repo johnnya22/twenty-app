@@ -1,16 +1,16 @@
 "use strict";
 
-var CACHE = "twenty-study-os-v27-10-chef-resilient-stream";
+var CACHE = "twenty-study-os-v27-9-campus-card-order";
 var APP_SHELL = [
   "./",
   "./index.html",
-  "./styles.css?v=27.10-chef-resilient-stream",
-  "./sync.js?v=27.10-chef-resilient-stream",
-  "./db.js?v=27.10-chef-resilient-stream",
-  "./ai.js?v=27.10-chef-resilient-stream",
-  "./ai-worker.js?v=27.10-chef-resilient-stream",
-  "./app.js?v=27.10-chef-resilient-stream",
-  "./lucide.min.js?v=27.10-chef-resilient-stream",
+  "./styles.css?v=27.9-campus-card-order",
+  "./sync.js?v=27.9-campus-card-order",
+  "./db.js?v=27.9-campus-card-order",
+  "./ai.js?v=27.9-campus-card-order",
+  "./ai-worker.js?v=27.9-campus-card-order",
+  "./app.js?v=27.9-campus-card-order",
+  "./lucide.min.js?v=27.9-campus-card-order",
   "./manifest.webmanifest",
   "./icon.svg",
   "./icon-192.png",

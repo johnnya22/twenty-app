@@ -3859,410 +3859,381 @@ body[data-route="canteen"] .campus-chef-writing.has-stream {
 
 /* v0.27.8 · escolha e nota em duas chamadas sequenciais para garantir o destaque primeiro */
 
-
 /* =========================================================
-   Twenty v0.27.10 · Chef resilient stream
-   Tema alternativo inspirado num menu acolhedor de café,
-   mantendo o Diner exatamente como estava.
+   Twenty v0.27.9 · Campus Card Order
+   Selection fixes, soup selection, personal data and payment.
    ========================================================= */
-.canteen-theme-settings-card {
-  background: linear-gradient(145deg, #fffdf6, #f3f0df);
+
+/* Keep the hand-drawn selection inside the clickable area. */
+.campus-menu-item.is-selected {
+  padding: 9px 8px 11px;
 }
-.canteen-theme-picker {
+.campus-menu-item .campus-pencil-outline {
+  inset: 2px -1px 2px -1px;
+  border-width: 1.7px;
+  border-radius: 14px 12px 15px 13px;
+}
+.campus-menu-item .campus-pencil-outline::after {
+  inset: -3px 2px 0 -2px;
+}
+
+/* Payment modal */
+.campus-payment-modal {
+  width: min(980px, calc(100vw - 28px));
+  max-width: 980px;
+  overflow: hidden;
+}
+.campus-payment-modal .modal-body {
+  padding: 22px;
+}
+.campus-payment-shell {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 230px;
+  gap: 18px;
+  align-items: start;
+}
+.campus-payment-methods {
+  grid-column: 1 / -1;
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 13px;
-  margin-top: 17px;
+  gap: 10px;
 }
-.canteen-theme-option {
-  min-width: 0;
+.campus-payment-method {
+  min-height: 66px;
   display: grid;
-  gap: 7px;
-  padding: 10px;
-  border: 2px solid rgba(31, 31, 36, .12);
-  border-radius: 18px;
-  color: var(--ink);
-  background: rgba(255,255,255,.72);
+  grid-template-columns: 38px minmax(0, 1fr);
+  align-items: center;
+  gap: 10px;
+  padding: 11px 14px;
+  border: 1.5px solid #080808;
+  border-radius: 14px;
+  color: #080808;
+  background: #fff;
   text-align: left;
   cursor: pointer;
-  transition: transform .16s ease, border-color .16s ease, box-shadow .16s ease;
+  transition: transform .16s ease, box-shadow .16s ease, background .16s ease;
 }
-.canteen-theme-option:hover { transform: translateY(-2px); }
-.canteen-theme-option.is-selected {
-  border-color: #25262d;
-  box-shadow: 0 0 0 3px rgba(128, 220, 0, .18), 0 10px 22px rgba(32,32,38,.09);
+.campus-payment-method:hover { transform: translateY(-1px); }
+.campus-payment-method.is-selected {
+  background: #eeebff;
+  box-shadow: 4px 4px 0 #090909;
 }
-.canteen-theme-option > strong { font-size: .8rem; }
-.canteen-theme-option > small { color: var(--muted); font-size: .57rem; line-height: 1.4; }
-.canteen-theme-preview {
-  height: 112px;
+.campus-payment-method > svg {
+  width: 28px;
+  height: 28px;
+  padding: 5px;
+  border: 1.5px solid currentColor;
+  border-radius: 10px;
+}
+.campus-payment-method strong,
+.campus-payment-method small { display: block; }
+.campus-payment-method strong { font-size: .78rem; }
+.campus-payment-method small { margin-top: 2px; color: #6a6870; font-size: .58rem; font-weight: 650; }
+.campus-payment-order {
+  min-height: 100%;
+  display: grid;
+  align-content: start;
+  gap: 8px;
+  padding: 17px;
+  border: 1.5px solid #080808;
+  border-radius: 16px;
+  background: #fff;
+}
+.campus-payment-order > span {
+  font-family: "Londrina Solid", Impact, sans-serif;
+  font-size: 28px;
+}
+.campus-payment-order > strong {
+  padding-bottom: 7px;
+  border-bottom: 1px solid rgba(0,0,0,.15);
+  font-size: .68rem;
+  line-height: 1.35;
+}
+.campus-payment-order > b {
+  margin-top: 8px;
+  font-family: "Londrina Solid", Impact, sans-serif;
+  font-size: 34px;
+}
+.campus-other-payment {
+  min-height: 300px;
+  display: grid;
+  place-items: center;
+  align-content: center;
+  gap: 16px;
+  padding: 30px;
+  border: 2px solid #080808;
+  border-radius: 20px;
+  background: linear-gradient(145deg, #fff, #f5f2ff);
+  text-align: center;
+}
+.campus-other-payment > svg { width: 55px; height: 55px; }
+.campus-other-payment strong { font-family: "Londrina Solid", Impact, sans-serif; font-size: 34px; }
+.campus-other-payment p { max-width: 370px; margin: 7px auto 0; color: #68666d; font-size: .68rem; line-height: 1.45; }
+.campus-payment-footer {
+  gap: 10px;
+}
+.canteen-payment-confirm {
+  min-width: 210px;
+  min-height: 48px;
+  padding: 8px 18px 10px;
+  border: 2px solid #050505;
+  border-radius: 10px;
+  color: #fff !important;
+  background: #292a30 !important;
+  box-shadow: none;
+  font-family: "Londrina Solid", Impact, sans-serif !important;
+  font-size: 28px;
+  line-height: .9;
+  cursor: pointer;
+}
+.canteen-payment-confirm:hover { background: #050505 !important; }
+
+/* Student card, inspired by institutional ID cards with a clean K-pop feel. */
+.campus-student-card {
+  width: min(100%, 650px);
+  aspect-ratio: 1.58 / 1;
   position: relative;
   overflow: hidden;
   display: grid;
-  align-content: center;
-  padding: 14px;
-  border-radius: 13px;
+  grid-template-rows: 62px 1fr 34px;
+  border: 2px solid #050505;
+  border-radius: 17px;
+  color: #050505;
+  background: #fff;
+  box-shadow: 0 18px 40px rgba(16, 13, 26, .16);
 }
-.canteen-theme-preview b { font-size: 1.18rem; line-height: .82; }
-.canteen-theme-preview em { margin-top: 7px; font-size: .47rem; font-style: normal; letter-spacing: .08em; }
-.canteen-theme-preview.is-diner { color: #050505; background: #f8f7fb; }
-.canteen-theme-preview.is-diner b { font-family: "Londrina Solid", Impact, sans-serif; font-size: 1.55rem; }
-.canteen-theme-preview.is-diner i { position: absolute; right: 13px; top: 14px; width: 42px; height: 24px; border: 2px solid #050505; border-radius: 4px; transform: rotate(5deg); }
-.canteen-theme-preview.is-leaf {
-  color: #563821;
-  background: radial-gradient(circle at 10% 12%, rgba(126,151,67,.18), transparent 24%), #f5efdc;
-  border: 1px solid rgba(87,56,33,.22);
-}
-.canteen-theme-preview.is-leaf b { font-family: Georgia, "Times New Roman", serif; letter-spacing: .03em; }
-.canteen-theme-preview.is-leaf > svg { position: absolute; right: 14px; top: 14px; width: 25px; color: #779348; transform: rotate(16deg); }
-
-body[data-route="canteen"][data-canteen-theme="leaf"] {
-  background:
-    radial-gradient(circle at 8% 16%, rgba(131,170,83,.34), transparent 24%),
-    radial-gradient(circle at 87% 18%, rgba(120,159,74,.25), transparent 24%),
-    linear-gradient(145deg, #bcd69a 0%, #e7d5aa 55%, #d7ad78 100%);
-}
-body[data-route="canteen"][data-canteen-theme="leaf"] .view {
-  background: transparent;
-}
-.campus-dining-page.is-leaf-theme {
-  --campus-ink: #50331f;
-  --campus-paper: #f6f0df;
-  --campus-dark: #5c3a24;
-  --campus-green: #78964b;
-  width: min(1200px, 100%);
-  padding: 30px 0 46px;
-  color: var(--campus-ink);
-  font-family: "Avenir Next", -apple-system, BlinkMacSystemFont, "SF Pro Text", sans-serif;
-}
-.leaf-browser-shell {
-  overflow: hidden;
-  border: 1px solid rgba(83,53,31,.34);
-  border-radius: 16px;
-  background: rgba(246,240,223,.97);
-  box-shadow: 0 24px 65px rgba(72,54,29,.29), 0 3px 0 rgba(255,255,255,.58) inset;
-}
-.leaf-browser-bar {
-  min-height: 38px;
-  display: grid;
-  grid-template-columns: auto minmax(130px, 310px) 1fr;
-  align-items: center;
-  gap: 16px;
-  padding: 7px 15px;
-  border-bottom: 1px solid rgba(83,53,31,.14);
-  background: #ece4cd;
-}
-.leaf-window-dots { display: inline-flex; gap: 6px; }
-.leaf-window-dots i { width: 9px; height: 9px; border-radius: 50%; background: #df8c61; }
-.leaf-window-dots i:nth-child(2) { background: #e2bb62; }
-.leaf-window-dots i:nth-child(3) { background: #7da25a; }
-.leaf-address-bar { height: 21px; border-radius: 5px; background: rgba(255,255,255,.62); box-shadow: inset 0 1px 2px rgba(80,55,30,.08); }
-.leaf-browser-bar > svg { justify-self: end; width: 21px; color: #6f8f43; transform: rotate(15deg); }
-.leaf-browser-nav {
-  display: flex;
-  gap: 13px;
-  padding: 8px 24px;
-  border-bottom: 1px solid rgba(83,53,31,.17);
-  color: #412a1c;
-  font-size: 10px;
-  font-weight: 800;
-  letter-spacing: .1em;
-}
-.leaf-browser-nav span:not(:last-child)::after { content: "|"; margin-left: 13px; opacity: .45; }
-.leaf-menu-surface { padding: 25px 28px 16px; }
-.leaf-menu-footer {
-  min-height: 42px;
+.campus-student-card > header {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 15px;
-  padding: 8px 22px;
-  border-top: 1px solid rgba(83,53,31,.13);
-  background: #ede5cf;
+  gap: 18px;
+  padding: 0 21px;
+  color: #fff;
+  background: #050505;
 }
-.leaf-menu-footer span { display: inline-flex; gap: 5px; }
-.leaf-menu-footer svg { width: 16px; color: #5d3a25; }
-.leaf-menu-footer svg:nth-child(2) { color: #718e45; transform: rotate(18deg); }
-.leaf-menu-footer small { font-size: 9px; font-weight: 700; letter-spacing: .1em; }
-
-.is-leaf-theme .campus-dining-hero {
-  grid-template-columns: minmax(360px, 1fr) minmax(260px, .72fr) 46px;
-  min-height: 160px;
-  column-gap: 34px;
-  padding: 0 4px 14px;
-}
-.leaf-menu-kicker {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  margin-bottom: 8px;
-  color: #6d8d42;
-  font-family: Georgia, "Times New Roman", serif;
-  font-size: 12px;
-  font-weight: 800;
-  letter-spacing: .09em;
-}
-.leaf-menu-kicker svg { width: 18px; }
-.leaf-menu-kicker svg:last-child { transform: scaleX(-1) rotate(10deg); }
-.is-leaf-theme .campus-dining-brand h2 {
-  color: #573822;
-  font-family: Georgia, "Times New Roman", serif;
-  font-size: clamp(43px, 4.6vw, 64px);
-  font-weight: 900;
-  line-height: .9;
-  letter-spacing: .015em;
-}
-.is-leaf-theme .campus-dining-brand p {
-  margin-top: 10px;
-  color: #76563d;
-  font-size: 11px;
-  font-weight: 800;
-  letter-spacing: .14em;
-}
-.is-leaf-theme .campus-dining-stamp {
-  min-width: 230px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 9px;
-  margin-top: 24px;
-  padding: 11px 18px;
-  border: 2px solid #6b472d;
-  border-radius: 999px;
-  color: #fff9e9;
-  background: #6b472d;
-  box-shadow: 0 5px 0 #d4b28b;
-  font-family: Georgia, "Times New Roman", serif;
-  font-size: 27px;
-  letter-spacing: .08em;
-  transform: rotate(-1deg);
-}
-.is-leaf-theme .campus-dining-stamp svg { width: 20px; color: #dbe9b9; }
-.is-leaf-theme .campus-dining-info {
-  margin-top: 5px;
-  color: #f9f3df;
-  background: #6c8b43;
-  box-shadow: 0 3px 0 #4c632f;
-}
-.is-leaf-theme .campus-dining-columns {
-  grid-template-columns: minmax(330px, 1fr) minmax(330px, 1fr) 250px;
-  column-gap: 24px;
-  padding-top: 8px;
-}
-.is-leaf-theme .campus-dining-column {
-  display: grid;
-  align-content: start;
-  gap: 20px;
-}
-.is-leaf-theme .campus-menu-section {
-  margin: 0;
-  padding: 15px 16px 13px;
-  border: 1px solid rgba(83,53,31,.18);
-  border-radius: 16px;
-  background: rgba(255,252,239,.7);
-  box-shadow: 0 5px 13px rgba(77,57,32,.08);
-}
-.is-leaf-theme .campus-menu-section > header {
-  min-height: 38px;
-  padding-bottom: 8px;
-  border-bottom: 1px solid rgba(83,53,31,.35);
-}
-.is-leaf-theme .campus-menu-section > header h3 {
-  color: #563821;
-  font-family: Georgia, "Times New Roman", serif;
-  font-size: 20px;
-  letter-spacing: .045em;
-}
-.is-leaf-theme .campus-menu-section > header span {
-  color: #7d644e;
-  font-size: 10px;
-}
-.is-leaf-theme .campus-menu-section > div { padding-top: 5px; }
-.is-leaf-theme .campus-menu-item {
-  padding: 10px 7px 11px;
-  border-bottom: 1px dashed rgba(83,53,31,.18);
-}
-.is-leaf-theme .campus-menu-item:last-child { border-bottom: 0; }
-.is-leaf-theme .campus-menu-item-main {
-  grid-template-columns: minmax(0,1fr) auto 44px;
-  gap: 8px;
-}
-.is-leaf-theme .campus-menu-item-main strong {
-  color: #40281a;
-  font-size: 13px;
-  font-weight: 750;
-  line-height: 1.16;
-}
-.is-leaf-theme .campus-menu-item > small {
-  width: 92%;
-  color: #765f4c;
-  font-size: 8.5px;
-  line-height: 1.18;
-}
-.is-leaf-theme .campus-menu-kcal { color: #725138; font-size: 12px; font-weight: 800; }
-.is-leaf-theme .campus-menu-item-icons {
-  min-width: 32px;
-  min-height: 32px;
-  justify-content: center;
-  padding: 6px;
-  border: 1px solid rgba(85,55,32,.2);
-  border-radius: 50%;
-  color: #5d7c3b;
-  background: #edf0d7;
-}
-.is-leaf-theme .campus-menu-item-icons > svg { width: 17px; height: 17px; }
-.is-leaf-theme .campus-menu-allergen-icons { display: none; }
-.is-leaf-theme .campus-recommended {
-  color: #fff9e8;
-  background: #759448;
-  box-shadow: 0 2px 0 #536c32;
-}
-.is-leaf-theme .campus-menu-subdivider { border-color: rgba(83,53,31,.28); }
-.is-leaf-theme .campus-menu-subdivider span { color: #6e8c42; font-weight: 800; }
-.is-leaf-theme .campus-pencil-outline {
-  inset: 2px -2px 3px -2px;
-  border-color: rgba(100,126,56,.84);
-  border-radius: 18px 15px 17px 16px;
-}
-.is-leaf-theme .campus-pencil-outline::after { border-color: rgba(92,67,41,.26); }
-.is-leaf-theme .campus-menu-item.is-selected {
-  padding-inline: 10px;
-  background: rgba(220,230,185,.35);
-  border-radius: 15px;
-}
-.is-leaf-theme .campus-drinks { width: 100%; margin-top: 0; }
-.is-leaf-theme .campus-drink-row { color: #50331f; }
-.is-leaf-theme .campus-chef-note {
-  min-height: 360px;
-  margin: 0;
-  padding: 18px 18px 22px;
-  border: 1px solid rgba(83,53,31,.23);
-  border-radius: 16px;
-  color: #4b2f1e;
-  background:
-    radial-gradient(circle at 88% 10%, rgba(118,148,72,.18), transparent 21%),
-    #fffaf0;
-  box-shadow: 0 6px 16px rgba(75,53,29,.1);
-}
-.is-leaf-theme .campus-chef-note::before {
-  content: "";
-  width: 42px;
-  height: 42px;
-  display: block;
-  float: right;
-  margin: -4px -2px 5px 6px;
-  border-radius: 50%;
-  background: radial-gradient(circle at 36% 35%, #edf3cf 0 20%, #8da85e 22% 45%, #657f3d 47% 100%);
-  opacity: .7;
-}
-.is-leaf-theme .campus-chef-note h3 {
-  color: #583822;
-  font-family: Georgia, "Times New Roman", serif;
-  font-size: 27px;
-  letter-spacing: .01em;
-}
-.is-leaf-theme .campus-chef-note p,
-.is-leaf-theme .campus-chef-note .campus-chef-writing,
-.is-leaf-theme .campus-chef-status {
-  color: #513421;
-  font-size: 23px;
-}
-.is-leaf-theme .campus-order-button {
-  min-width: 205px;
-  min-height: 48px;
-  margin-top: 30px;
-  border-radius: 999px;
-  color: #fff7e3;
-  background: #6a432b;
-  box-shadow: 0 5px 0 #d3ae82;
-  font-family: Georgia, "Times New Roman", serif;
-  font-size: 18px;
-  font-weight: 800;
+.campus-student-card > header > span {
+  font-family: "Londrina Solid", Impact, sans-serif;
+  font-size: 24px;
   letter-spacing: .04em;
 }
-.is-leaf-theme .campus-order-button:hover:not(:disabled) { transform: translateY(-1px); box-shadow: 0 7px 0 #d3ae82; }
-.is-leaf-theme .campus-allergen-hidden-note {
-  border-color: rgba(83,53,31,.2);
-  color: #593a25;
-  background: #f1ecd5;
+.campus-fct-logo {
+  display: inline-flex;
+  align-items: center;
+  gap: 9px;
 }
-.is-leaf-theme .campus-dining-state {
-  min-height: 470px;
-  padding: 30px;
-  border: 1px solid rgba(83,53,31,.18);
-  border-radius: 16px;
-  background: rgba(255,250,238,.74);
+.campus-fct-logo i {
+  width: 31px;
+  height: 31px;
+  display: block;
+  border-radius: 4px 12px 4px 12px;
+  background: linear-gradient(145deg, #7567f2 0 55%, #ff8eb1 55% 76%, #f1e96d 76%);
+  transform: rotate(-4deg);
 }
-.is-leaf-theme .campus-dining-state h3 { color: #583822; font-family: Georgia, "Times New Roman", serif; font-size: 40px; }
+.campus-fct-logo strong {
+  font-family: "Londrina Solid", Impact, sans-serif;
+  font-size: 29px;
+  letter-spacing: .02em;
+}
+.campus-student-card-body {
+  min-height: 0;
+  position: relative;
+  display: grid;
+  grid-template-columns: 34% minmax(0, 1fr) 35px;
+  gap: 18px;
+  padding: 20px 18px 13px;
+}
+.campus-student-photo {
+  min-width: 0;
+  height: 100%;
+  overflow: hidden;
+  display: grid;
+  place-items: center;
+  border: 3px solid #050505;
+  border-radius: 5px;
+  background: #f0eef8;
+}
+.campus-student-photo img {
+  width: 100%;
+  height: 100%;
+  display: block;
+  object-fit: cover;
+}
+.campus-student-photo-placeholder {
+  width: 100%;
+  height: 100%;
+  display: grid;
+  place-items: center;
+  color: #fff;
+  background: linear-gradient(145deg, #7567f2, #ff8eb1);
+  font-family: "Londrina Solid", Impact, sans-serif;
+  font-size: clamp(48px, 8vw, 82px);
+}
+.campus-student-data {
+  min-width: 0;
+  display: grid;
+  align-content: start;
+  gap: 10px;
+  position: relative;
+  z-index: 2;
+}
+.campus-student-data > div > span,
+.campus-student-data-grid span {
+  display: block;
+  font-size: 9px;
+  font-weight: 900;
+  letter-spacing: .06em;
+}
+.campus-student-data > div > strong,
+.campus-student-data-grid strong {
+  display: block;
+  overflow-wrap: anywhere;
+  margin-top: 2px;
+  font-family: "Londrina Solid", Impact, sans-serif;
+  font-size: clamp(17px, 2.4vw, 25px);
+  line-height: .96;
+}
+.campus-student-data-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+.campus-student-watermark {
+  position: absolute;
+  z-index: 0;
+  right: 50px;
+  top: 40%;
+  color: rgba(5,5,5,.055);
+  font-family: "Londrina Solid", Impact, sans-serif;
+  font-size: clamp(85px, 16vw, 155px);
+  font-weight: 900;
+  line-height: .7;
+  transform: translateY(-50%);
+}
+.campus-student-signature {
+  position: absolute;
+  z-index: 3;
+  right: 58px;
+  bottom: 15px;
+  font-family: "Swanky and Moo Moo", cursive;
+  font-size: clamp(31px, 5vw, 56px);
+  transform: rotate(-7deg);
+}
+.campus-student-barcode {
+  min-width: 0;
+  display: flex;
+  align-items: stretch;
+  justify-content: center;
+  gap: 1px;
+  overflow: hidden;
+  padding: 3px 1px;
+}
+.campus-student-barcode i {
+  width: calc(var(--student-bar) * 1px);
+  min-width: calc(var(--student-bar) * 1px);
+  display: block;
+  background: #050505;
+}
+.campus-student-card > footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 0 20px;
+  border-top: 1px solid rgba(0,0,0,.18);
+  background: #f7f5fb;
+}
+.campus-student-card > footer span { font-size: 10px; font-weight: 900; letter-spacing: .09em; }
+.campus-student-card > footer small { color: #6a6870; font-size: 9px; font-weight: 700; }
 
-body[data-canteen-theme="leaf"] .canteen-info-modal,
-body[data-canteen-theme="leaf"] .canteen-ticket-confirm-modal,
-body[data-canteen-theme="leaf"] .canteen-ticket-modal {
-  color: #50331f;
-  border-color: #6d4930;
-  background: #f6f0df;
+/* Personal settings */
+.settings-personal-card {
+  display: grid;
+  grid-template-columns: minmax(250px, .7fr) minmax(420px, 1.3fr);
+  gap: 22px;
+  align-items: center;
+  overflow: hidden;
+  background: linear-gradient(135deg, #fff, #f4f1ff 72%, #fff7c8);
 }
-body[data-canteen-theme="leaf"] .canteen-info-modal .modal-head,
-body[data-canteen-theme="leaf"] .canteen-ticket-confirm-modal .modal-head,
-body[data-canteen-theme="leaf"] .canteen-ticket-modal .modal-head { border-color: rgba(83,53,31,.35); }
-body[data-canteen-theme="leaf"] .canteen-info-modal .modal-head h2,
-body[data-canteen-theme="leaf"] .canteen-ticket-modal .modal-head h2,
-body[data-canteen-theme="leaf"] .canteen-ticket-confirm-modal .modal-head h2,
-body[data-canteen-theme="leaf"] .campus-info-section h3 {
-  color: #573822;
-  font-family: Georgia, "Times New Roman", serif;
-}
-body[data-canteen-theme="leaf"] .canteen-info-modal .canteen-day-chip,
-body[data-canteen-theme="leaf"] .campus-info-facts > div,
-body[data-canteen-theme="leaf"] .campus-info-close,
-body[data-canteen-theme="leaf"] .campus-info-action,
-body[data-canteen-theme="leaf"] .campus-info-source button,
-body[data-canteen-theme="leaf"] .campus-info-source a {
-  border-color: #705038;
-  color: #50331f;
-}
-body[data-canteen-theme="leaf"] .canteen-info-modal .canteen-day-chip.is-active { color: #fff8e7; background: #6f8d43; }
-body[data-canteen-theme="leaf"] .canteen-ticket-modal .diner-ticket { filter: sepia(.18) saturate(.9); }
+.settings-personal-copy { display: grid; align-content: center; gap: 11px; }
+.settings-personal-copy h3 { margin: 0; font-size: 1.35rem; }
+.settings-personal-copy p { margin: 0; }
+.settings-personal-meta { display: grid; gap: 7px; margin: 4px 0 5px; }
+.settings-personal-meta span { display: flex; align-items: center; gap: 7px; color: #5f5b68; font-size: .6rem; font-weight: 760; }
+.settings-personal-meta svg { width: 14px; height: 14px; }
+.settings-personal-copy .button { justify-self: start; }
+.settings-student-card-preview .campus-student-card { width: 100%; }
 
-@media (max-width: 900px) {
-  .canteen-theme-picker { grid-template-columns: 1fr; }
-  .leaf-menu-surface { padding: 20px 18px 10px; }
-  .is-leaf-theme .campus-dining-hero {
-    grid-template-columns: minmax(0,1fr) auto;
-    min-height: 190px;
-  }
-  .is-leaf-theme .campus-dining-stamp {
-    grid-column: 1 / -1;
-    grid-row: 2;
-    justify-self: start;
-    min-width: 180px;
-    margin-top: 14px;
-    font-size: 22px;
-  }
-  .is-leaf-theme .campus-dining-columns { display: flex; flex-direction: column; gap: 17px; }
-  .is-leaf-theme .campus-left-column,
-  .is-leaf-theme .campus-center-column { display: contents; }
-  .is-leaf-theme .campus-menu-section { width: 100%; }
-  .is-leaf-theme .campus-soups { order: 1; }
-  .is-leaf-theme .campus-mains { order: 2; }
-  .is-leaf-theme .campus-desserts { order: 3; }
-  .is-leaf-theme .campus-drinks { order: 4; }
-  .is-leaf-theme .campus-chef-note { order: 5; width: 100%; min-height: 0; }
-  .is-leaf-theme .campus-order-button,
-  .is-leaf-theme .campus-readonly-actions { order: 6; width: 100%; margin-top: 0; }
+.profile-editor-layout {
+  display: grid;
+  grid-template-columns: 190px minmax(0, 1fr);
+  gap: 20px;
+  align-items: start;
 }
-@media (max-width: 560px) {
-  .leaf-browser-shell { border-radius: 13px; }
-  .leaf-browser-nav { overflow-x: auto; padding-inline: 14px; }
-  .leaf-browser-nav span { white-space: nowrap; }
-  .leaf-menu-surface { padding: 17px 13px 8px; }
-  .leaf-menu-footer { padding-inline: 14px; }
-  .is-leaf-theme .campus-dining-brand h2 { font-size: 41px; }
-  .leaf-menu-kicker { font-size: 9px; }
-  .is-leaf-theme .campus-dining-hero { min-height: 176px; }
-  .is-leaf-theme .campus-menu-section { padding: 13px 12px 11px; }
-  .is-leaf-theme .campus-menu-item-main { grid-template-columns: minmax(0,1fr) auto 39px; }
-  .is-leaf-theme .campus-menu-item-icons { min-width: 29px; min-height: 29px; padding: 5px; }
-  .is-leaf-theme .campus-chef-note p,
-  .is-leaf-theme .campus-chef-note .campus-chef-writing { font-size: 22px; }
+.profile-photo-editor {
+  display: grid;
+  gap: 10px;
 }
+.profile-photo-preview {
+  width: 180px;
+  aspect-ratio: 4 / 5;
+  overflow: hidden;
+  display: grid;
+  place-items: center;
+  border: 2px solid #17171b;
+  border-radius: 18px;
+  background: linear-gradient(145deg, #eeeaff, #fff8ca);
+}
+.profile-photo-preview img { width: 100%; height: 100%; object-fit: cover; }
+.profile-photo-preview span { font-family: "Londrina Solid", Impact, sans-serif; font-size: 58px; }
+.profile-photo-button,
+.profile-photo-remove {
+  min-height: 42px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  padding: 8px 11px;
+  border: 1.5px solid #17171b;
+  border-radius: 11px;
+  color: #17171b;
+  background: #fff;
+  font-size: .62rem;
+  font-weight: 800;
+  cursor: pointer;
+}
+.profile-photo-button svg { width: 15px; height: 15px; }
+.profile-photo-remove { background: transparent; }
+.profile-photo-editor small { color: #77727e; font-size: .55rem; line-height: 1.4; }
+
+@media (max-width: 860px) {
+  .campus-payment-shell { grid-template-columns: 1fr; }
+  .campus-payment-order { min-height: 0; }
+  .settings-personal-card { grid-template-columns: 1fr; }
+  .settings-personal-copy .button { justify-self: stretch; }
+}
+
+@media (max-width: 620px) {
+  .campus-payment-modal .modal-body { padding: 14px; }
+  .campus-payment-methods { grid-template-columns: 1fr; }
+  .campus-student-card { aspect-ratio: auto; grid-template-rows: 52px auto 32px; border-radius: 13px; }
+  .campus-student-card > header { padding: 0 14px; }
+  .campus-fct-logo i { width: 25px; height: 25px; }
+  .campus-fct-logo strong { font-size: 23px; }
+  .campus-student-card > header > span { font-size: 20px; }
+  .campus-student-card-body { grid-template-columns: 108px minmax(0, 1fr) 22px; gap: 11px; padding: 14px 11px 12px; }
+  .campus-student-photo { height: 150px; }
+  .campus-student-data { gap: 8px; }
+  .campus-student-data > div > strong,
+  .campus-student-data-grid strong { font-size: 17px; }
+  .campus-student-data-grid { grid-template-columns: 1fr; gap: 7px; }
+  .campus-student-watermark { right: 28px; font-size: 90px; }
+  .campus-student-signature { right: 33px; bottom: 7px; font-size: 34px; }
+  .campus-student-card > footer { padding: 0 12px; }
+  .campus-payment-footer { display: grid; grid-template-columns: 1fr; }
+  .campus-payment-footer > button { width: 100%; }
+  .profile-editor-layout { grid-template-columns: 1fr; }
+  .profile-photo-editor { justify-items: center; }
+  .profile-photo-button,
+  .profile-photo-remove { width: min(100%, 260px); }
+}
+.diner-ticket-payment { margin: 9px 0 0; text-align: center; font-size: .58rem; font-weight: 800; text-transform: uppercase; letter-spacing: .05em; }
