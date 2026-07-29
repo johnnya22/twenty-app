@@ -39,7 +39,7 @@
   var CANTEEN_PAGE_URL = "https://sas.unl.pt/alimentacao/cantina-da-faculdade-de-ciencias-e-tecnologia-fct/";
   var CANTEEN_INFO_PAGE_URL = "https://sas.unl.pt/alimentacao/";
   var CANTEEN_CACHE_KEY = "twenty-canteen-menu-v2";
-  var CANTEEN_AI_CACHE_KEY = "twenty-canteen-ai-v9-efficient-stream";
+  var CANTEEN_AI_CACHE_KEY = "twenty-canteen-ai-v10-choice-first";
   var CANTEEN_WEATHER_CACHE_KEY = "twenty-canteen-weather-v1";
   var CANTEEN_WEATHER_URL = "https://api.open-meteo.com/v1/forecast?latitude=38.661150&longitude=-9.205777&current=temperature_2m,apparent_temperature,precipitation,rain,weather_code,cloud_cover&timezone=Europe%2FLisbon";
   var CANTEEN_DEFAULT_ALLERGENS = {
@@ -4768,12 +4768,62 @@
     return parts.join(" | ");
   }
 
-  function canteenChefNoteValidate(value, dayContext) {
+  function canteenChefAcademicBrief(dayContext) {
+    var parts = [];
+    var nextTest = dayContext && dayContext.nextAssessmentAfterLunch;
+    var completedTest = dayContext && dayContext.latestCompletedAssessmentToday;
+    if (nextTest) {
+      parts.push("TESTE CONFIRMADO DEPOIS DO ALMOÇO " + [nextTest.time, nextTest.course, nextTest.title].filter(Boolean).join(" "));
+    } else if (completedTest) {
+      parts.push((dayContext.lastAssessmentOfAcademicPeriod ? "ÚLTIMO TESTE DO PERÍODO JÁ TERMINOU " : "TESTE DE HOJE JÁ TERMINOU ") + [completedTest.time, completedTest.course, completedTest.title].filter(Boolean).join(" "));
+    } else {
+      parts.push("NENHUM TESTE CONFIRMADO. Não menciones teste, avaliação nem boa sorte");
+    }
+    try {
+      var academic = JSON.parse(dayContext && dayContext.academicPrompt || "{}");
+      var remaining = asArray(academic.remainingClasses).slice(0, 4).map(function (entry) {
+        return asArray(entry).filter(Boolean).join(" ");
+      });
+      parts.push(remaining.length ? "AULAS RESTANTES " + remaining.join("; ") : "SEM AULAS RESTANTES CONFIRMADAS");
+    } catch (error) {
+      if (dayContext && dayContext.nextClass) {
+        parts.push("PRÓXIMA AULA " + [dayContext.nextClass.start, dayContext.nextClass.course, dayContext.nextClass.title].filter(Boolean).join(" "));
+      }
+    }
+    return parts.join(" | ");
+  }
+
+  function canteenChefNoteMentionsDish(value, recommendedDish) {
+    var note = cleanText(value || "").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+    var dish = cleanText(recommendedDish || "").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/\d+/g, " ");
+    if (!note || !dish) return false;
+    var ignored = {
+      com: 1, sem: 1, de: 1, da: 1, do: 1, das: 1, dos: 1, no: 1, na: 1, nos: 1, nas: 1,
+      e: 1, a: 1, o: 1, as: 1, os: 1, um: 1, uma: 1, arroz: 1, massa: 1, batata: 1,
+      legumes: 1, molho: 1, salada: 1, forno: 1, fritas: 1, frito: 1, cozida: 1, cozido: 1
+    };
+    var words = dish.split(/[^a-zà-ÿ]+/i).filter(function (word) {
+      return word.length >= 4 && !ignored[word];
+    });
+    if (!words.length) words = dish.split(/\s+/).filter(function (word) { return word.length >= 4; });
+    return words.some(function (word) { return note.indexOf(word) >= 0; });
+  }
+
+  function canteenChefNoteValidate(value, dayContext, recommendedDish) {
     var text = canteenChefNoteSanitize(value, "");
     var lower = text.toLowerCase();
     if (!text) throw new Error("A IA local não devolveu uma Chef’s Note válida.");
-    if (/bom dia a todos|boa tarde a todos|olá a todos|espero que gostem|pessoal|malta/.test(lower)) {
-      throw new Error("A Chef’s Note veio escrita para um grupo em vez de ser pessoal.");
+    if (/bom dia a todos|boa tarde a todos|olá a todos|espero que gostes|espero que gostem|pessoal|malta/.test(lower)) {
+      throw new Error("A Chef’s Note veio escrita para um grupo ou como uma saudação genérica.");
+    }
+    if (/\bparece(?:-me)?\b|\bexcelente\b|\bótim[oa]s?\b|\baproveita\b/.test(lower)) {
+      throw new Error("A Chef’s Note soou a publicidade ou crítica de restaurante.");
+    }
+    if (!/\b(eu|preparei|servia|guardava|escolhia|ia)\b/.test(lower)) {
+      throw new Error("A Chef’s Note não soou a uma mensagem pessoal do Chef.");
+    }
+    if (recommendedDish && !canteenChefNoteMentionsDish(text, recommendedDish)) {
+      throw new Error("A Chef’s Note não mencionou claramente o prato escolhido.");
     }
     var hasAssessmentWords = /\b(teste|testes|exame|exames|avaliação|avaliações|prova|provas|apresentação|apresentações)\b/.test(lower);
     var hasGoodLuck = /\bboa sorte\b/.test(lower);
@@ -4843,6 +4893,13 @@
     return previous + next;
   }
 
+  function canteenStreamingRecommendedDish(value, dishes) {
+    var match = /(?:^|\n)\s*ID\s*[:=]\s*(\d+)/i.exec(String(value || ""));
+    if (!match) return null;
+    var id = Number(match[1]);
+    return asArray(dishes).find(function (item) { return item.id === id; }) || null;
+  }
+
   function canteenStreamingChefNote(value) {
     var text = String(value || "");
     var protocolMatch = /(?:^|\n)\s*NOTA\s*[:=]\s*/i.exec(text);
@@ -4896,7 +4953,8 @@
   function canteenStreamingChefNoteAllowed(value, dayContext) {
     var lower = cleanText(value || "").toLowerCase();
     if (!lower) return false;
-    if (/bom dia a todos|boa tarde a todos|olá a todos|espero que gostem|pessoal|malta/.test(lower)) return false;
+    if (/bom dia a todos|boa tarde a todos|olá a todos|espero que gostes|espero que gostem|pessoal|malta/.test(lower)) return false;
+    if (/\bparece(?:-me)?\b|\bexcelente\b|\bótim[oa]s?\b|\baproveita\b/.test(lower)) return false;
     var hasAssessmentWords = /\b(teste|testes|exame|exames|avaliação|avaliações|prova|provas|apresentação|apresentações)\b/.test(lower);
     var hasGoodLuck = /\bboa sorte\b/.test(lower);
     var hasUpcoming = !!(dayContext && dayContext.nextAssessmentAfterLunch);
@@ -4936,7 +4994,7 @@
         tags: asArray(match.tags).map(cleanText).filter(Boolean).slice(0, 3)
       };
     });
-    var chefNote = canteenChefNoteValidate(raw && raw.chefNote, dayContext);
+    var chefNote = canteenChefNoteValidate(raw && raw.chefNote, dayContext, recommended);
     return {
       chefNote: chefNote,
       recommendedDish: recommended,
@@ -4986,7 +5044,7 @@
     if (!state.settings.canteenAIEnabled) return { label: "Desativada", className: "badge" };
     if (!provider) return { label: "IA indisponível", className: "badge badge-yellow" };
     if (canteenAIState.status === "ready" && canteenAIState.source === "built-in-ai") return { label: "IA no dispositivo", className: "badge badge-mint" };
-    if (canteenAIState.status === "loading") return { label: "A escolher", className: "badge badge-violet" };
+    if (canteenAIState.status === "loading") return { label: canteenAIState.phase === "writing" ? "A escrever" : "A escolher", className: "badge badge-violet" };
     if (canteenAIState.status === "downloadable") return { label: "Modelo disponível", className: "badge badge-violet" };
     if (canteenAIState.status === "error") return { label: "Erro na IA", className: "badge badge-yellow" };
     if (canteenAIState.status === "unavailable") return { label: "IA indisponível", className: "badge badge-yellow" };
@@ -5039,20 +5097,23 @@
     var compactDishes = dishes.map(function (item) {
       return [item.id, item.officialName, item.category, item.kcal];
     });
-    var academic = canteenCompactAcademicContext(dayContext);
+    var academic = canteenChefAcademicBrief(dayContext);
     var prompt = [
-      "És o chef da Cantina FCT e escreves uma nota privada e humana ao Johnny.",
-      "Escolhe um prato da lista. Escreve 14 a 24 palavras em português europeu, uma ou duas frases.",
-      "Menciona o prato naturalmente. Podes usar um detalhe académico apenas quando estiver confirmado.",
-      "Sem emojis, sem travessões, sem dois pontos na nota. Podes usar :) uma vez.",
-      "Nunca digas que conheces gostos ou dados. Nunca inventes testes, aulas, ingredientes, alergénios, kcal ou benefícios.",
-      "Preferências silenciosas para escolher apenas: evitar ervilhas; peixe tem preferência baixa; favorecer opções mais energéticas.",
-      "Contexto confirmado: " + academic,
-      "Tempo: " + weatherContext.prompt,
-      "Pratos [id,nome,tipo,kcal]: " + JSON.stringify(compactDishes),
-      "Responde exatamente em duas linhas. Começa já pela nota para aparecer enquanto escreves:",
-      "NOTA=<texto>",
-      "ID=<número>"
+      "És o chef que cozinhou hoje os pratos da Cantina FCT. Falas em privado com o Johnny enquanto lhe serves o almoço.",
+      "Primeiro escolhe um prato. Depois escreve uma nota humana de 18 a 30 palavras em português europeu.",
+      "A nota tem de mencionar naturalmente o prato escolhido e soar a algo dito pelo chef, não a publicidade, crítica de restaurante ou chatbot.",
+      "Usa primeira pessoa. Exemplos de tom: Hoje eu servia-te... Hoje preparei-te... Hoje eu ia... Não copies os exemplos.",
+      "Nunca escrevas parece excelente, ótimo, aproveita, espero que gostes, bom dia a todos ou frases vazias.",
+      "Podes ligar a nota a aulas ou testes apenas quando o contexto abaixo os confirma. Não expliques que recebeste contexto.",
+      "Sem emojis, sem travessões e sem dois pontos na nota. Podes usar :) uma vez.",
+      "Nunca inventes ingredientes, alergénios, kcal, benefícios ou factos académicos.",
+      "Preferências privadas só para escolher, nunca para mencionar: evitar ervilhas; peixe tem preferência baixa; favorecer opções mais energéticas.",
+      "CONTEXTO " + academic,
+      "TEMPO " + weatherContext.prompt,
+      "PRATOS [id,nome,tipo,kcal] " + JSON.stringify(compactDishes),
+      "Responde exatamente assim e começa imediatamente pelo ID:",
+      "ID=<número>",
+      "NOTA=<texto>"
     ].join("\n");
 
     destroyCanteenAISession();
@@ -5066,11 +5127,27 @@
     try {
       var raw = "";
       var firstChunkAt = 0;
+      var choiceAt = 0;
+      var streamedSelection = null;
       if (typeof session.promptStreaming === "function") {
         var stream = session.promptStreaming(prompt);
         for await (var chunk of stream) {
           if (!firstChunkAt) firstChunkAt = performance.now();
           raw = canteenMergeAIStreamChunk(raw, chunk);
+          if (!streamedSelection) {
+            streamedSelection = canteenStreamingRecommendedDish(raw, dishes);
+            if (streamedSelection) {
+              choiceAt = performance.now();
+              var partial = canteenAIFallbackData(meal, weather);
+              partial.recommendedDish = streamedSelection.officialName;
+              partial.generatedBy = "built-in-ai";
+              partial.chefNote = "";
+              canteenAIState.data = partial;
+              canteenAIState.source = "built-in-ai";
+              canteenAIState.phase = "writing";
+              refreshCanteenAIView();
+            }
+          }
           updateCanteenAIStreamingNote(raw, dayContext);
         }
       } else {
@@ -5080,7 +5157,7 @@
       var parsed = parseCanteenAIResponse(raw);
       var weatherChoice = canteenFallbackRecommendedItem(visibleItems, weatherContext);
       var defaultDish = dishes.find(function (item) { return item.sourceItem === weatherChoice; }) || dishes[0];
-      var selected = dishes.find(function (item) { return item.id === Number(parsed && parsed.dishId); }) || defaultDish;
+      var selected = dishes.find(function (item) { return item.id === Number(parsed && parsed.dishId); }) || streamedSelection || defaultDish;
       var result = normalizeCanteenAIData({
         chefNote: parsed && parsed.chefNote,
         recommendedDish: selected.officialName,
@@ -5088,6 +5165,7 @@
       }, meal, weather, dayContext);
       console.info("[Twenty Cantina AI] geração concluída", {
         firstTextMs: firstChunkAt ? Math.round(firstChunkAt - startedAt) : null,
+        choiceMs: choiceAt ? Math.round(choiceAt - startedAt) : null,
         durationMs: Math.round(performance.now() - startedAt),
         promptChars: prompt.length,
         dishes: dishes.length,
@@ -5195,6 +5273,7 @@
           return;
         }
         canteenAIState.status = "loading";
+        canteenAIState.phase = "choosing";
         canteenAIState.progress = 0;
         canteenAIState.streamText = "";
         refreshCanteenAIView();
@@ -5207,7 +5286,8 @@
         if (keys.length > 24) keys.slice(0, keys.length - 24).forEach(function (oldKey) { delete cache[oldKey]; });
         saveCanteenAICache(cache);
       } catch (error) {
-        canteenAIState = { key: key, status: "error", availability: "error", source: "rules", data: fallback, error: error && error.message || "A IA local não conseguiu escrever a nota.", progress: null };
+        var partialData = canteenAIState.data && canteenAIState.data.generatedBy === "built-in-ai" ? canteenAIState.data : fallback;
+        canteenAIState = { key: key, status: "error", availability: "error", source: partialData.generatedBy === "built-in-ai" ? "built-in-ai" : "rules", data: partialData, error: error && error.message || "A IA local não conseguiu escrever a nota.", progress: null, streamText: "" };
       } finally {
         canteenAIPromise = null;
         canteenAIRequestKey = "";
@@ -5236,7 +5316,7 @@
       : canteenAIState.source === "built-in-ai"
         ? "Criada no teu dispositivo. Os alergénios continuam a vir apenas da fonte oficial."
         : "A Twenty não publica uma Chef’s Note genérica quando a IA não responde.";
-    var note = state.settings.canteenAIChefNote && canteenAIState.status === "ready" && data && data.chefNote ? '<blockquote>“' + esc(data.chefNote) + '”</blockquote>' : canteenAIState.status === "loading" ? '<blockquote class="is-loading">a escrever...</blockquote>' : "";
+    var note = state.settings.canteenAIChefNote && canteenAIState.status === "ready" && data && data.chefNote ? '<blockquote>“' + esc(data.chefNote) + '”</blockquote>' : canteenAIState.status === "loading" ? '<blockquote class="is-loading">' + esc(canteenAIState.phase === "choosing" ? "a escolher o prato..." : "a escrever...") + '</blockquote>' : "";
     return '<section class="canteen-ai-card"><div class="canteen-ai-mark"><i data-lucide="sparkles"></i></div><div class="canteen-ai-copy"><div class="canteen-ai-title"><span>Chef\'s Note</span><span class="' + status.className + '">' + esc(status.label) + '</span></div>' + note + '<p>' + esc(copy) + '</p>' + progress + '</div>' + action + '</section>';
   }
 
@@ -5532,7 +5612,8 @@
       return '<aside class="campus-chef-note is-loading"><h3>Chef’s Note</h3><div class="campus-chef-status"><span>A preparar a IA local...</span><button type="button" data-action="canteen-ai-prepare">Preparar agora</button></div></aside>';
     }
     var streamingNote = status === "loading" ? cleanText(canteenAIState.streamText || "") : "";
-    return '<aside class="campus-chef-note is-loading" aria-live="polite" aria-busy="true"><h3>Chef’s Note</h3><p class="campus-chef-writing' + (streamingNote ? ' has-stream' : '') + '">' + esc(streamingNote || "a escrever...") + '</p></aside>';
+    var waitingCopy = canteenAIState.phase === "choosing" ? "a escolher o prato..." : "a escrever...";
+    return '<aside class="campus-chef-note is-loading" aria-live="polite" aria-busy="true"><h3>Chef’s Note</h3><p class="campus-chef-writing' + (streamingNote ? ' has-stream' : '') + '">' + esc(streamingNote || waitingCopy) + '</p></aside>';
   }
   function canteenMealComparable(meal) {
     return asArray(meal && meal.items).map(function (item) {
@@ -5692,7 +5773,7 @@
     var jsonCard = '<article class="card settings-card"><div class="card-title-row"><div><p class="card-label">Ficheiro local</p><h3>academic-data.json</h3><p class="card-subtitle">Importação e exportação manual, separada do Git.</p></div><span class="metric-icon"><i data-lucide="braces"></i></span></div><div class="settings-row"><div><strong>Última verificação</strong><small>' + esc(lastCheck) + ' · revisão local ' + (Number(state.meta.revision) || 0) + '</small></div><button class="switch ' + (state.settings.jsonSync ? "is-on" : "") + '" type="button" data-action="toggle-json-sync" aria-label="Ativar sincronização JSON"><span></span></button></div><div class="list-actions"><button class="button button-small" type="button" data-action="reload-json"><i data-lucide="refresh-cw"></i>Reler</button><button class="button button-small" type="button" data-action="export-json"><i data-lucide="download"></i>Exportar</button><button class="button button-small" type="button" data-action="import-json"><i data-lucide="upload"></i>Importar</button></div></article>';
     var storageCard = '<article class="card settings-card"><div class="card-title-row"><div><p class="card-label">Neste dispositivo</p><h3>Armazenamento local</h3><p class="card-subtitle">Documentos, imagens e cache usados por esta instalação.</p></div><span class="metric-icon"><i data-lucide="hard-drive"></i></span></div><div class="settings-row"><div><strong id="storageFileCount">A contar ficheiros…</strong><small>Ficheiros guardados no browser.</small></div><span class="badge badge-mint">Local-first</span></div><button class="button button-small" type="button" data-action="export-json"><i data-lucide="shield-check"></i>Criar backup JSON</button></article>';
     var canteenAIStatus = canteenAIAvailabilityLabel();
-    var canteenAICard = '<article class="card settings-card settings-feature-card"><div class="card-title-row"><div><p class="card-label">Cantina</p><h3>Brilho com IA local</h3><p class="card-subtitle">Chef’s Note contextual, escolha do chef e badges úteis. A ementa, as kcal e os alergénios oficiais nunca são alterados.</p></div><span class="metric-icon"><i data-lucide="sparkles"></i></span></div><div class="settings-row"><div><strong>IA integrada do Chrome</strong><small>Quando não existe, a Twenty não inventa uma Chef’s Note.</small></div><span class="' + canteenAIStatus.className + '">' + esc(canteenAIStatus.label) + '</span></div><div class="settings-toggle-list"><div class="settings-row"><div><strong>Ativar enriquecimento</strong><small>Permite escrever uma Chef’s Note com a IA local. Os badges factuais continuam determinísticos.</small></div><button class="switch ' + (state.settings.canteenAIEnabled ? "is-on" : "") + '" type="button" data-action="toggle-canteen-ai"><span></span></button></div><div class="settings-row"><div><strong>Chef\'s Note</strong><small>Uma nota curta ligada à ementa, ao horário e às avaliações do dia, sem limite automático de tempo.</small></div><button class="switch ' + (state.settings.canteenAIChefNote ? "is-on" : "") + '" type="button" data-action="toggle-canteen-ai-note"><span></span></button></div><div class="settings-row"><div><strong>Recomendação e badges</strong><small>Mostra a escolha do chef, a opção mais energética e fontes de proteína identificáveis pelo nome.</small></div><button class="switch ' + (state.settings.canteenAIDescriptions ? "is-on" : "") + '" type="button" data-action="toggle-canteen-ai-descriptions"><span></span></button></div></div><div class="list-actions"><button class="button button-dark button-small" type="button" data-route="canteen"><i data-lucide="utensils"></i>Abrir Cantina</button><button class="button button-small" type="button" data-action="canteen-ai-clear-cache"><i data-lucide="eraser"></i>Limpar cache IA</button></div></article>';
+    var canteenAICard = '<article class="card settings-card settings-feature-card"><div class="card-title-row"><div><p class="card-label">Cantina</p><h3>Brilho com IA local</h3><p class="card-subtitle">Chef’s Note contextual, escolha do chef e badges úteis. A ementa, as kcal e os alergénios oficiais nunca são alterados.</p></div><span class="metric-icon"><i data-lucide="sparkles"></i></span></div><div class="settings-row"><div><strong>IA integrada do Chrome</strong><small>Quando não existe, a Twenty não inventa uma Chef’s Note.</small></div><span class="' + canteenAIStatus.className + '">' + esc(canteenAIStatus.label) + '</span></div><div class="settings-toggle-list"><div class="settings-row"><div><strong>Ativar enriquecimento</strong><small>Permite escrever uma Chef’s Note com a IA local. Os badges factuais continuam determinísticos.</small></div><button class="switch ' + (state.settings.canteenAIEnabled ? "is-on" : "") + '" type="button" data-action="toggle-canteen-ai"><span></span></button></div><div class="settings-row"><div><strong>Chef\'s Note</strong><small>Escolhe primeiro o prato e depois escreve uma nota curta ligada à ementa, ao horário e às avaliações do dia.</small></div><button class="switch ' + (state.settings.canteenAIChefNote ? "is-on" : "") + '" type="button" data-action="toggle-canteen-ai-note"><span></span></button></div><div class="settings-row"><div><strong>Recomendação e badges</strong><small>Mostra a escolha do chef, a opção mais energética e fontes de proteína identificáveis pelo nome.</small></div><button class="switch ' + (state.settings.canteenAIDescriptions ? "is-on" : "") + '" type="button" data-action="toggle-canteen-ai-descriptions"><span></span></button></div></div><div class="list-actions"><button class="button button-dark button-small" type="button" data-route="canteen"><i data-lucide="utensils"></i>Abrir Cantina</button><button class="button button-small" type="button" data-action="canteen-ai-clear-cache"><i data-lucide="eraser"></i>Limpar cache IA</button></div></article>';
     var allergenSettings = canteenAllergenSettings();
     var allergenMap = canteenAllergenMap();
     var allergenOptions = Object.keys(CANTEEN_DEFAULT_ALLERGENS).sort(function (a, b) { return Number(a) - Number(b); }).map(function (id) {
@@ -8250,7 +8331,7 @@
       }, 60000);
       if (!state.profile.onboardingComplete || !state.currentSemesterId || !activeCourses().length) startOnboarding(state.semesters.length ? "new-semester" : "first");
       if ("serviceWorker" in navigator && location.protocol !== "file:") {
-        navigator.serviceWorker.register("sw.js?v=27.4-chef-streaming", { updateViaCache: "none" }).then(function () {
+        navigator.serviceWorker.register("sw.js?v=27.7-chef-choice-first", { updateViaCache: "none" }).then(function () {
           if (Sync && Sync.getStatus().configured) Sync.startAutoSync();
         }).catch(function () {
           if (Sync && Sync.getStatus().configured) Sync.startAutoSync();
