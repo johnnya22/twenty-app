@@ -39,11 +39,13 @@
   var CANTEEN_PAGE_URL = "https://sas.unl.pt/alimentacao/cantina-da-faculdade-de-ciencias-e-tecnologia-fct/";
   var CANTEEN_INFO_PAGE_URL = "https://sas.unl.pt/alimentacao/";
   var CANTEEN_CACHE_KEY = "twenty-canteen-menu-v2";
-  var CANTEEN_AI_CACHE_KEY = "twenty-canteen-ai-v5-strict-context";
+  var CANTEEN_AI_CACHE_KEY = "twenty-canteen-ai-v6-single-run";
   var CANTEEN_WEATHER_CACHE_KEY = "twenty-canteen-weather-v1";
   var CANTEEN_WEATHER_URL = "https://api.open-meteo.com/v1/forecast?latitude=38.661150&longitude=-9.205777&current=temperature_2m,apparent_temperature,precipitation,rain,weather_code,cloud_cover&timezone=Europe%2FLisbon";
   var canteenAIState = { key: "", status: "idle", availability: "unknown", source: "rules", data: null, error: "", progress: null };
   var canteenAIPromise = null;
+  var canteenAIAbortController = null;
+  var canteenAIRequestKey = "";
   var canteenAISession = null;
   var canteenAISessionProviderKind = "";
   var canteenAISessionUses = 0;
@@ -1318,6 +1320,27 @@
     route = { name: parts[0], id: parts[1] || null, tab: parts[2] || "overview" };
   }
 
+  function refreshCanteenClockView() {
+    if (route.name !== "canteen" || !view || !canteenMenu) return;
+    var stamp = view.querySelector(".campus-dining-stamp");
+    if (!stamp) return;
+    var now = canteenPortugalParts(new Date());
+    var selectedIsToday = canteenSelectedDate === now.iso;
+    var service = canteenOpeningStatus(new Date(), canteenServiceHours(canteenMenu));
+    stamp.textContent = selectedIsToday ? (service.open ? "ABERTO" : "FECHADO") : "EMENTA";
+    stamp.classList.toggle("is-open", !!(selectedIsToday && service.open));
+  }
+
+  function scheduleCanteenClockRefresh() {
+    if (canteenClockTimer) clearTimeout(canteenClockTimer);
+    canteenClockTimer = setTimeout(function () {
+      canteenClockTimer = null;
+      if (route.name !== "canteen") return;
+      refreshCanteenClockView();
+      scheduleCanteenClockRefresh();
+    }, 60000 - (Date.now() % 60000) + 250);
+  }
+
   function render() {
     if (!state) return;
     revokeImageObjectUrls();
@@ -1362,9 +1385,7 @@
     }
     if (route.name === "canteen") {
       setTimeout(function () { ensureCanteenAIForCurrentMeal(false); }, 0);
-      canteenClockTimer = setTimeout(function () {
-        if (route.name === "canteen") render();
-      }, 60000 - (Date.now() % 60000) + 250);
+      scheduleCanteenClockRefresh();
     }
     if (route.name === "home") {
       homeClockTimer = setTimeout(function () {
@@ -4307,6 +4328,10 @@
 
   function destroyCanteenAISession() {
     try {
+      if (canteenAIAbortController) canteenAIAbortController.abort();
+    } catch (error) {}
+    canteenAIAbortController = null;
+    try {
       if (canteenAISession && typeof canteenAISession.destroy === "function") canteenAISession.destroy();
     } catch (error) {}
     canteenAISession = null;
@@ -4594,6 +4619,34 @@
       academicYear: cleanText(semester && semester.academicYear || "")
     };
 
+    var promptContext = {
+      date: date,
+      today: isToday,
+      classes: classes.map(function (entry) {
+        return [entry.start, entry.end, entry.course, entry.title].filter(Boolean);
+      }),
+      assessments: dayAssessments.map(function (item) {
+        return [item.time, item.course, item.title, item.status].filter(Boolean);
+      }),
+      nextAssessmentAfterLunch: nextAssessmentAfterLunch ? [nextAssessmentAfterLunch.time, nextAssessmentAfterLunch.course, nextAssessmentAfterLunch.title] : null,
+      latestCompletedAssessmentToday: latestCompletedToday ? [latestCompletedToday.time, latestCompletedToday.course, latestCompletedToday.title] : null,
+      lastAssessmentOfAcademicPeriod: lastAssessmentOfAcademicPeriod,
+      remainingClasses: remainingClasses.map(function (entry) {
+        return [entry.start, entry.end, entry.course, entry.title].filter(Boolean);
+      })
+    };
+    var signatureContext = {
+      date: date,
+      semesterActiveOnDate: dateInsideSemester,
+      classes: classes.map(function (entry) { return [entry.start, entry.end, entry.course, entry.title]; }),
+      assessments: dayAssessments.map(function (item) { return [item.id, item.time, item.status]; }),
+      nextAssessmentAfterLunch: nextAssessmentAfterLunch && nextAssessmentAfterLunch.id || "",
+      latestCompletedAssessmentToday: latestCompletedToday && latestCompletedToday.id || "",
+      lastAssessmentOfAcademicPeriod: lastAssessmentOfAcademicPeriod,
+      completedClassCount: completedClasses.length,
+      remainingClassCount: remainingClasses.length
+    };
+
     return {
       assessment: nextAssessmentToday,
       nextAssessmentAfterLunch: nextAssessmentAfterLunch,
@@ -4603,10 +4656,10 @@
       assessmentCourse: nextAssessmentToday ? { name: nextAssessmentToday.course } : null,
       nextClass: remainingClasses[0] || afterLunchClasses[0] || null,
       nextClassCourse: remainingClasses[0] ? { name: remainingClasses[0].course } : (afterLunchClasses[0] ? { name: afterLunchClasses[0].course } : null),
-      academicPrompt: JSON.stringify(academicContext),
+      academicPrompt: JSON.stringify(promptContext),
       privatePrompt: privateBits.join(" "),
       signature: hashText(JSON.stringify({
-        academic: academicContext,
+        academic: signatureContext,
         privateRules: privateBits
       }))
     };
@@ -4834,9 +4887,13 @@
       "dishId: copia apenas o número do prato escolhido."
     ].join("\n");
 
-    var session = await getCanteenAISession(provider, function (progress) {
+    destroyCanteenAISession();
+    var session = await createCanteenAISession(provider, function (progress) {
       canteenAIState.progress = progress;
     });
+    canteenAISession = session;
+    canteenAISessionProviderKind = provider.kind;
+    canteenAISessionUses = 0;
     var schema = {
       type: "object",
       properties: {
@@ -4846,11 +4903,18 @@
       required: ["chefNote", "dishId"]
     };
     var startedAt = performance.now();
+    var promptController = typeof AbortController !== "undefined" ? new AbortController() : null;
+    var promptTimer = promptController ? setTimeout(function () {
+      promptController.abort();
+    }, 30000) : null;
+    canteenAIAbortController = promptController;
     try {
-      var raw = await session.prompt(prompt, {
+      var promptOptions = {
         responseConstraint: schema,
         omitResponseConstraintInput: true
-      });
+      };
+      if (promptController) promptOptions.signal = promptController.signal;
+      var raw = await session.prompt(prompt, promptOptions);
       canteenAISessionUses += 1;
       var parsed = parseCanteenAIJSON(raw);
       var selected = dishes.find(function (item) { return item.id === Number(parsed && parsed.dishId); }) || dishes[0];
@@ -4866,12 +4930,18 @@
       });
       return result;
     } catch (error) {
+      var timedOut = !!(promptController && promptController.signal && promptController.signal.aborted);
       console.warn("[Twenty Cantina AI] geração falhou; nenhuma nota genérica foi publicada", {
         durationMs: Math.round(performance.now() - startedAt),
-        error: error && error.message || String(error)
+        error: error && error.message || String(error),
+        timedOut: timedOut
       });
-      destroyCanteenAISession();
+      if (timedOut) throw new Error("A Chef’s Note demorou demasiado. Tenta novamente.");
       throw error;
+    } finally {
+      if (promptTimer) clearTimeout(promptTimer);
+      canteenAIAbortController = null;
+      destroyCanteenAISession();
     }
   }
   function refreshCanteenAIView() {
@@ -4908,13 +4978,14 @@
 
   async function ensureCanteenAIForCurrentMeal(forceDownload) {
     if (!state || !state.settings.canteenAIEnabled || !canteenMenu || route.name !== "canteen") return;
-    var day = canteenDayForDate(canteenSelectedDate);
+    if (canteenAIPromise) return canteenAIPromise;
+    var requestedDate = canteenSelectedDate;
+    var day = canteenDayForDate(requestedDate);
     var mealType = "lunch";
     var meal = day && asArray(day.meals).find(function (candidate) { return canteenMealType(candidate) === mealType; });
     if (!meal) return;
-    var weather = await ensureCanteenWeather(canteenSelectedDate);
-    var key = canteenAIKey(canteenSelectedDate, mealType, meal, weather);
-    if (canteenAIPromise && canteenAIState.key === key) return canteenAIPromise;
+    var weather = await ensureCanteenWeather(requestedDate);
+    var key = canteenAIKey(requestedDate, mealType, meal, weather);
     if (canteenAIState.key === key && ["ready", "error", "unavailable", "downloadable", "loading"].indexOf(canteenAIState.status) >= 0 && !forceDownload) return;
 
     var fallback = canteenAIFallbackData(meal, weather);
@@ -4932,6 +5003,7 @@
       return;
     }
 
+    canteenAIRequestKey = key;
     canteenAIPromise = (async function () {
       try {
         var availability = "available";
@@ -4959,8 +5031,10 @@
         canteenAIState.progress = 0;
         refreshCanteenAIView();
         var result = await generateCanteenAIData(provider, meal, weather);
-        canteenAIState = { key: key, status: "ready", availability: "available", source: "built-in-ai", data: result, error: "", progress: 100 };
         cache[key] = result;
+        if (canteenSelectedDate === requestedDate && canteenAIRequestKey === key) {
+          canteenAIState = { key: key, status: "ready", availability: "available", source: "built-in-ai", data: result, error: "", progress: 100 };
+        }
         var keys = Object.keys(cache);
         if (keys.length > 24) keys.slice(0, keys.length - 24).forEach(function (oldKey) { delete cache[oldKey]; });
         saveCanteenAICache(cache);
@@ -4968,7 +5042,11 @@
         canteenAIState = { key: key, status: "error", availability: "error", source: "rules", data: fallback, error: error && error.message || "A IA local não conseguiu escrever a nota.", progress: null };
       } finally {
         canteenAIPromise = null;
+        canteenAIRequestKey = "";
         refreshCanteenAIView();
+        if (route.name === "canteen" && canteenSelectedDate !== requestedDate) {
+          setTimeout(function () { ensureCanteenAIForCurrentMeal(false); }, 0);
+        }
       }
     })();
     return canteenAIPromise;
@@ -7958,7 +8036,7 @@
       }, 60000);
       if (!state.profile.onboardingComplete || !state.currentSemesterId || !activeCourses().length) startOnboarding(state.semesters.length ? "new-semester" : "first");
       if ("serviceWorker" in navigator && location.protocol !== "file:") {
-        navigator.serviceWorker.register("sw.js?v=27.2-stable-chef-context", { updateViaCache: "none" }).then(function () {
+        navigator.serviceWorker.register("sw.js?v=27.3-chef-single-run", { updateViaCache: "none" }).then(function () {
           if (Sync && Sync.getStatus().configured) Sync.startAutoSync();
         }).catch(function () {
           if (Sync && Sync.getStatus().configured) Sync.startAutoSync();

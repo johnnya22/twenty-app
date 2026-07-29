@@ -1,16 +1,16 @@
 "use strict";
 
-var CACHE = "twenty-study-os-v27-2-stable-chef-context";
+var CACHE = "twenty-study-os-v27-3-chef-single-run";
 var APP_SHELL = [
   "./",
   "./index.html",
-  "./styles.css?v=27.2-stable-chef-context",
-  "./sync.js?v=27.2-stable-chef-context",
-  "./db.js?v=27.2-stable-chef-context",
-  "./ai.js?v=27.2-stable-chef-context",
-  "./ai-worker.js?v=27.2-stable-chef-context",
-  "./app.js?v=27.2-stable-chef-context",
-  "./lucide.min.js?v=27.2-stable-chef-context",
+  "./styles.css?v=27.3-chef-single-run",
+  "./sync.js?v=27.3-chef-single-run",
+  "./db.js?v=27.3-chef-single-run",
+  "./ai.js?v=27.3-chef-single-run",
+  "./ai-worker.js?v=27.3-chef-single-run",
+  "./app.js?v=27.3-chef-single-run",
+  "./lucide.min.js?v=27.3-chef-single-run",
   "./manifest.webmanifest",
   "./icon.svg",
   "./icon-192.png",

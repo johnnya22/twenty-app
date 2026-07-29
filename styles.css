@@ -3726,3 +3726,8 @@ body[data-route="canteen"] .view-enter { animation: none !important; }
 }
 .campus-chef-note.is-loading .campus-chef-skeleton { display: none; }
 .campus-chef-note.is-loading { animation: none !important; }
+
+
+/* v0.27.3 · One Chef request only. Minute updates change only the OPEN/CLOSED stamp. */
+body[data-route="canteen"] .campus-chef-note.is-loading { opacity: 1 !important; }
+body[data-route="canteen"] .campus-chef-writing { animation: none !important; }
