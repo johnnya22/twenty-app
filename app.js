@@ -39,7 +39,7 @@
   var CANTEEN_PAGE_URL = "https://sas.unl.pt/alimentacao/cantina-da-faculdade-de-ciencias-e-tecnologia-fct/";
   var CANTEEN_INFO_PAGE_URL = "https://sas.unl.pt/alimentacao/";
   var CANTEEN_CACHE_KEY = "twenty-canteen-menu-v2";
-  var CANTEEN_AI_CACHE_KEY = "twenty-canteen-ai-v8-allergen-filters";
+  var CANTEEN_AI_CACHE_KEY = "twenty-canteen-ai-v9-efficient-stream";
   var CANTEEN_WEATHER_CACHE_KEY = "twenty-canteen-weather-v1";
   var CANTEEN_WEATHER_URL = "https://api.open-meteo.com/v1/forecast?latitude=38.661150&longitude=-9.205777&current=temperature_2m,apparent_temperature,precipitation,rain,weather_code,cloud_cover&timezone=Europe%2FLisbon";
   var CANTEEN_DEFAULT_ALLERGENS = {
@@ -4744,6 +4744,30 @@
     return "Não existe nenhuma avaliação confirmada relevante para esta refeição. É proibido mencionar teste, exame, avaliação, prova, apresentação, boa sorte ou último teste.";
   }
 
+  function canteenCompactAcademicContext(dayContext) {
+    var parts = [];
+    if (dayContext && dayContext.nextAssessmentAfterLunch) {
+      var nextTest = dayContext.nextAssessmentAfterLunch;
+      parts.push("teste depois do almoço " + [nextTest.time, nextTest.course, nextTest.title].filter(Boolean).join(" "));
+    } else if (dayContext && dayContext.latestCompletedAssessmentToday) {
+      var completed = dayContext.latestCompletedAssessmentToday;
+      parts.push((dayContext.lastAssessmentOfAcademicPeriod ? "último teste do período já terminou " : "teste de hoje já terminou ") + [completed.time, completed.course, completed.title].filter(Boolean).join(" "));
+    } else {
+      parts.push("sem teste confirmado relevante");
+    }
+    try {
+      var academic = JSON.parse(dayContext && dayContext.academicPrompt || "{}");
+      var remaining = asArray(academic.remainingClasses).slice(0, 5).map(function (entry) {
+        return asArray(entry).filter(Boolean).join(" ");
+      });
+      if (remaining.length) parts.push("aulas restantes " + remaining.join("; "));
+      else parts.push("sem aulas restantes confirmadas");
+    } catch (error) {
+      if (dayContext && dayContext.nextClass) parts.push("próxima aula " + [dayContext.nextClass.start, dayContext.nextClass.course, dayContext.nextClass.title].filter(Boolean).join(" "));
+    }
+    return parts.join(" | ");
+  }
+
   function canteenChefNoteValidate(value, dayContext) {
     var text = canteenChefNoteSanitize(value, "");
     var lower = text.toLowerCase();
@@ -4790,11 +4814,19 @@
       generatedBy: "rules"
     };
   }
-  function parseCanteenAIJSON(value) {
-    var text = String(value || "").trim().replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "");
-    var parsed = JSON.parse(text);
-    if (!parsed || typeof parsed !== "object") throw new Error("Resposta inválida da IA local.");
-    return parsed;
+  function parseCanteenAIResponse(value) {
+    var text = String(value || "").trim().replace(/^```(?:json|text)?\s*/i, "").replace(/\s*```$/, "");
+    if (!text) throw new Error("A IA local não devolveu uma resposta.");
+    if (text.charAt(0) === "{") {
+      var parsedJSON = JSON.parse(text);
+      if (!parsedJSON || typeof parsedJSON !== "object") throw new Error("Resposta inválida da IA local.");
+      return parsedJSON;
+    }
+    var noteMatch = /(?:^|\n)\s*NOTA\s*[:=]\s*([\s\S]*?)(?=\n\s*ID\s*[:=]|$)/i.exec(text);
+    var idMatch = /(?:^|\n)\s*ID\s*[:=]\s*(\d+)/i.exec(text);
+    var note = cleanText(noteMatch && noteMatch[1] || text.replace(/(?:^|\n)\s*ID\s*[:=].*$/im, "").replace(/^\s*NOTA\s*[:=]\s*/i, ""));
+    if (!note) throw new Error("A IA local não devolveu uma Chef’s Note válida.");
+    return { chefNote: note, dishId: idMatch ? Number(idMatch[1]) : null };
   }
 
   function canteenMergeAIStreamChunk(current, chunk) {
@@ -4813,6 +4845,20 @@
 
   function canteenStreamingChefNote(value) {
     var text = String(value || "");
+    var protocolMatch = /(?:^|\n)\s*NOTA\s*[:=]\s*/i.exec(text);
+    if (protocolMatch) {
+      var protocolOutput = text.slice(protocolMatch.index + protocolMatch[0].length).split(/\n\s*ID\s*[:=]/i)[0];
+      return protocolOutput
+        .replace(/[“”"]/g, "")
+        .replace(/[–—]/g, ". ")
+        .replace(/^\s*-\s*/, "")
+        .replace(/\s-\s/g, ". ")
+        .replace(/[\u2600-\u27BF]/g, "")
+        .replace(/[\uD83C-\uDBFF][\uDC00-\uDFFF]/g, "")
+        .replace(/\s{2,}/g, " ")
+        .slice(0, 260)
+        .trim();
+    }
     var match = /"chefNote"\s*:\s*"/.exec(text);
     if (!match) return "";
     var index = match.index + match[0].length;
@@ -4978,12 +5024,14 @@
   async function generateCanteenAIData(provider, meal, weather) {
     var weatherContext = canteenWeatherContext(weather);
     var dayContext = canteenPersonalContext(canteenSelectedDate || todayISO());
-    var dishes = canteenMainItems(meal).filter(canteenItemVisible).map(function (item, index) {
+    var visibleItems = canteenMainItems(meal).filter(canteenItemVisible);
+    var dishes = visibleItems.map(function (item, index) {
       return {
         id: index,
         officialName: cleanText(item.description),
         category: cleanText(item.type || ""),
-        kcal: Number(item.kcal) || null
+        kcal: Number(item.kcal) || null,
+        sourceItem: item
       };
     });
     if (!dishes.length) throw new Error("Sem pratos disponíveis para escrever a Chef’s Note.");
@@ -4991,26 +5039,20 @@
     var compactDishes = dishes.map(function (item) {
       return [item.id, item.officialName, item.category, item.kcal];
     });
-    var contextInstruction = canteenChefContextInstruction(dayContext);
+    var academic = canteenCompactAcademicContext(dayContext);
     var prompt = [
-      "És o chef que preparou as refeições de hoje na Cantina FCT e deixas uma nota privada ao Johnny.",
-      "Fala diretamente com ele. Não escrevas para um grupo. Não comeces por Bom dia, Boa tarde, Olá, Bem-vindos ou Espero que gostem.",
-      "Escolhe um dos pratos e escreve em português europeu como uma pessoa real, sem soar a assistente, publicidade ou relatório.",
-      "A nota deve parecer escrita depois de veres o menu e apenas o contexto académico confirmado abaixo.",
-      contextInstruction,
-      "Se existirem aulas confirmadas, podes usar no máximo um detalhe útil sobre o resto do dia. Não enumeres o horário.",
-      "chefNote: 17 a 30 palavras, uma ou duas frases, primeira pessoa, humana, específica e sem frase introdutória genérica.",
-      "Menciona naturalmente o prato escolhido. Não digas que analisaste dados, recebeste contexto ou sabes preferências.",
-      "Não uses emojis. Podes usar apenas :) uma vez.",
-      "Não uses travessões. Não uses dois pontos dentro da nota.",
-      "As preferências privadas servem apenas para escolher. Nunca as reveles nem expliques a razão privada da escolha.",
-      "Não inventes ingredientes, alergénios, kcal, benefícios de saúde, concentração, energia mental, testes, aulas ou acontecimentos.",
-      "Responde apenas no JSON pedido.",
-      "Contexto académico confirmado: " + dayContext.academicPrompt,
-      "Contexto privado silencioso: " + dayContext.privatePrompt,
-      "Tempo no Campus: " + weatherContext.prompt,
-      "Pratos [id, nome, categoria, kcal]: " + JSON.stringify(compactDishes),
-      "dishId: copia apenas o número do prato escolhido."
+      "És o chef da Cantina FCT e escreves uma nota privada e humana ao Johnny.",
+      "Escolhe um prato da lista. Escreve 14 a 24 palavras em português europeu, uma ou duas frases.",
+      "Menciona o prato naturalmente. Podes usar um detalhe académico apenas quando estiver confirmado.",
+      "Sem emojis, sem travessões, sem dois pontos na nota. Podes usar :) uma vez.",
+      "Nunca digas que conheces gostos ou dados. Nunca inventes testes, aulas, ingredientes, alergénios, kcal ou benefícios.",
+      "Preferências silenciosas para escolher apenas: evitar ervilhas; peixe tem preferência baixa; favorecer opções mais energéticas.",
+      "Contexto confirmado: " + academic,
+      "Tempo: " + weatherContext.prompt,
+      "Pratos [id,nome,tipo,kcal]: " + JSON.stringify(compactDishes),
+      "Responde exatamente em duas linhas. Começa já pela nota para aparecer enquanto escreves:",
+      "NOTA=<texto>",
+      "ID=<número>"
     ].join("\n");
 
     destroyCanteenAISession();
@@ -5020,41 +5062,25 @@
     canteenAISession = session;
     canteenAISessionProviderKind = provider.kind;
     canteenAISessionUses = 0;
-    var schema = {
-      type: "object",
-      properties: {
-        chefNote: { type: "string" },
-        dishId: { type: "integer", enum: dishes.map(function (item) { return item.id; }) }
-      },
-      required: ["chefNote", "dishId"]
-    };
     var startedAt = performance.now();
-    var promptController = typeof AbortController !== "undefined" ? new AbortController() : null;
-    var promptTimer = promptController ? setTimeout(function () {
-      promptController.abort();
-    }, 30000) : null;
-    canteenAIAbortController = promptController;
     try {
-      var promptOptions = {
-        responseConstraint: schema,
-        omitResponseConstraintInput: true
-      };
-      if (promptController) promptOptions.signal = promptController.signal;
       var raw = "";
       var firstChunkAt = 0;
       if (typeof session.promptStreaming === "function") {
-        var stream = session.promptStreaming(prompt, promptOptions);
+        var stream = session.promptStreaming(prompt);
         for await (var chunk of stream) {
           if (!firstChunkAt) firstChunkAt = performance.now();
           raw = canteenMergeAIStreamChunk(raw, chunk);
           updateCanteenAIStreamingNote(raw, dayContext);
         }
       } else {
-        raw = await session.prompt(prompt, promptOptions);
+        raw = await session.prompt(prompt);
       }
       canteenAISessionUses += 1;
-      var parsed = parseCanteenAIJSON(raw);
-      var selected = dishes.find(function (item) { return item.id === Number(parsed && parsed.dishId); }) || dishes[0];
+      var parsed = parseCanteenAIResponse(raw);
+      var weatherChoice = canteenFallbackRecommendedItem(visibleItems, weatherContext);
+      var defaultDish = dishes.find(function (item) { return item.sourceItem === weatherChoice; }) || dishes[0];
+      var selected = dishes.find(function (item) { return item.id === Number(parsed && parsed.dishId); }) || defaultDish;
       var result = normalizeCanteenAIData({
         chefNote: parsed && parsed.chefNote,
         recommendedDish: selected.officialName,
@@ -5063,25 +5089,23 @@
       console.info("[Twenty Cantina AI] geração concluída", {
         firstTextMs: firstChunkAt ? Math.round(firstChunkAt - startedAt) : null,
         durationMs: Math.round(performance.now() - startedAt),
+        promptChars: prompt.length,
         dishes: dishes.length,
         recommendedDish: result.recommendedDish
       });
       return result;
     } catch (error) {
-      var timedOut = !!(promptController && promptController.signal && promptController.signal.aborted);
       console.warn("[Twenty Cantina AI] geração falhou; nenhuma nota genérica foi publicada", {
         durationMs: Math.round(performance.now() - startedAt),
-        error: error && error.message || String(error),
-        timedOut: timedOut
+        error: error && error.message || String(error)
       });
-      if (timedOut) throw new Error("A Chef’s Note demorou demasiado. Tenta novamente.");
       throw error;
     } finally {
-      if (promptTimer) clearTimeout(promptTimer);
       canteenAIAbortController = null;
       destroyCanteenAISession();
     }
   }
+
   function refreshCanteenAIView() {
     if (route.name !== "canteen" || !view) return;
     var day = canteenDayForDate(canteenSelectedDate);
@@ -5212,7 +5236,7 @@
       : canteenAIState.source === "built-in-ai"
         ? "Criada no teu dispositivo. Os alergénios continuam a vir apenas da fonte oficial."
         : "A Twenty não publica uma Chef’s Note genérica quando a IA não responde.";
-    var note = state.settings.canteenAIChefNote && canteenAIState.status === "ready" && data && data.chefNote ? '<blockquote>“' + esc(data.chefNote) + '”</blockquote>' : canteenAIState.status === "loading" ? '<blockquote class="is-loading">A escrever...</blockquote>' : "";
+    var note = state.settings.canteenAIChefNote && canteenAIState.status === "ready" && data && data.chefNote ? '<blockquote>“' + esc(data.chefNote) + '”</blockquote>' : canteenAIState.status === "loading" ? '<blockquote class="is-loading">a escrever...</blockquote>' : "";
     return '<section class="canteen-ai-card"><div class="canteen-ai-mark"><i data-lucide="sparkles"></i></div><div class="canteen-ai-copy"><div class="canteen-ai-title"><span>Chef\'s Note</span><span class="' + status.className + '">' + esc(status.label) + '</span></div>' + note + '<p>' + esc(copy) + '</p>' + progress + '</div>' + action + '</section>';
   }
 
@@ -5668,7 +5692,7 @@
     var jsonCard = '<article class="card settings-card"><div class="card-title-row"><div><p class="card-label">Ficheiro local</p><h3>academic-data.json</h3><p class="card-subtitle">Importação e exportação manual, separada do Git.</p></div><span class="metric-icon"><i data-lucide="braces"></i></span></div><div class="settings-row"><div><strong>Última verificação</strong><small>' + esc(lastCheck) + ' · revisão local ' + (Number(state.meta.revision) || 0) + '</small></div><button class="switch ' + (state.settings.jsonSync ? "is-on" : "") + '" type="button" data-action="toggle-json-sync" aria-label="Ativar sincronização JSON"><span></span></button></div><div class="list-actions"><button class="button button-small" type="button" data-action="reload-json"><i data-lucide="refresh-cw"></i>Reler</button><button class="button button-small" type="button" data-action="export-json"><i data-lucide="download"></i>Exportar</button><button class="button button-small" type="button" data-action="import-json"><i data-lucide="upload"></i>Importar</button></div></article>';
     var storageCard = '<article class="card settings-card"><div class="card-title-row"><div><p class="card-label">Neste dispositivo</p><h3>Armazenamento local</h3><p class="card-subtitle">Documentos, imagens e cache usados por esta instalação.</p></div><span class="metric-icon"><i data-lucide="hard-drive"></i></span></div><div class="settings-row"><div><strong id="storageFileCount">A contar ficheiros…</strong><small>Ficheiros guardados no browser.</small></div><span class="badge badge-mint">Local-first</span></div><button class="button button-small" type="button" data-action="export-json"><i data-lucide="shield-check"></i>Criar backup JSON</button></article>';
     var canteenAIStatus = canteenAIAvailabilityLabel();
-    var canteenAICard = '<article class="card settings-card settings-feature-card"><div class="card-title-row"><div><p class="card-label">Cantina</p><h3>Brilho com IA local</h3><p class="card-subtitle">Chef’s Note contextual, escolha do chef e badges úteis. A ementa, as kcal e os alergénios oficiais nunca são alterados.</p></div><span class="metric-icon"><i data-lucide="sparkles"></i></span></div><div class="settings-row"><div><strong>IA integrada do Chrome</strong><small>Quando não existe, a Twenty não inventa uma Chef’s Note.</small></div><span class="' + canteenAIStatus.className + '">' + esc(canteenAIStatus.label) + '</span></div><div class="settings-toggle-list"><div class="settings-row"><div><strong>Ativar enriquecimento</strong><small>Permite escrever uma Chef’s Note com a IA local. Os badges factuais continuam determinísticos.</small></div><button class="switch ' + (state.settings.canteenAIEnabled ? "is-on" : "") + '" type="button" data-action="toggle-canteen-ai"><span></span></button></div><div class="settings-row"><div><strong>Chef\'s Note</strong><small>Uma nota curta ligada à ementa, ao horário e às avaliações do dia.</small></div><button class="switch ' + (state.settings.canteenAIChefNote ? "is-on" : "") + '" type="button" data-action="toggle-canteen-ai-note"><span></span></button></div><div class="settings-row"><div><strong>Recomendação e badges</strong><small>Mostra a escolha do chef, a opção mais energética e fontes de proteína identificáveis pelo nome.</small></div><button class="switch ' + (state.settings.canteenAIDescriptions ? "is-on" : "") + '" type="button" data-action="toggle-canteen-ai-descriptions"><span></span></button></div></div><div class="list-actions"><button class="button button-dark button-small" type="button" data-route="canteen"><i data-lucide="utensils"></i>Abrir Cantina</button><button class="button button-small" type="button" data-action="canteen-ai-clear-cache"><i data-lucide="eraser"></i>Limpar cache IA</button></div></article>';
+    var canteenAICard = '<article class="card settings-card settings-feature-card"><div class="card-title-row"><div><p class="card-label">Cantina</p><h3>Brilho com IA local</h3><p class="card-subtitle">Chef’s Note contextual, escolha do chef e badges úteis. A ementa, as kcal e os alergénios oficiais nunca são alterados.</p></div><span class="metric-icon"><i data-lucide="sparkles"></i></span></div><div class="settings-row"><div><strong>IA integrada do Chrome</strong><small>Quando não existe, a Twenty não inventa uma Chef’s Note.</small></div><span class="' + canteenAIStatus.className + '">' + esc(canteenAIStatus.label) + '</span></div><div class="settings-toggle-list"><div class="settings-row"><div><strong>Ativar enriquecimento</strong><small>Permite escrever uma Chef’s Note com a IA local. Os badges factuais continuam determinísticos.</small></div><button class="switch ' + (state.settings.canteenAIEnabled ? "is-on" : "") + '" type="button" data-action="toggle-canteen-ai"><span></span></button></div><div class="settings-row"><div><strong>Chef\'s Note</strong><small>Uma nota curta ligada à ementa, ao horário e às avaliações do dia, sem limite automático de tempo.</small></div><button class="switch ' + (state.settings.canteenAIChefNote ? "is-on" : "") + '" type="button" data-action="toggle-canteen-ai-note"><span></span></button></div><div class="settings-row"><div><strong>Recomendação e badges</strong><small>Mostra a escolha do chef, a opção mais energética e fontes de proteína identificáveis pelo nome.</small></div><button class="switch ' + (state.settings.canteenAIDescriptions ? "is-on" : "") + '" type="button" data-action="toggle-canteen-ai-descriptions"><span></span></button></div></div><div class="list-actions"><button class="button button-dark button-small" type="button" data-route="canteen"><i data-lucide="utensils"></i>Abrir Cantina</button><button class="button button-small" type="button" data-action="canteen-ai-clear-cache"><i data-lucide="eraser"></i>Limpar cache IA</button></div></article>';
     var allergenSettings = canteenAllergenSettings();
     var allergenMap = canteenAllergenMap();
     var allergenOptions = Object.keys(CANTEEN_DEFAULT_ALLERGENS).sort(function (a, b) { return Number(a) - Number(b); }).map(function (id) {

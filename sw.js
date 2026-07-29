@@ -1,16 +1,16 @@
 "use strict";
 
-var CACHE = "twenty-study-os-v27-5-allergen-filters";
+var CACHE = "twenty-study-os-v27-6-efficient-chef-stream";
 var APP_SHELL = [
   "./",
   "./index.html",
-  "./styles.css?v=27.5-allergen-filters",
-  "./sync.js?v=27.5-allergen-filters",
-  "./db.js?v=27.5-allergen-filters",
-  "./ai.js?v=27.5-allergen-filters",
-  "./ai-worker.js?v=27.5-allergen-filters",
-  "./app.js?v=27.5-allergen-filters",
-  "./lucide.min.js?v=27.5-allergen-filters",
+  "./styles.css?v=27.6-efficient-chef-stream",
+  "./sync.js?v=27.6-efficient-chef-stream",
+  "./db.js?v=27.6-efficient-chef-stream",
+  "./ai.js?v=27.6-efficient-chef-stream",
+  "./ai-worker.js?v=27.6-efficient-chef-stream",
+  "./app.js?v=27.6-efficient-chef-stream",
+  "./lucide.min.js?v=27.6-efficient-chef-stream",
   "./manifest.webmanifest",
   "./icon.svg",
   "./icon-192.png",

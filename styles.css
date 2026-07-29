@@ -3849,3 +3849,6 @@ body[data-route="canteen"] .campus-chef-writing.has-stream {
   .campus-allergen-hidden-note > span { min-width: calc(100% - 30px); }
   .campus-allergen-hidden-note > button { margin-left: 24px; }
 }
+
+
+/* v0.27.6 · geração Chef mais eficiente, streaming imediato e sem timeout automático */
