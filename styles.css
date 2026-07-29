@@ -3737,3 +3737,115 @@ body[data-route="canteen"] .campus-chef-writing { animation: none !important; }
 body[data-route="canteen"] .campus-chef-writing.has-stream {
   color: var(--campus-ink);
 }
+
+
+/* v0.27.5 · filtros de alergénios */
+.canteen-allergen-settings-card {
+  background: linear-gradient(145deg, #fffaf0, #fffdf8);
+}
+.settings-allergen-summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin: 16px 0 12px;
+}
+.settings-allergen-summary > button {
+  border: 0;
+  background: transparent;
+  color: var(--ink, #211f27);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 750;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  cursor: pointer;
+}
+.settings-allergen-summary > button:disabled {
+  opacity: .35;
+  cursor: default;
+}
+.settings-allergen-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 9px;
+}
+.settings-allergen-option {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: 28px minmax(0, 1fr) 18px;
+  align-items: center;
+  gap: 9px;
+  padding: 10px 11px;
+  border: 1.5px solid rgba(35, 32, 42, .16);
+  border-radius: 14px;
+  background: rgba(255, 255, 255, .72);
+  color: #26232c;
+  text-align: left;
+  cursor: pointer;
+  transition: transform .15s ease, border-color .15s ease, background .15s ease;
+}
+.settings-allergen-option:hover { transform: translateY(-1px); border-color: rgba(117, 103, 242, .5); }
+.settings-allergen-option > span {
+  width: 28px;
+  height: 28px;
+  display: grid;
+  place-items: center;
+  border-radius: 9px;
+  background: #eeeafc;
+  color: #5a4ed1;
+  font-size: 11px;
+  font-weight: 850;
+}
+.settings-allergen-option > strong {
+  min-width: 0;
+  font-size: 12px;
+  line-height: 1.25;
+}
+.settings-allergen-option > svg { width: 16px; height: 16px; opacity: .55; }
+.settings-allergen-option.is-selected {
+  border-color: #5f52d8;
+  background: #eeeafe;
+  box-shadow: 0 0 0 2px rgba(117, 103, 242, .1);
+}
+.settings-allergen-option.is-selected > span { background: #7567f2; color: #fff; }
+.settings-allergen-option.is-selected > svg { opacity: 1; color: #5f52d8; }
+.settings-allergen-note {
+  margin: 13px 0 0;
+  color: #6c6670;
+  font-size: 11px;
+  line-height: 1.45;
+}
+.campus-allergen-hidden-note {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  margin: 0 0 24px;
+  padding: 10px 12px;
+  border: 1px solid rgba(35, 32, 42, .16);
+  border-radius: 14px;
+  background: rgba(255, 247, 184, .55);
+  color: #332f37;
+  font-family: var(--font-body, -apple-system, BlinkMacSystemFont, "SF Pro Text", sans-serif);
+  font-size: 12px;
+}
+.campus-allergen-hidden-note > svg { width: 15px; height: 15px; flex: 0 0 auto; }
+.campus-allergen-hidden-note > span { flex: 1; }
+.campus-allergen-hidden-note > button {
+  border: 0;
+  background: transparent;
+  padding: 0;
+  color: #5a4ed1;
+  font: inherit;
+  font-weight: 800;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  cursor: pointer;
+}
+@media (max-width: 720px) {
+  .settings-allergen-grid { grid-template-columns: 1fr; }
+  .settings-allergen-option { min-height: 48px; }
+  .campus-allergen-hidden-note { align-items: flex-start; flex-wrap: wrap; }
+  .campus-allergen-hidden-note > span { min-width: calc(100% - 30px); }
+  .campus-allergen-hidden-note > button { margin-left: 24px; }
+}

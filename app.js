@@ -39,9 +39,25 @@
   var CANTEEN_PAGE_URL = "https://sas.unl.pt/alimentacao/cantina-da-faculdade-de-ciencias-e-tecnologia-fct/";
   var CANTEEN_INFO_PAGE_URL = "https://sas.unl.pt/alimentacao/";
   var CANTEEN_CACHE_KEY = "twenty-canteen-menu-v2";
-  var CANTEEN_AI_CACHE_KEY = "twenty-canteen-ai-v7-streaming";
+  var CANTEEN_AI_CACHE_KEY = "twenty-canteen-ai-v8-allergen-filters";
   var CANTEEN_WEATHER_CACHE_KEY = "twenty-canteen-weather-v1";
   var CANTEEN_WEATHER_URL = "https://api.open-meteo.com/v1/forecast?latitude=38.661150&longitude=-9.205777&current=temperature_2m,apparent_temperature,precipitation,rain,weather_code,cloud_cover&timezone=Europe%2FLisbon";
+  var CANTEEN_DEFAULT_ALLERGENS = {
+    "1": "Cereais com glúten",
+    "2": "Crustáceos",
+    "3": "Ovo",
+    "4": "Peixe",
+    "5": "Amendoim",
+    "6": "Soja",
+    "7": "Leite",
+    "8": "Frutos de casca rija",
+    "9": "Aipo",
+    "10": "Mostarda",
+    "11": "Sésamo",
+    "12": "Sulfitos",
+    "13": "Tremoço",
+    "14": "Moluscos"
+  };
   var canteenAIState = { key: "", status: "idle", availability: "unknown", source: "rules", data: null, error: "", progress: null, streamText: "" };
   var canteenAIPromise = null;
   var canteenAIAbortController = null;
@@ -698,6 +714,10 @@
         canteenAIEnabled: true,
         canteenAIDescriptions: true,
         canteenAIChefNote: true,
+        canteenAllergenFilters: {
+          selected: [],
+          hideDishes: true
+        },
         canteenFoodPreferences: {
           dislikes: ["ervilhas"],
           lowPreference: ["peixe da cantina"],
@@ -747,6 +767,9 @@
     base.settings.canteenAIEnabled = base.settings.canteenAIEnabled !== false;
     base.settings.canteenAIDescriptions = base.settings.canteenAIDescriptions !== false;
     base.settings.canteenAIChefNote = base.settings.canteenAIChefNote !== false;
+    base.settings.canteenAllergenFilters = Object.assign({ selected: [], hideDishes: true }, base.settings.canteenAllergenFilters || {});
+    base.settings.canteenAllergenFilters.selected = Array.from(new Set(asArray(base.settings.canteenAllergenFilters.selected).map(String).filter(function (id) { return Object.prototype.hasOwnProperty.call(CANTEEN_DEFAULT_ALLERGENS, id); })));
+    base.settings.canteenAllergenFilters.hideDishes = base.settings.canteenAllergenFilters.hideDishes !== false;
     base.settings.canteenFoodPreferences = Object.assign({ dislikes: ["ervilhas"], lowPreference: ["peixe da cantina"], goal: "ganhar peso" }, base.settings.canteenFoodPreferences || {});
     base.settings.canteenFoodPreferences.dislikes = asArray(base.settings.canteenFoodPreferences.dislikes).map(cleanText).filter(Boolean);
     base.settings.canteenFoodPreferences.lowPreference = asArray(base.settings.canteenFoodPreferences.lowPreference).map(cleanText).filter(Boolean);
@@ -1014,6 +1037,34 @@
       return letter;
     });
     return { description: description, allergens: ids };
+  }
+
+  function canteenAllergenSettings() {
+    var raw = state && state.settings && state.settings.canteenAllergenFilters || {};
+    return {
+      selected: Array.from(new Set(asArray(raw.selected).map(String).filter(function (id) { return Object.prototype.hasOwnProperty.call(CANTEEN_DEFAULT_ALLERGENS, id); }))),
+      hideDishes: raw.hideDishes !== false
+    };
+  }
+
+  function canteenAllergenMap() {
+    return Object.assign({}, CANTEEN_DEFAULT_ALLERGENS, canteenMenu && canteenMenu.allergens || {});
+  }
+
+  function canteenItemMatchesSelectedAllergen(item) {
+    var selected = canteenAllergenSettings().selected;
+    if (!selected.length) return false;
+    return asArray(item && item.allergens).map(String).some(function (id) { return selected.indexOf(id) >= 0; });
+  }
+
+  function canteenItemVisible(item) {
+    var settings = canteenAllergenSettings();
+    return !(settings.hideDishes && settings.selected.length && canteenItemMatchesSelectedAllergen(item));
+  }
+
+  function canteenAllergenFilterSignature() {
+    var settings = canteenAllergenSettings();
+    return (settings.hideDishes ? "hide" : "show") + ":" + settings.selected.slice().sort(function (a, b) { return Number(a) - Number(b); }).join(",");
   }
 
   function normalizeCanteenData(payload) {
@@ -4432,7 +4483,7 @@
     var weatherContext = canteenWeatherContext(weather);
     var dayContext = canteenPersonalContext(date);
     var weatherSignature = weatherContext.kind + "-" + (weatherContext.temperature == null ? "x" : Math.round(weatherContext.temperature / 3));
-    return String(date || "") + "-" + String(mealType || "") + "-" + weatherSignature + "-" + hashText(JSON.stringify(compact) + "|" + dayContext.signature);
+    return String(date || "") + "-" + String(mealType || "") + "-" + weatherSignature + "-" + hashText(JSON.stringify(compact) + "|" + dayContext.signature + "|" + canteenAllergenFilterSignature());
   }
   function canteenAIFallbackDish(item) {
     var tone = canteenDishTone(item.type, item.description);
@@ -4722,7 +4773,7 @@
   }
 
   function canteenAIFallbackData(meal, weather) {
-    var items = canteenMainItems(meal);
+    var items = canteenMainItems(meal).filter(canteenItemVisible);
     var weatherContext = canteenWeatherContext(weather);
     var recommended = canteenFallbackRecommendedItem(items, weatherContext);
     var energetic = items.slice().sort(function (a, b) { return (Number(b.kcal) || 0) - (Number(a.kcal) || 0); })[0] || null;
@@ -4927,7 +4978,7 @@
   async function generateCanteenAIData(provider, meal, weather) {
     var weatherContext = canteenWeatherContext(weather);
     var dayContext = canteenPersonalContext(canteenSelectedDate || todayISO());
-    var dishes = canteenMainItems(meal).map(function (item, index) {
+    var dishes = canteenMainItems(meal).filter(canteenItemVisible).map(function (item, index) {
       return {
         id: index,
         officialName: cleanText(item.description),
@@ -5071,6 +5122,11 @@
     var mealType = "lunch";
     var meal = day && asArray(day.meals).find(function (candidate) { return canteenMealType(candidate) === mealType; });
     if (!meal) return;
+    if (!canteenMainItems(meal).some(canteenItemVisible)) {
+      canteenAIState = { key: requestedDate + "|blocked|" + canteenAllergenFilterSignature(), status: "blocked", availability: "available", source: "rules", data: null, error: "Todos os pratos foram escondidos pelos filtros de alergénios.", progress: null, streamText: "" };
+      refreshCanteenAIView();
+      return;
+    }
     var weather = await ensureCanteenWeather(requestedDate);
     var key = canteenAIKey(requestedDate, mealType, meal, weather);
     if (canteenAIState.key === key && ["ready", "error", "unavailable", "downloadable", "loading"].indexOf(canteenAIState.status) >= 0 && !forceDownload) return;
@@ -5327,6 +5383,7 @@
     var soups = items.filter(function (item) { return /sopa|creme|caldo/i.test(String(item.type || "") + " " + String(item.description || "")); });
     var dishes = items.filter(function (item) { return soups.indexOf(item) < 0; });
     var dish = dishes[Number(selection.dishIndex)];
+    if (dish && !canteenItemVisible(dish)) dish = null;
     var dessert = canteenDessertById(selection.dessertId);
     if (!meal || !dish || !dessert) return null;
     var info = canteenMenu.info || {};
@@ -5441,6 +5498,9 @@
     if (readyNote && state.settings.canteenAIChefNote) {
       return '<aside class="campus-chef-note"><h3>Chef’s Note</h3><p>' + esc(readyNote) + '</p></aside>';
     }
+    if (status === "blocked") {
+      return '<aside class="campus-chef-note is-error"><h3>Chef’s Note</h3><div class="campus-chef-status"><span>Não há nenhum prato visível para eu recomendar.</span></div></aside>';
+    }
     if (status === "error" || status === "unavailable") {
       return '<aside class="campus-chef-note is-error"><h3>Chef’s Note</h3><div class="campus-chef-status"><span>Não consegui escrever a nota agora.</span><button type="button" data-action="canteen-ai-prepare">Tentar novamente</button></div></aside>';
     }
@@ -5508,29 +5568,37 @@
     var items = asArray(meal && meal.items);
     var soups = items.filter(function (item) { return /sopa|creme|caldo/i.test(String(item.type || "") + " " + String(item.description || "")); });
     var mainDishes = items.filter(function (item) { return soups.indexOf(item) < 0; });
+    var visibleSoups = visit ? soups : soups.filter(canteenItemVisible);
+    var visibleMainEntries = mainDishes.map(function (item, index) { return { item: item, index: index }; }).filter(function (entry) { return visit || canteenItemVisible(entry.item); });
+    var hiddenCount = visit ? 0 : (soups.length - visibleSoups.length) + (mainDishes.length - visibleMainEntries.length);
     var selection = canteenSelectionFor(date, mealType);
     var selectedDescription = visit && visit.dish && visit.dish.description;
     if (visit && expanded) {
       selection.dishIndex = mainDishes.findIndex(function (item) { return item.description === selectedDescription; });
       selection.dessertId = visit.dessert && visit.dessert.id || "";
+    } else if (selection.dishIndex !== null && !canteenItemVisible(mainDishes[Number(selection.dishIndex)])) {
+      selection.dishIndex = null;
     }
-    var soupLines = soups.length ? soups.map(function (item) { return canteenDishCard(item, menu, { readonly: true }); }).join("") : '<p class="campus-menu-empty">Sem sopa indicada.</p>';
+    var soupLines = visibleSoups.length ? visibleSoups.map(function (item) { return canteenDishCard(item, menu, { readonly: true }); }).join("") : (soups.length ? '<p class="campus-menu-empty">Sopa escondida pelos teus alergénios.</p>' : '<p class="campus-menu-empty">Sem sopa indicada.</p>');
     var veganDividerShown = false;
-    var dishLines = mainDishes.length ? mainDishes.map(function (item, index) {
+    var dishLines = visibleMainEntries.length ? visibleMainEntries.map(function (entry) {
+      var item = entry.item;
+      var index = entry.index;
       var divider = "";
       if (!veganDividerShown && canteenDishTone(item.type, item.description) === "vegetarian") {
         veganDividerShown = true;
         divider = '<div class="campus-menu-subdivider"><span>ALTERNATIVA VEGAN</span></div>';
       }
       return divider + canteenDishCard(item, menu, { interactive: !visit, readonly: !!visit, index: index, selected: visit ? item.description === selectedDescription : (selection.dishIndex !== null && Number(selection.dishIndex) === index) });
-    }).join("") : '<p class="campus-menu-empty">Sem pratos publicados.</p>';
+    }).join("") : (mainDishes.length ? '<p class="campus-menu-empty">As opções deste almoço foram escondidas pelos teus alergénios.</p>' : '<p class="campus-menu-empty">Sem pratos publicados.</p>');
+    var allergenNotice = hiddenCount ? '<div class="campus-allergen-hidden-note"><i data-lucide="eye-off"></i><span>' + hiddenCount + ' ' + (hiddenCount === 1 ? 'opção escondida' : 'opções escondidas') + ' pelos teus alergénios.</span><button type="button" data-route="settings" data-tab="experience">Alterar</button></div>' : "";
     var ready = selection.dishIndex !== null && selection.dishIndex !== "" && Number.isInteger(Number(selection.dishIndex)) && Number(selection.dishIndex) >= 0 && !!selection.dessertId;
     var readonlyActions = visit && expanded
       ? '<div class="campus-readonly-actions"><button type="button" data-action="canteen-open-receipt" data-id="' + attr(visit.id) + '">Ver ticket</button><button type="button" data-action="canteen-collapse-completed" data-key="' + attr(expandKey) + '">Esconder ementa</button></div>'
       : '<button class="campus-order-button" type="button" data-action="canteen-issue-ticket" ' + (ready ? "" : "disabled") + '>Fazer pedido</button>';
 
     return '<div class="campus-dining-columns">' +
-      '<div class="campus-dining-column campus-left-column">' +
+      '<div class="campus-dining-column campus-left-column">' + allergenNotice +
         '<section class="campus-menu-section campus-soups"><header><h3>SOPAS</h3><span>calorias</span></header><div>' + soupLines + '</div></section>' +
         '<section class="campus-menu-section campus-mains"><header><h3>PRATOS</h3><span>calorias</span></header><div>' + dishLines + '</div></section>' +
         '<section class="campus-menu-section campus-drinks"><header><h3>BEBIDAS</h3></header><div class="campus-drink-row">Água</div></section>' +
@@ -5601,6 +5669,14 @@
     var storageCard = '<article class="card settings-card"><div class="card-title-row"><div><p class="card-label">Neste dispositivo</p><h3>Armazenamento local</h3><p class="card-subtitle">Documentos, imagens e cache usados por esta instalação.</p></div><span class="metric-icon"><i data-lucide="hard-drive"></i></span></div><div class="settings-row"><div><strong id="storageFileCount">A contar ficheiros…</strong><small>Ficheiros guardados no browser.</small></div><span class="badge badge-mint">Local-first</span></div><button class="button button-small" type="button" data-action="export-json"><i data-lucide="shield-check"></i>Criar backup JSON</button></article>';
     var canteenAIStatus = canteenAIAvailabilityLabel();
     var canteenAICard = '<article class="card settings-card settings-feature-card"><div class="card-title-row"><div><p class="card-label">Cantina</p><h3>Brilho com IA local</h3><p class="card-subtitle">Chef’s Note contextual, escolha do chef e badges úteis. A ementa, as kcal e os alergénios oficiais nunca são alterados.</p></div><span class="metric-icon"><i data-lucide="sparkles"></i></span></div><div class="settings-row"><div><strong>IA integrada do Chrome</strong><small>Quando não existe, a Twenty não inventa uma Chef’s Note.</small></div><span class="' + canteenAIStatus.className + '">' + esc(canteenAIStatus.label) + '</span></div><div class="settings-toggle-list"><div class="settings-row"><div><strong>Ativar enriquecimento</strong><small>Permite escrever uma Chef’s Note com a IA local. Os badges factuais continuam determinísticos.</small></div><button class="switch ' + (state.settings.canteenAIEnabled ? "is-on" : "") + '" type="button" data-action="toggle-canteen-ai"><span></span></button></div><div class="settings-row"><div><strong>Chef\'s Note</strong><small>Uma nota curta ligada à ementa, ao horário e às avaliações do dia.</small></div><button class="switch ' + (state.settings.canteenAIChefNote ? "is-on" : "") + '" type="button" data-action="toggle-canteen-ai-note"><span></span></button></div><div class="settings-row"><div><strong>Recomendação e badges</strong><small>Mostra a escolha do chef, a opção mais energética e fontes de proteína identificáveis pelo nome.</small></div><button class="switch ' + (state.settings.canteenAIDescriptions ? "is-on" : "") + '" type="button" data-action="toggle-canteen-ai-descriptions"><span></span></button></div></div><div class="list-actions"><button class="button button-dark button-small" type="button" data-route="canteen"><i data-lucide="utensils"></i>Abrir Cantina</button><button class="button button-small" type="button" data-action="canteen-ai-clear-cache"><i data-lucide="eraser"></i>Limpar cache IA</button></div></article>';
+    var allergenSettings = canteenAllergenSettings();
+    var allergenMap = canteenAllergenMap();
+    var allergenOptions = Object.keys(CANTEEN_DEFAULT_ALLERGENS).sort(function (a, b) { return Number(a) - Number(b); }).map(function (id) {
+      var selected = allergenSettings.selected.indexOf(id) >= 0;
+      return '<button class="settings-allergen-option' + (selected ? ' is-selected' : '') + '" type="button" data-action="canteen-toggle-allergen" data-allergen="' + attr(id) + '" aria-pressed="' + selected + '"><span>' + esc(id) + '</span><strong>' + esc(allergenMap[id] || CANTEEN_DEFAULT_ALLERGENS[id]) + '</strong><i data-lucide="' + (selected ? 'check' : 'plus') + '"></i></button>';
+    }).join("");
+    var allergenCountLabel = allergenSettings.selected.length ? allergenSettings.selected.length + ' selecionado' + (allergenSettings.selected.length === 1 ? '' : 's') : 'Nenhum selecionado';
+    var canteenAllergenCard = '<article class="card settings-card canteen-allergen-settings-card"><div class="card-title-row"><div><p class="card-label">Cantina</p><h3>Alergénios</h3><p class="card-subtitle">Escolhe os códigos que queres evitar. A Twenty esconde apenas opções que tenham esses alergénios indicados na ementa oficial.</p></div><span class="metric-icon"><i data-lucide="shield-alert"></i></span></div><div class="settings-row"><div><strong>Esconder opções incompatíveis</strong><small>Também impede a Chef’s Note de recomendar esses pratos.</small></div><button class="switch ' + (allergenSettings.hideDishes ? 'is-on' : '') + '" type="button" data-action="canteen-toggle-hide-allergens" aria-label="Esconder pratos com alergénios selecionados"><span></span></button></div><div class="settings-allergen-summary"><span class="badge ' + (allergenSettings.selected.length ? 'badge-yellow' : 'badge-mint') + '">' + esc(allergenCountLabel) + '</span><button type="button" data-action="canteen-clear-allergens" ' + (allergenSettings.selected.length ? '' : 'disabled') + '>Limpar seleção</button></div><div class="settings-allergen-grid">' + allergenOptions + '</div><p class="settings-allergen-note">O filtro depende dos códigos publicados pela cantina. As sobremesas não são filtradas porque a fonte oficial não publica os respetivos códigos. Confirma sempre a informação com a unidade, sobretudo em casos de alergia grave.</p></article>';
     var motionCard = '<article class="card settings-card"><div class="card-title-row"><div><p class="card-label">Interface</p><h3>Movimento e conforto</h3><p class="card-subtitle">Controla animações sem perder a informação importante.</p></div><span class="metric-icon"><i data-lucide="accessibility"></i></span></div><div class="settings-row"><div><strong>Reduzir movimento</strong><small>Desativa transições e celebrações mais intensas.</small></div><button class="switch ' + (state.settings.reduceMotion ? "is-on" : "") + '" type="button" data-action="toggle-reduce-motion"><span></span></button></div></article>';
     var campusCard = '<article class="card settings-card card-yellow"><div class="card-title-row"><div><p class="card-label">Home</p><h3>Atividade simulada</h3><p class="card-subtitle">Mostra indicadores de presença no campus claramente assinalados como simulação.</p></div><span class="metric-icon"><i data-lucide="users-round"></i></span></div><div class="settings-row"><div><strong>Contador simulado</strong><small>É apenas ambiente visual; não representa utilizadores reais.</small></div><button class="switch ' + (state.settings.campusSimulation ? "is-on" : "") + '" type="button" data-action="toggle-campus"><span></span></button></div></article>';
     var tutorialCard = '<article class="card settings-card"><div class="card-title-row"><div><p class="card-label">Ajuda</p><h3>Aprender a Twenty</h3><p class="card-subtitle">Revê a visita guiada ou testa um dia escolar completo.</p></div><span class="metric-icon"><i data-lucide="map"></i></span></div><div class="list-actions"><button class="button button-dark button-small" type="button" data-action="show-tutorial"><i data-lucide="map"></i>Visita guiada</button><button class="button button-small" type="button" data-action="debug-start-tutorial"><i data-lucide="play"></i>Simular dia</button></div></article>';
@@ -5619,7 +5695,7 @@
       overview: systemCard + profileCard + semesterCard + quickCard,
       academic: profileCard + semesterCard + planningCard + quickCard,
       data: syncCard + jsonCard + storageCard + safetyCard,
-      experience: canteenAICard + motionCard + campusCard + tutorialCard,
+      experience: canteenAICard + canteenAllergenCard + motionCard + campusCard + tutorialCard,
       developer: debugCard + jsonCard + storageCard + safetyCard
     }[section];
     var nav = settingsNavButton("overview", "layout-dashboard", "Visão geral", section) + settingsNavButton("academic", "graduation-cap", "Académico", section) + settingsNavButton("data", "database", "Dados e sync", section) + settingsNavButton("experience", "sparkles", "Experiência", section) + settingsNavButton("developer", "flask-conical", "Laboratório", section);
@@ -7794,6 +7870,31 @@
       clearCanteenAICache();
       render();
       toast("Cache da IA da Cantina limpa.");
+    } else if (action === "canteen-toggle-allergen") {
+      var allergenId = String(button.dataset.allergen || "");
+      if (Object.prototype.hasOwnProperty.call(CANTEEN_DEFAULT_ALLERGENS, allergenId)) {
+        var allergenConfig = state.settings.canteenAllergenFilters || { selected: [], hideDishes: true };
+        var selectedAllergens = asArray(allergenConfig.selected).map(String);
+        if (selectedAllergens.indexOf(allergenId) >= 0) selectedAllergens = selectedAllergens.filter(function (id) { return id !== allergenId; });
+        else selectedAllergens.push(allergenId);
+        state.settings.canteenAllergenFilters = { selected: selectedAllergens, hideDishes: allergenConfig.hideDishes !== false };
+        clearCanteenAICache();
+        await save(true);
+        render();
+      }
+    } else if (action === "canteen-toggle-hide-allergens") {
+      var hideConfig = state.settings.canteenAllergenFilters || { selected: [], hideDishes: true };
+      state.settings.canteenAllergenFilters = { selected: asArray(hideConfig.selected).map(String), hideDishes: hideConfig.hideDishes === false };
+      clearCanteenAICache();
+      await save(true);
+      render();
+    } else if (action === "canteen-clear-allergens") {
+      var clearConfig = state.settings.canteenAllergenFilters || { selected: [], hideDishes: true };
+      state.settings.canteenAllergenFilters = { selected: [], hideDishes: clearConfig.hideDishes !== false };
+      clearCanteenAICache();
+      await save(true);
+      render();
+      toast("Seleção de alergénios limpa.");
     } else if (action === "canteen-day") {
       canteenSelectedDate = button.dataset.date || canteenSelectedDate;
       canteenMealTab = "lunch";
