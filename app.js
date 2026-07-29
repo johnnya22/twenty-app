@@ -78,6 +78,8 @@
   var canteenExpandedCompleted = {};
   var canteenPendingPaymentMethod = "campus";
   var profilePhotoDraft = null;
+  var personalSettingsDraft = null;
+  var lastRenderedRouteKey = "";
   var canteenClockTimer = null;
   var homeClockTimer = null;
   var homeworkClockTimer = null;
@@ -972,6 +974,7 @@
     }).catch(function (error) {
       console.error(error);
       toast("Não foi possível guardar os dados.", "error");
+      throw error;
     });
   }
 
@@ -1368,17 +1371,47 @@
     document.title = title + " · Twenty";
   }
 
+  function routeKey(value) {
+    value = value || route;
+    return [value.name || "home", value.id || "", value.tab || "overview"].join("|");
+  }
+
+  function routeHash(value) {
+    value = value || route;
+    var name = value.name || "home";
+    if (name === "course" || name === "lesson") {
+      return name + (value.id ? "/" + encodeURIComponent(value.id) : "") + (value.tab && value.tab !== "overview" ? "/" + encodeURIComponent(value.tab) : "");
+    }
+    if (name === "settings" || name === "study") {
+      return name + (value.tab && value.tab !== "overview" ? "/" + encodeURIComponent(value.tab) : "");
+    }
+    return name;
+  }
+
+  function parseRouteHash(value) {
+    var parts = String(value || "").replace(/^#\/?/, "").split("/").filter(Boolean).map(function (part) {
+      try { return decodeURIComponent(part); } catch (_) { return part; }
+    });
+    if (!parts.length) return { name: "home", id: null, tab: "overview" };
+    var name = parts[0] || "home";
+    if (name === "course" || name === "lesson") {
+      return { name: name, id: parts[1] || null, tab: parts[2] || "overview" };
+    }
+    if (name === "settings" || name === "study") {
+      return { name: name, id: null, tab: parts[1] || "overview" };
+    }
+    return { name: name, id: null, tab: "overview" };
+  }
+
   function setRoute(name, id, tab) {
     route = { name: name || "home", id: id || null, tab: tab || "overview" };
     render();
-    history.replaceState(null, "", "#" + route.name + (route.id ? "/" + route.id : "") + (route.tab && route.tab !== "overview" ? "/" + route.tab : ""));
+    history.replaceState(null, "", "#" + routeHash(route));
     window.scrollTo({ top: 0, behavior: "smooth" });
   }
 
   function routeFromHash() {
-    var parts = location.hash.replace(/^#/, "").split("/").filter(Boolean);
-    if (!parts.length) return;
-    route = { name: parts[0], id: parts[1] || null, tab: parts[2] || "overview" };
+    route = parseRouteHash(location.hash);
   }
 
   function refreshCanteenClockView() {
@@ -1402,8 +1435,42 @@
     }, 60000 - (Date.now() % 60000) + 250);
   }
 
+  function captureViewFocus() {
+    var active = document.activeElement;
+    if (!active || active === view || !view.contains(active)) return null;
+    var snapshot = {
+      id: active.id || "",
+      name: active.getAttribute && active.getAttribute("name") || "",
+      role: active.getAttribute && active.getAttribute("data-role") || "",
+      start: typeof active.selectionStart === "number" ? active.selectionStart : null,
+      end: typeof active.selectionEnd === "number" ? active.selectionEnd : null
+    };
+    return snapshot.id || snapshot.name || snapshot.role ? snapshot : null;
+  }
+
+  function restoreViewFocus(snapshot) {
+    if (!snapshot) return false;
+    var target = snapshot.id ? document.getElementById(snapshot.id) : null;
+    if (!target && snapshot.name) {
+      target = Array.from(view.querySelectorAll("[name]")).find(function (node) { return node.getAttribute("name") === snapshot.name; }) || null;
+    }
+    if (!target && snapshot.role) {
+      target = Array.from(view.querySelectorAll("[data-role]")).find(function (node) { return node.getAttribute("data-role") === snapshot.role; }) || null;
+    }
+    if (!target || !view.contains(target) || typeof target.focus !== "function") return false;
+    try {
+      target.focus({ preventScroll: true });
+      if (snapshot.start !== null && typeof target.setSelectionRange === "function") target.setSelectionRange(snapshot.start, snapshot.end == null ? snapshot.start : snapshot.end);
+      return true;
+    } catch (_) {
+      return false;
+    }
+  }
+
   function render() {
     if (!state) return;
+    var nextRenderKey = routeKey(route);
+    var focusSnapshot = lastRenderedRouteKey === nextRenderKey ? captureViewFocus() : null;
     revokeImageObjectUrls();
     if (canteenClockTimer) {
       clearTimeout(canteenClockTimer);
@@ -1433,7 +1500,8 @@
     else if (route.name === "settings") html = renderSettings();
     else { route.name = "home"; html = renderHome(); }
     view.innerHTML = '<div class="view-enter">' + html + "</div>";
-    view.focus({ preventScroll: true });
+    lastRenderedRouteKey = nextRenderKey;
+    if (!restoreViewFocus(focusSnapshot)) view.focus({ preventScroll: true });
     refreshIcons(document);
     hydrateLocalImages(view);
     hydrateNotebookImages(view);
@@ -4338,12 +4406,21 @@
     return name.toLowerCase().indexOf("jantar") >= 0 ? "dinner" : "lunch";
   }
 
+  function canteenActiveMealType(day) {
+    var meals = asArray(day && day.meals);
+    var requested = canteenMealTab === "dinner" ? "dinner" : "lunch";
+    if (meals.some(function (meal) { return canteenMealType(meal) === requested; })) return requested;
+    if (meals.some(function (meal) { return canteenMealType(meal) === "lunch"; })) return "lunch";
+    if (meals.some(function (meal) { return canteenMealType(meal) === "dinner"; })) return "dinner";
+    return requested;
+  }
+
   function canteenMealLabel(type) {
     return type === "dinner" ? "Jantar" : "Almoço";
   }
 
-  function canteenMealVerb(type) {
-    return type === "dinner" ? "jantado" : "almoçado";
+  function canteenMealCompletedAction(type) {
+    return type === "dinner" ? "Já jantei" : "Já almocei";
   }
 
   function canteenVisitId(date, mealType) {
@@ -5195,7 +5272,7 @@
 
       var notePrompt = [
         "Agora escreve apenas a Chef’s Note para o prato " + selected.officialName + ".",
-        "Fala em privado com o Johnny como o chef que cozinhou e lhe está a servir o almoço.",
+        "Fala em privado com o Johnny como o chef que cozinhou e lhe está a servir o " + canteenMealLabel(canteenMealType(meal)).toLowerCase() + ".",
         "Escreve 18 a 30 palavras em português europeu. Menciona naturalmente o prato. Usa primeira pessoa.",
         "Soa humano e específico. Não soes a publicidade, crítica de restaurante ou chatbot.",
         "Não escrevas parece excelente, ótimo, aproveita, espero que gostes, bom dia a todos ou frases vazias.",
@@ -5250,7 +5327,8 @@
   function refreshCanteenAIView() {
     if (route.name !== "canteen" || !view) return;
     var day = canteenDayForDate(canteenSelectedDate);
-    var meal = day && asArray(day.meals).find(function (candidate) { return canteenMealType(candidate) === "lunch"; });
+    var mealType = canteenActiveMealType(day);
+    var meal = day && asArray(day.meals).find(function (candidate) { return canteenMealType(candidate) === mealType; });
     if (!meal) return;
     var currentNote = view.querySelector(".campus-chef-note");
     if (currentNote) {
@@ -5284,7 +5362,8 @@
     if (canteenAIPromise) return canteenAIPromise;
     var requestedDate = canteenSelectedDate;
     var day = canteenDayForDate(requestedDate);
-    var mealType = "lunch";
+    var mealType = canteenActiveMealType(day);
+    var requestedMealType = mealType;
     var meal = day && asArray(day.meals).find(function (candidate) { return canteenMealType(candidate) === mealType; });
     if (!meal) return;
     if (!canteenMainItems(meal).some(canteenItemVisible)) {
@@ -5350,12 +5429,27 @@
         saveCanteenAICache(cache);
       } catch (error) {
         var partialData = canteenAIState.data && canteenAIState.data.generatedBy === "built-in-ai" ? canteenAIState.data : fallback;
-        canteenAIState = { key: key, status: "error", availability: "error", source: partialData.generatedBy === "built-in-ai" ? "built-in-ai" : "rules", data: partialData, error: error && error.message || "A IA local não conseguiu escrever a nota.", progress: null, streamText: "" };
+        var partialNote = canteenStreamingChefNote(canteenAIState.streamText || "");
+        var partialContext = canteenPersonalContext(requestedDate || todayISO());
+        var recovered = false;
+        if (partialNote.length >= 24 && canteenStreamingChefNoteAllowed(partialNote, partialContext)) {
+          try {
+            partialData = Object.assign({}, partialData, {
+              chefNote: canteenChefNoteValidate(partialNote, partialContext, partialData.recommendedDish || ""),
+              generatedBy: "built-in-ai"
+            });
+            recovered = true;
+          } catch (_) { recovered = false; }
+        }
+        canteenAIState = recovered
+          ? { key: key, status: "ready", availability: "available", source: "built-in-ai", data: partialData, error: "A geração terminou cedo, mas a nota válida foi preservada.", progress: 100, streamText: "" }
+          : { key: key, status: "error", availability: "error", source: partialData.generatedBy === "built-in-ai" ? "built-in-ai" : "rules", data: partialData, error: error && error.message || "A IA local não conseguiu escrever a nota.", progress: null, streamText: "" };
       } finally {
         canteenAIPromise = null;
         canteenAIRequestKey = "";
         refreshCanteenAIView();
-        if (route.name === "canteen" && canteenSelectedDate !== requestedDate) {
+        var activeDay = canteenDayForDate(canteenSelectedDate);
+        if (route.name === "canteen" && (canteenSelectedDate !== requestedDate || canteenActiveMealType(activeDay) !== requestedMealType)) {
           setTimeout(function () { ensureCanteenAIForCurrentMeal(false); }, 0);
         }
       }
@@ -5575,8 +5669,8 @@
     };
   }
 
-  function canteenStudentCardProfile() {
-    var profile = state && state.profile || {};
+  function canteenStudentCardProfile(override) {
+    var profile = Object.assign({}, state && state.profile || {}, override || {});
     return {
       name: profile.name || "Johnny",
       institution: profile.institution || "NOVA FCT",
@@ -5599,8 +5693,8 @@
     return bars;
   }
 
-  function canteenStudentCardHTML() {
-    var profile = canteenStudentCardProfile();
+  function canteenStudentCardHTML(override) {
+    var profile = canteenStudentCardProfile(override);
     var photo = profile.photoDataUrl
       ? '<img src="' + attr(profile.photoDataUrl) + '" alt="Fotografia de ' + attr(profile.name) + '">'
       : '<span class="campus-student-photo-placeholder">' + esc(initials(profile.name)) + '</span>';
@@ -5717,12 +5811,13 @@
   }
 
   function renderCanteenActiveTicket(visit) {
-    return '<section class="campus-dining-state campus-order-active"><div><small>PEDIDO FEITO</small><h3>O teu ticket está pronto.</h3><p>Quando terminares a refeição, fecha o almoço no teu dia.</p></div>' + canteenReceiptHTML(visit) + '<button class="campus-order-button" type="button" data-action="canteen-finish-meal" data-id="' + attr(visit.id) + '">Já almocei</button></section>';
+    var mealType = visit && visit.mealType === "dinner" ? "dinner" : "lunch";
+    return '<section class="campus-dining-state campus-order-active"><div><small>PEDIDO FEITO</small><h3>O teu ticket está pronto.</h3><p>Quando terminares a refeição, fecha o ' + esc(canteenMealLabel(mealType).toLowerCase()) + ' no teu dia.</p></div>' + canteenReceiptHTML(visit) + '<button class="campus-order-button" type="button" data-action="canteen-finish-meal" data-id="' + attr(visit.id) + '">' + esc(canteenMealCompletedAction(mealType)) + '</button></section>';
   }
   function renderCanteenCompletedCard(visit, expanded) {
     var mealType = visit.mealType || "lunch";
     if (!expanded) {
-      return '<section class="campus-dining-state campus-order-complete"><div><small>ALMOÇO FEITO</small><h3>Refeição concluída.</h3><p>' + esc(visit.dish && visit.dish.description || "Prato escolhido") + ' · ≈ ' + Number(visit.totalKcal || 0) + ' kcal</p></div><div class="campus-state-actions"><button type="button" data-action="canteen-open-receipt" data-id="' + attr(visit.id) + '">Ver ticket</button><button type="button" data-action="canteen-expand-completed" data-key="' + attr(canteenSelectionKey(visit.date, mealType)) + '">Ver ementa</button></div></section>';
+      return '<section class="campus-dining-state campus-order-complete"><div><small>' + esc(canteenMealLabel(mealType).toUpperCase()) + ' FEITO</small><h3>Refeição concluída.</h3><p>' + esc(visit.dish && visit.dish.description || "Prato escolhido") + ' · ≈ ' + Number(visit.totalKcal || 0) + ' kcal</p></div><div class="campus-state-actions"><button type="button" data-action="canteen-open-receipt" data-id="' + attr(visit.id) + '">Ver ticket</button><button type="button" data-action="canteen-expand-completed" data-key="' + attr(canteenSelectionKey(visit.date, mealType)) + '">Ver ementa</button></div></section>';
     }
     return "";
   }
@@ -5799,7 +5894,7 @@
 
   function renderCanteenMeal(meal, menu, options) {
     options = options || {};
-    var mealType = "lunch";
+    var mealType = options.mealType === "dinner" ? "dinner" : "lunch";
     var date = options.date || canteenSelectedDate;
     var visit = canteenVisitFor(date, mealType);
     var expandKey = canteenSelectionKey(date, mealType);
@@ -5837,14 +5932,20 @@
         divider = '<div class="campus-menu-subdivider"><span>ALTERNATIVA VEGAN</span></div>';
       }
       return divider + canteenDishCard(item, menu, { interactive: !visit, readonly: !!visit, index: index, selected: visit ? item.description === selectedDescription : (selection.dishIndex !== null && Number(selection.dishIndex) === index) });
-    }).join("") : (mainDishes.length ? '<p class="campus-menu-empty">As opções deste almoço foram escondidas pelos teus alergénios.</p>' : '<p class="campus-menu-empty">Sem pratos publicados.</p>');
+    }).join("") : (mainDishes.length ? '<p class="campus-menu-empty">As opções deste ' + esc(canteenMealLabel(mealType).toLowerCase()) + ' foram escondidas pelos teus alergénios.</p>' : '<p class="campus-menu-empty">Sem pratos publicados.</p>');
     var allergenNotice = hiddenCount ? '<div class="campus-allergen-hidden-note"><i data-lucide="eye-off"></i><span>' + hiddenCount + ' ' + (hiddenCount === 1 ? 'opção escondida' : 'opções escondidas') + ' pelos teus alergénios.</span><button type="button" data-route="settings" data-tab="canteen">Alterar</button></div>' : "";
     var soupReady = !soups.length || (selection.soupIndex !== null && selection.soupIndex !== "" && Number.isInteger(Number(selection.soupIndex)) && Number(selection.soupIndex) >= 0);
     var dishReady = selection.dishIndex !== null && selection.dishIndex !== "" && Number.isInteger(Number(selection.dishIndex)) && Number(selection.dishIndex) >= 0;
     var ready = soupReady && dishReady && !!selection.dessertId;
+    var selectedSoup = selection.soupIndex === null || selection.soupIndex === "" ? null : soups[Number(selection.soupIndex)];
+    var selectedDish = selection.dishIndex === null || selection.dishIndex === "" ? null : mainDishes[Number(selection.dishIndex)];
+    var selectedDessert = canteenDessertById(selection.dessertId);
+    var requiredCount = soups.length ? 3 : 2;
+    var selectedCount = (soups.length ? (selectedSoup ? 1 : 0) : 0) + (selectedDish ? 1 : 0) + (selectedDessert ? 1 : 0);
+    var selectionProgress = visit ? "" : '<div class="campus-order-progress" aria-live="polite"><div><strong>' + selectedCount + '/' + requiredCount + ' escolhidos</strong><span>' + (ready ? 'Pedido pronto para confirmar.' : 'Escolhe ' + (soups.length && !selectedSoup ? 'a sopa' : !selectedDish ? 'o prato' : 'a sobremesa') + '.') + '</span></div><ol>' + (soups.length ? '<li class="' + (selectedSoup ? 'is-done' : '') + '"><i data-lucide="' + (selectedSoup ? 'check' : 'soup') + '"></i><span>Sopa<small>' + esc(selectedSoup && selectedSoup.description || 'Por escolher') + '</small></span></li>' : '') + '<li class="' + (selectedDish ? 'is-done' : '') + '"><i data-lucide="' + (selectedDish ? 'check' : 'utensils') + '"></i><span>Prato<small>' + esc(selectedDish && selectedDish.description || 'Por escolher') + '</small></span></li><li class="' + (selectedDessert ? 'is-done' : '') + '"><i data-lucide="' + (selectedDessert ? 'check' : 'ice-cream-bowl') + '"></i><span>Sobremesa<small>' + esc(selectedDessert && selectedDessert.label || 'Por escolher') + '</small></span></li></ol></div>';
     var readonlyActions = visit && expanded
       ? '<div class="campus-readonly-actions"><button type="button" data-action="canteen-open-receipt" data-id="' + attr(visit.id) + '">Ver ticket</button><button type="button" data-action="canteen-collapse-completed" data-key="' + attr(expandKey) + '">Esconder ementa</button></div>'
-      : '<button class="campus-order-button" type="button" data-action="canteen-issue-ticket" ' + (ready ? "" : "disabled") + '>Fazer pedido</button>';
+      : selectionProgress + '<button class="campus-order-button" type="button" data-action="canteen-issue-ticket" ' + (ready ? "" : "disabled") + '>Fazer pedido</button>';
 
     return '<div class="campus-dining-columns">' +
       '<div class="campus-dining-column campus-left-column">' + allergenNotice +
@@ -5877,15 +5978,18 @@
       var bestDay = days.find(function (day) { return day.date === now.iso; }) || days.find(function (day) { return day.date >= now.iso; }) || days[days.length - 1];
       canteenSelectedDate = bestDay ? bestDay.date : "";
     }
-    canteenMealTab = "lunch";
     var selected = days.find(function (day) { return day.date === canteenSelectedDate; }) || days[0];
     var selectedIsToday = selected && selected.date === now.iso;
     var meals = selected ? asArray(selected.meals) : [];
-    var lunch = meals.find(function (meal) { return canteenMealType(meal) === "lunch"; });
+    var activeMealType = canteenActiveMealType(selected);
+    canteenMealTab = activeMealType;
+    var activeMeal = meals.find(function (meal) { return canteenMealType(meal) === activeMealType; });
+    var mealTypes = ["lunch", "dinner"].filter(function (type) { return meals.some(function (meal) { return canteenMealType(meal) === type; }); });
+    var mealTabs = mealTypes.length > 1 ? '<div class="campus-meal-tabs" role="tablist" aria-label="Refeição"><button type="button" role="tab" data-action="canteen-meal-tab" data-meal="lunch" aria-selected="' + (activeMealType === 'lunch') + '" class="' + (activeMealType === 'lunch' ? 'is-active' : '') + '">Almoço <small>' + esc(hours.lunch.start) + '–' + esc(hours.lunch.end) + '</small></button><button type="button" role="tab" data-action="canteen-meal-tab" data-meal="dinner" aria-selected="' + (activeMealType === 'dinner') + '" class="' + (activeMealType === 'dinner' ? 'is-active' : '') + '">Jantar <small>' + esc(hours.dinner.start) + '–' + esc(hours.dinner.end) + '</small></button></div>' : '';
     var statusLabel = selectedIsToday ? (service.open ? "ABERTO" : "FECHADO") : "EMENTA";
-    var body = lunch
-      ? renderCanteenMeal(lunch, canteenMenu, { date: selected.date, hours: hours, service: service, selectedIsToday: selectedIsToday })
-      : '<div class="campus-dining-state"><div><small>SEM ALMOÇO</small><h3>Não há ementa publicada para este dia.</h3><p>Consulta outro dia no botão de informação.</p></div></div>';
+    var body = activeMeal
+      ? mealTabs + renderCanteenMeal(activeMeal, canteenMenu, { date: selected.date, mealType: activeMealType, hours: hours, service: service, selectedIsToday: selectedIsToday })
+      : '<div class="campus-dining-state"><div><small>SEM EMENTA</small><h3>Não há refeição publicada para este dia.</h3><p>Consulta outro dia no botão de informação.</p></div></div>';
     return '<section class="campus-dining-page campus-theme-' + attr(canteenTheme) + '">' +
       '<header class="campus-dining-hero"><div class="campus-dining-brand"><h2>CAMPUS<br>DINING</h2><p>DINE IN CAFETERIA</p></div><div class="campus-dining-stamp ' + (service.open && selectedIsToday ? 'is-open' : '') + '">' + esc(statusLabel) + '</div><button class="campus-dining-info" type="button" data-action="canteen-open-info" aria-label="Informação da cantina">i</button></header>' +
       body +
@@ -5905,19 +6009,50 @@
     return profilePhotoDraft === null ? (state.profile.photoDataUrl || "") : profilePhotoDraft;
   }
 
+  function personalSettingsValues() {
+    return Object.assign({}, state.profile || {}, personalSettingsDraft || {});
+  }
+
+  function capturePersonalSettingsDraft(form) {
+    if (!form) return;
+    var data = new FormData(form);
+    personalSettingsDraft = {
+      name: String(data.get("name") || ""),
+      institution: String(data.get("institution") || ""),
+      degree: String(data.get("degree") || ""),
+      studentNumber: String(data.get("studentNumber") || ""),
+      academicYear: String(data.get("academicYear") || ""),
+      validUntil: String(data.get("validUntil") || ""),
+      birthDate: String(data.get("birthDate") || ""),
+      paymentMethod: data.get("paymentMethod") === "other" ? "other" : "campus",
+      targetGrade: String(data.get("targetGrade") || "")
+    };
+  }
+
+  function markPersonalSettingsDirty(form) {
+    capturePersonalSettingsDraft(form);
+    var status = form && form.querySelector('[data-role="personal-save-status"]');
+    if (status) {
+      status.textContent = "Alterações por guardar.";
+      status.classList.add("is-dirty");
+    }
+  }
+
   function renderPersonalSettingsCard() {
-    var profile = canteenStudentCardProfile();
+    var values = personalSettingsValues();
     var photoValue = personalSettingsPhotoValue();
+    var previewValues = Object.assign({}, values, { photoDataUrl: photoValue });
+    var profile = canteenStudentCardProfile(previewValues);
     var photoPreview = photoValue
       ? '<img src="' + attr(photoValue) + '" alt="Pré-visualização da fotografia">'
-      : '<span>' + esc(initials(state.profile.name || "Twenty")) + '</span>';
+      : '<span>' + esc(initials(values.name || state.profile.name || "Twenty")) + '</span>';
     return '<form id="personalSettingsForm" class="card settings-card settings-profile-editor-card" autocomplete="on">' +
       '<div class="settings-profile-title"><div><p class="card-label">Dados pessoais</p><h3>Identificação académica</h3><p class="card-subtitle">Edita tudo aqui sem abrir outro menu. As alterações só são guardadas quando carregas em Guardar dados.</p></div><span class="metric-icon"><i data-lucide="id-card"></i></span></div>' +
       '<div class="settings-profile-photo-row"><div id="settingsProfilePhotoPreview" class="profile-photo-preview">' + photoPreview + '</div><div><label class="profile-photo-button"><i data-lucide="camera"></i><span>Escolher fotografia</span><input id="settingsProfilePhotoInput" type="file" accept="image/jpeg,image/png,image/webp" hidden></label><button class="profile-photo-remove" type="button" data-action="settings-remove-profile-photo">Remover fotografia</button><small>A imagem é reduzida no browser antes de ser guardada.</small></div></div>' +
-      '<div class="settings-profile-fields"><div class="field field-full"><label>Nome completo</label><input name="name" required value="' + attr(state.profile.name || "") + '" placeholder="O teu nome"></div><div class="field"><label>Instituição</label><input name="institution" value="' + attr(state.profile.institution || "NOVA FCT") + '"></div><div class="field"><label>Curso</label><input name="degree" value="' + attr(state.profile.degree || "Engenharia Informática") + '"></div><div class="field"><label>Número de estudante</label><input name="studentNumber" inputmode="numeric" value="' + attr(state.profile.studentNumber || "") + '" placeholder="Ex. 65432"></div><div class="field"><label>Ano letivo</label><input name="academicYear" value="' + attr(state.profile.academicYear || "2026/2027") + '" placeholder="2026/2027"></div><div class="field"><label>Válido até</label><input name="validUntil" value="' + attr(state.profile.validUntil || "") + '" placeholder="09/2027"></div><div class="field"><label>Data de nascimento</label><input name="birthDate" type="date" value="' + attr(state.profile.birthDate || "") + '"></div><div class="field"><label>Pagamento preferido</label><select name="paymentMethod"><option value="campus" ' + (state.profile.paymentMethod !== "other" ? "selected" : "") + '>Cartão Campus</option><option value="other" ' + (state.profile.paymentMethod === "other" ? "selected" : "") + '>Outro</option></select></div><div class="field"><label>Meta académica</label><input name="targetGrade" type="number" min="0" max="20" step="0.1" value="' + attr(state.profile.targetGrade || 20) + '"></div></div>' +
-      '<div class="settings-profile-actions"><span data-role="personal-save-status">As alterações ainda não foram guardadas.</span><button class="button button-dark" type="button" data-action="save-personal-settings"><i data-lucide="save"></i>Guardar dados</button></div>' +
+      '<div class="settings-profile-fields"><div class="field field-full"><label>Nome completo</label><input name="name" required value="' + attr(values.name || "") + '" placeholder="O teu nome"></div><div class="field"><label>Instituição</label><input name="institution" value="' + attr(values.institution || "NOVA FCT") + '"></div><div class="field"><label>Curso</label><input name="degree" value="' + attr(values.degree || "Engenharia Informática") + '"></div><div class="field"><label>Número de estudante</label><input name="studentNumber" inputmode="numeric" value="' + attr(values.studentNumber || "") + '" placeholder="Ex. 65432"></div><div class="field"><label>Ano letivo</label><input name="academicYear" value="' + attr(values.academicYear || "2026/2027") + '" placeholder="2026/2027"></div><div class="field"><label>Válido até</label><input name="validUntil" value="' + attr(values.validUntil || "") + '" placeholder="09/2027"></div><div class="field"><label>Data de nascimento</label><input name="birthDate" type="date" value="' + attr(values.birthDate || "") + '"></div><div class="field"><label>Pagamento preferido</label><select name="paymentMethod"><option value="campus" ' + (values.paymentMethod !== "other" ? "selected" : "") + '>Cartão Campus</option><option value="other" ' + (values.paymentMethod === "other" ? "selected" : "") + '>Outro</option></select></div><div class="field"><label>Meta académica</label><input name="targetGrade" type="number" min="0" max="20" step="0.1" value="' + attr(values.targetGrade === "" ? "" : (values.targetGrade == null ? 20 : values.targetGrade)) + '"></div></div>' +
+      '<div class="settings-profile-actions"><span data-role="personal-save-status" class="' + ((personalSettingsDraft || profilePhotoDraft !== null) ? 'is-dirty' : '') + '">' + ((personalSettingsDraft || profilePhotoDraft !== null) ? 'Alterações por guardar.' : 'Dados guardados neste dispositivo.') + '</span><button class="button button-dark" type="button" data-action="save-personal-settings"><i data-lucide="save"></i>Guardar dados</button></div>' +
     '</form>' +
-    '<article class="card settings-card settings-profile-preview-card"><div class="card-title-row"><div><p class="card-label">Pré-visualização</p><h3>Cartão Campus</h3><p class="card-subtitle">É este cartão que aparece no momento de confirmar o pedido.</p></div><span class="metric-icon"><i data-lucide="badge-check"></i></span></div><div class="settings-profile-live-preview">' + canteenStudentCardHTML() + '</div><div class="settings-personal-meta"><span><i data-lucide="graduation-cap"></i>' + esc(profile.degree) + '</span><span><i data-lucide="hash"></i>' + esc(profile.studentNumber) + '</span><span><i data-lucide="calendar-range"></i>' + esc(profile.academicYear) + '</span></div></article>';
+    '<article class="card settings-card settings-profile-preview-card"><div class="card-title-row"><div><p class="card-label">Pré-visualização</p><h3>Cartão Campus</h3><p class="card-subtitle">É este cartão que aparece no momento de confirmar o pedido.</p></div><span class="metric-icon"><i data-lucide="badge-check"></i></span></div><div class="settings-profile-live-preview">' + canteenStudentCardHTML(previewValues) + '</div><div class="settings-personal-meta"><span><i data-lucide="graduation-cap"></i>' + esc(profile.degree) + '</span><span><i data-lucide="hash"></i>' + esc(profile.studentNumber) + '</span><span><i data-lucide="calendar-range"></i>' + esc(profile.academicYear) + '</span></div></article>';
   }
 
   function renderSettings() {
@@ -7668,7 +7803,7 @@
     var exists = state.tasks.some(function (task) { return !task.done && task.lessonId === lessonId && task.type === "review"; });
     if (exists) { toast("Esta revisão já está na agenda.", "warning"); return; }
     state.tasks.push({ id: uid("task"), semesterId: state.currentSemesterId, courseId: courseId || null, lessonId: lessonId || null, title: title, type: "review", dueDate: todayISO(tomorrow), dueTime: "18:00", priority: "normal", done: false, createdAt: new Date().toISOString() });
-    save(true).then(function () { render(); toast("“" + title + "” adicionada para amanhã."); });
+    save(true).then(function () { render(); toast("“" + title + "” adicionada para amanhã."); }).catch(function () {});
   }
 
   function buildSearchIndex() {
@@ -8093,14 +8228,18 @@
       state.profile.validUntil = String(personalData.get("validUntil") || "").trim();
       state.profile.birthDate = String(personalData.get("birthDate") || "").trim();
       state.profile.paymentMethod = personalData.get("paymentMethod") === "other" ? "other" : "campus";
-      state.profile.targetGrade = clamp(personalData.get("targetGrade"), 0, 20) || 20;
+      var personalTargetGrade = Number(personalData.get("targetGrade"));
+      state.profile.targetGrade = Number.isFinite(personalTargetGrade) ? clamp(personalTargetGrade, 0, 20) : 20;
       if (profilePhotoDraft !== null) state.profile.photoDataUrl = profilePhotoDraft || "";
-      profilePhotoDraft = null;
       await save(true);
+      profilePhotoDraft = null;
+      personalSettingsDraft = null;
       render();
       toast("Dados pessoais guardados.");
     } else if (action === "settings-remove-profile-photo") {
       profilePhotoDraft = "";
+      var settingsProfileForm = document.getElementById("personalSettingsForm");
+      markPersonalSettingsDirty(settingsProfileForm);
       var settingsProfilePreview = document.getElementById("settingsProfilePhotoPreview");
       if (settingsProfilePreview) settingsProfilePreview.innerHTML = '<span>' + esc(initials((document.querySelector('#personalSettingsForm [name="name"]') || {}).value || state.profile.name || "Twenty")) + '</span>';
     } else if (action === "profile-remove-photo") {
@@ -8222,7 +8361,7 @@
       toast("Seleção de alergénios limpa.");
     } else if (action === "canteen-day") {
       canteenSelectedDate = button.dataset.date || canteenSelectedDate;
-      canteenMealTab = "lunch";
+      canteenMealTab = null;
       if (modalRoot && modalRoot.innerHTML) closeModal();
       render();
     } else if (action === "canteen-meal-tab") {
@@ -8507,7 +8646,7 @@
       closeModal();
       if (routeButton.getAttribute("data-route") === "planner" && routeButton.dataset.plannerView) {
         state.settings.plannerView = ["schedule", "calendar", "study-day"].indexOf(routeButton.dataset.plannerView) >= 0 ? routeButton.dataset.plannerView : "calendar";
-        save(true);
+        save(true).catch(function () {});
       }
       setRoute(routeButton.getAttribute("data-route"), routeButton.dataset.id || null, routeButton.dataset.tab || "overview");
       return;
@@ -8564,12 +8703,12 @@
       beOnlineTimer = setInterval(function () {
         if (!state || onboarding || (homeDebug && homeDebug.active)) return;
         if (ensureBeOnlineTasks()) {
-          save(true).then(function () { render(); toast("A aula terminou: o quiz de revisão está pronto."); });
+          save(true).then(function () { render(); toast("A aula terminou: o quiz de revisão está pronto."); }).catch(function () {});
         }
       }, 60000);
       if (!state.profile.onboardingComplete || !state.currentSemesterId || !activeCourses().length) startOnboarding(state.semesters.length ? "new-semester" : "first");
       if ("serviceWorker" in navigator && location.protocol !== "file:") {
-        navigator.serviceWorker.register("sw.js?v=28.0-settings-canteen-theme", { updateViaCache: "none" }).then(function () {
+        navigator.serviceWorker.register("sw.js?v=28.1-core-flow-stability", { updateViaCache: "none" }).then(function () {
           if (Sync && Sync.getStatus().configured) Sync.startAutoSync();
         }).catch(function () {
           if (Sync && Sync.getStatus().configured) Sync.startAutoSync();
@@ -8587,6 +8726,12 @@
     }
   }
 
+  window.addEventListener("beforeunload", function (event) {
+    if (!personalSettingsDraft && profilePhotoDraft === null) return;
+    event.preventDefault();
+    event.returnValue = "";
+  });
+
   document.addEventListener("click", handleDocumentClick);
   document.addEventListener("submit", function (event) {
     if (event.target.id !== "personalSettingsForm") return;
@@ -8602,8 +8747,13 @@
         profilePhotoDraft = dataUrl;
         var settingsPreview = document.getElementById("settingsProfilePhotoPreview");
         if (settingsPreview) settingsPreview.innerHTML = '<img src="' + attr(dataUrl) + '" alt="Pré-visualização da fotografia">';
+        markPersonalSettingsDirty(document.getElementById("personalSettingsForm"));
       }).catch(function (error) { toast(error.message || "Não foi possível preparar a fotografia.", "error"); });
       event.target.value = "";
+      return;
+    }
+    if (event.target.closest && event.target.closest("#personalSettingsForm")) {
+      markPersonalSettingsDirty(event.target.closest("#personalSettingsForm"));
       return;
     }
     if (event.target === pptxInput) {
@@ -8617,9 +8767,13 @@
     }
     if (!event.target.matches('[data-role="study-plan-date"]')) return;
     state.settings.studyPlanDate = event.target.value || todayISO();
-    save(true).then(render);
+    save(true).then(render).catch(function () {});
   });
   document.addEventListener("input", function (event) {
+    if (event.target.closest && event.target.closest("#personalSettingsForm")) {
+      markPersonalSettingsDirty(event.target.closest("#personalSettingsForm"));
+      return;
+    }
     if (!event.target.matches('[data-role="ai-question-range"]')) return;
     var output = document.getElementById("aiQuestionCountOutput");
     if (output) output.textContent = event.target.value;
@@ -8678,7 +8832,7 @@
     block.date = state.settings.studyPlanDate || todayISO();
     block.start = minutesToTime(newStart);
     block.end = minutesToTime(newEnd);
-    save(true).then(render);
+    save(true).then(render).catch(function () {});
   });
 
   function resizeProfilePhoto(file) {

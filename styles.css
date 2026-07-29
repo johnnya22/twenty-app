@@ -4401,3 +4401,113 @@ body[data-route="canteen"][data-canteen-theme="night"] .campus-info-meal-list > 
   .settings-profile-actions .button { width: 100%; }
   .campus-info-theme { align-items: flex-start; }
 }
+
+
+/* =========================================================
+   Twenty v0.28.1 · Core Flow Stability
+   Routing, unsaved profile data and canteen meal feedback.
+   ========================================================= */
+.settings-profile-actions > span.is-dirty { color: #7a4f00; }
+.settings-profile-actions > span.is-dirty::before {
+  content: "";
+  width: 7px;
+  height: 7px;
+  display: inline-block;
+  margin-right: 7px;
+  border-radius: 50%;
+  background: #e7a722;
+  vertical-align: 1px;
+}
+.campus-meal-tabs {
+  grid-column: 1 / -1;
+  width: fit-content;
+  display: inline-flex;
+  gap: 5px;
+  margin: -12px 0 34px;
+  padding: 5px;
+  border: 1.5px solid var(--campus-ink);
+  border-radius: 13px;
+}
+.campus-meal-tabs button {
+  min-width: 132px;
+  min-height: 46px;
+  display: grid;
+  place-items: center;
+  gap: 1px;
+  padding: 6px 16px;
+  border: 0;
+  border-radius: 8px;
+  color: var(--campus-ink);
+  background: transparent;
+  font-size: 15px;
+  font-weight: 800;
+  cursor: pointer;
+}
+.campus-meal-tabs button small { font-size: 10px; font-weight: 650; opacity: .62; }
+.campus-meal-tabs button.is-active { color: var(--campus-paper); background: var(--campus-ink); }
+.campus-order-progress {
+  display: grid;
+  gap: 14px;
+  margin-top: 38px;
+  padding: 15px 16px;
+  border: 1.5px solid var(--campus-ink);
+  border-radius: 14px;
+}
+.campus-order-progress > div {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+}
+.campus-order-progress > div strong { font-size: 14px; }
+.campus-order-progress > div span { font-size: 11px; opacity: .68; text-align: right; }
+.campus-order-progress ol {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 7px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.campus-order-progress li {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: 20px minmax(0, 1fr);
+  gap: 7px;
+  align-items: center;
+  padding: 8px;
+  border: 1px dashed rgba(5,5,5,.34);
+  border-radius: 9px;
+  opacity: .62;
+}
+.campus-order-progress li.is-done { border-style: solid; opacity: 1; }
+.campus-order-progress li svg { width: 18px; height: 18px; }
+.campus-order-progress li span {
+  min-width: 0;
+  display: grid;
+  gap: 1px;
+  font-size: 11px;
+  font-weight: 800;
+}
+.campus-order-progress li small {
+  overflow: hidden;
+  font-size: 9px;
+  font-weight: 600;
+  opacity: .62;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.campus-order-progress + .campus-order-button { margin-top: 18px; }
+body[data-route="canteen"][data-canteen-theme="night"] .campus-meal-tabs button.is-active {
+  color: #111217;
+  background: #f8f5ef;
+}
+body[data-route="canteen"][data-canteen-theme="night"] .campus-order-progress li { border-color: rgba(255,255,255,.34); }
+@media (max-width: 720px) {
+  .campus-meal-tabs { width: 100%; margin: -6px 0 24px; }
+  .campus-meal-tabs button { min-width: 0; flex: 1; }
+  .campus-order-progress { margin-top: 24px; }
+  .campus-order-progress > div { align-items: flex-start; flex-direction: column; gap: 3px; }
+  .campus-order-progress > div span { text-align: left; }
+  .campus-order-progress ol { grid-template-columns: 1fr; }
+}

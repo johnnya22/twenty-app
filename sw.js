@@ -1,16 +1,16 @@
 "use strict";
 
-var CACHE = "twenty-study-os-v28-0-settings-canteen-theme";
+var CACHE = "twenty-study-os-v28-1-core-flow-stability";
 var APP_SHELL = [
   "./",
   "./index.html",
-  "./styles.css?v=28.0-settings-canteen-theme",
-  "./sync.js?v=28.0-settings-canteen-theme",
-  "./db.js?v=28.0-settings-canteen-theme",
-  "./ai.js?v=28.0-settings-canteen-theme",
-  "./ai-worker.js?v=28.0-settings-canteen-theme",
-  "./app.js?v=28.0-settings-canteen-theme",
-  "./lucide.min.js?v=28.0-settings-canteen-theme",
+  "./styles.css?v=28.1-core-flow-stability",
+  "./sync.js?v=28.1-core-flow-stability",
+  "./db.js?v=28.1-core-flow-stability",
+  "./ai.js?v=28.1-core-flow-stability",
+  "./ai-worker.js?v=28.1-core-flow-stability",
+  "./app.js?v=28.1-core-flow-stability",
+  "./lucide.min.js?v=28.1-core-flow-stability",
   "./manifest.webmanifest",
   "./icon.svg",
   "./icon-192.png",
