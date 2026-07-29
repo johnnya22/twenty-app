@@ -4237,3 +4237,167 @@ body[data-route="canteen"] .campus-chef-writing.has-stream {
   .profile-photo-remove { width: min(100%, 260px); }
 }
 .diner-ticket-payment { margin: 9px 0 0; text-align: center; font-size: .58rem; font-weight: 800; text-transform: uppercase; letter-spacing: .05em; }
+
+
+/* =========================================================
+   Twenty v0.28.0 · Settings reorganized + Canteen theme
+   ========================================================= */
+
+/* Inline personal editor. No modal, so typing can never dismiss the form. */
+.settings-profile-editor-card,
+.settings-profile-preview-card {
+  min-height: 0;
+}
+.settings-profile-editor-card {
+  display: grid;
+  gap: 18px;
+  align-content: start;
+}
+.settings-profile-title {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+.settings-profile-title h3 { margin: 4px 0 5px; font-size: 1.25rem; }
+.settings-profile-photo-row {
+  display: grid;
+  grid-template-columns: 150px minmax(0, 1fr);
+  gap: 16px;
+  align-items: center;
+  padding: 15px;
+  border: 1px solid rgba(24,25,31,.08);
+  border-radius: 20px;
+  background: linear-gradient(135deg, #f7f4ff, #fffdf0);
+}
+.settings-profile-photo-row .profile-photo-preview { width: 145px; }
+.settings-profile-photo-row > div:last-child { display: grid; gap: 9px; align-content: center; }
+.settings-profile-photo-row small { color: var(--muted); font-size: .56rem; font-weight: 650; line-height: 1.4; }
+.settings-profile-fields {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 13px;
+}
+.settings-profile-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  padding-top: 4px;
+}
+.settings-profile-actions > span { color: var(--muted); font-size: .57rem; font-weight: 700; }
+.settings-profile-preview-card {
+  display: grid;
+  align-content: start;
+  gap: 16px;
+  overflow: hidden;
+  background: linear-gradient(145deg, #fff, #f5f2ff 72%, #fff8ce);
+}
+.settings-profile-live-preview .campus-student-card { width: 100%; }
+.settings-profile-preview-card .settings-personal-meta { margin-top: 0; }
+
+/* Dedicated canteen settings preview. */
+.canteen-theme-settings-card { background: linear-gradient(145deg, #fff, #f2efff); }
+.canteen-theme-preview {
+  min-height: 112px;
+  position: relative;
+  overflow: hidden;
+  display: grid;
+  grid-template-columns: 1fr auto;
+  align-items: end;
+  gap: 12px;
+  margin-top: 14px;
+  padding: 16px;
+  border: 2px solid #080808;
+  border-radius: 16px;
+  color: #080808;
+  background: #f8f7fb;
+}
+.canteen-theme-preview b,
+.canteen-theme-preview span { position: relative; z-index: 1; }
+.canteen-theme-preview b { max-width: 150px; font-family: "Londrina Solid", Impact, sans-serif; font-size: 31px; line-height: .8; }
+.canteen-theme-preview span { font-family: "Swanky and Moo Moo", cursive; font-size: 21px; }
+.canteen-theme-preview i { position: absolute; right: 22%; top: 18px; width: 90px; height: 42px; border: 2px solid currentColor; border-radius: 6px; transform: rotate(5deg); }
+.canteen-theme-preview.is-night { color: #f7f4ee; background: #111217; border-color: #f7f4ee; }
+
+/* Theme control in the information sheet. */
+.campus-info-theme {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+}
+.campus-info-theme h3 { margin-bottom: 3px; }
+.campus-info-theme p { margin: 0; opacity: .72; }
+
+/* Night version keeps the user's exact layout and only swaps the palette. */
+body[data-route="canteen"][data-canteen-theme="night"],
+body[data-route="canteen"][data-canteen-theme="night"] .view {
+  background: #111217;
+}
+body[data-route="canteen"][data-canteen-theme="night"] .campus-dining-page {
+  --campus-ink: #f8f5ef;
+  --campus-paper: #111217;
+  --campus-dark: #f8f5ef;
+  color: #f8f5ef;
+}
+body[data-route="canteen"][data-canteen-theme="night"] .campus-dining-info {
+  color: #111217;
+  background: #f8f5ef;
+}
+body[data-route="canteen"][data-canteen-theme="night"] .campus-order-button {
+  color: #111217;
+  background: #f8f5ef;
+}
+body[data-route="canteen"][data-canteen-theme="night"] .campus-menu-subdivider { border-color: rgba(255,255,255,.55); }
+body[data-route="canteen"][data-canteen-theme="night"] .campus-pencil-outline { border-color: rgba(255,255,255,.82); }
+body[data-route="canteen"][data-canteen-theme="night"] .campus-pencil-outline::after { border-color: rgba(255,255,255,.38); }
+body[data-route="canteen"][data-canteen-theme="night"] .campus-recommended { color: #111217; }
+body[data-route="canteen"][data-canteen-theme="night"] .canteen-info-modal,
+body[data-route="canteen"][data-canteen-theme="night"] .canteen-ticket-confirm-modal,
+body[data-route="canteen"][data-canteen-theme="night"] .canteen-ticket-modal {
+  color: #f8f5ef;
+  background: #16171c;
+  border-color: #f8f5ef;
+}
+body[data-route="canteen"][data-canteen-theme="night"] .canteen-info-modal .modal-head,
+body[data-route="canteen"][data-canteen-theme="night"] .canteen-ticket-confirm-modal .modal-head,
+body[data-route="canteen"][data-canteen-theme="night"] .canteen-ticket-modal .modal-head,
+body[data-route="canteen"][data-canteen-theme="night"] .canteen-info-modal .modal-foot,
+body[data-route="canteen"][data-canteen-theme="night"] .canteen-ticket-confirm-modal .modal-foot,
+body[data-route="canteen"][data-canteen-theme="night"] .canteen-ticket-modal .modal-foot {
+  color: #f8f5ef;
+  border-color: rgba(255,255,255,.35);
+  background: rgba(22,23,28,.96);
+}
+body[data-route="canteen"][data-canteen-theme="night"] .canteen-info-modal .modal-close,
+body[data-route="canteen"][data-canteen-theme="night"] .canteen-info-modal .canteen-day-chip,
+body[data-route="canteen"][data-canteen-theme="night"] .campus-info-facts > div,
+body[data-route="canteen"][data-canteen-theme="night"] .campus-info-close,
+body[data-route="canteen"][data-canteen-theme="night"] .campus-info-action,
+body[data-route="canteen"][data-canteen-theme="night"] .campus-info-source button,
+body[data-route="canteen"][data-canteen-theme="night"] .campus-info-source a {
+  color: #f8f5ef;
+  border-color: #f8f5ef;
+  background: transparent;
+}
+body[data-route="canteen"][data-canteen-theme="night"] .canteen-info-modal .canteen-day-chip.is-active {
+  color: #111217;
+  background: #f8f5ef;
+}
+body[data-route="canteen"][data-canteen-theme="night"] .canteen-info-modal .canteen-day-chip.is-active strong { color: #111217; }
+body[data-route="canteen"][data-canteen-theme="night"] .campus-info-section,
+body[data-route="canteen"][data-canteen-theme="night"] .campus-info-meal-list > div { border-color: rgba(255,255,255,.28); }
+
+@media (max-width: 980px) {
+  .settings-profile-photo-row { grid-template-columns: 120px minmax(0,1fr); }
+  .settings-profile-photo-row .profile-photo-preview { width: 116px; }
+}
+@media (max-width: 720px) {
+  .settings-profile-photo-row { grid-template-columns: 1fr; justify-items: center; text-align: center; }
+  .settings-profile-photo-row > div:last-child { width: 100%; }
+  .settings-profile-fields { grid-template-columns: 1fr; }
+  .settings-profile-actions { align-items: stretch; flex-direction: column; }
+  .settings-profile-actions .button { width: 100%; }
+  .campus-info-theme { align-items: flex-start; }
+}

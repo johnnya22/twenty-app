@@ -1,16 +1,16 @@
 "use strict";
 
-var CACHE = "twenty-study-os-v27-9-campus-card-order";
+var CACHE = "twenty-study-os-v28-0-settings-canteen-theme";
 var APP_SHELL = [
   "./",
   "./index.html",
-  "./styles.css?v=27.9-campus-card-order",
-  "./sync.js?v=27.9-campus-card-order",
-  "./db.js?v=27.9-campus-card-order",
-  "./ai.js?v=27.9-campus-card-order",
-  "./ai-worker.js?v=27.9-campus-card-order",
-  "./app.js?v=27.9-campus-card-order",
-  "./lucide.min.js?v=27.9-campus-card-order",
+  "./styles.css?v=28.0-settings-canteen-theme",
+  "./sync.js?v=28.0-settings-canteen-theme",
+  "./db.js?v=28.0-settings-canteen-theme",
+  "./ai.js?v=28.0-settings-canteen-theme",
+  "./ai-worker.js?v=28.0-settings-canteen-theme",
+  "./app.js?v=28.0-settings-canteen-theme",
+  "./lucide.min.js?v=28.0-settings-canteen-theme",
   "./manifest.webmanifest",
   "./icon.svg",
   "./icon-192.png",

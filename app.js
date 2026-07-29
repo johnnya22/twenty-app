@@ -77,7 +77,7 @@
   var canteenSelections = {};
   var canteenExpandedCompleted = {};
   var canteenPendingPaymentMethod = "campus";
-  var profilePhotoDraft = "";
+  var profilePhotoDraft = null;
   var canteenClockTimer = null;
   var homeClockTimer = null;
   var homeworkClockTimer = null;
@@ -722,6 +722,7 @@
         canteenAIEnabled: true,
         canteenAIDescriptions: true,
         canteenAIChefNote: true,
+        canteenTheme: "light",
         canteenAllergenFilters: {
           selected: [],
           hideDishes: true
@@ -775,6 +776,7 @@
     base.settings.canteenAIEnabled = base.settings.canteenAIEnabled !== false;
     base.settings.canteenAIDescriptions = base.settings.canteenAIDescriptions !== false;
     base.settings.canteenAIChefNote = base.settings.canteenAIChefNote !== false;
+    if (["light", "night"].indexOf(base.settings.canteenTheme) < 0) base.settings.canteenTheme = "light";
     base.settings.canteenAllergenFilters = Object.assign({ selected: [], hideDishes: true }, base.settings.canteenAllergenFilters || {});
     base.settings.canteenAllergenFilters.selected = Array.from(new Set(asArray(base.settings.canteenAllergenFilters.selected).map(String).filter(function (id) { return Object.prototype.hasOwnProperty.call(CANTEEN_DEFAULT_ALLERGENS, id); })));
     base.settings.canteenAllergenFilters.hideDishes = base.settings.canteenAllergenFilters.hideDishes !== false;
@@ -1417,6 +1419,7 @@
     }
     renderShell();
     document.body.dataset.route = route.name || "home";
+    if (route.name !== "canteen") delete document.body.dataset.canteenTheme;
     var html;
     if (route.name === "home") html = renderHome();
     else if (route.name === "courses") html = renderCourses();
@@ -5781,12 +5784,15 @@
     }).join("");
     var aiAction = canteenAIState.status === "downloadable" ? '<button class="campus-info-action" type="button" data-action="canteen-ai-prepare">Preparar IA local</button>' : "";
     var source = canteenMenu.pageUrl || CANTEEN_PAGE_URL;
+    var nightTheme = state.settings.canteenTheme === "night";
+    var themeControl = '<section class="campus-info-section campus-info-theme"><div><h3>Tema da Cantina</h3><p>' + (nightTheme ? 'Tema noite ativo.' : 'Tema claro ativo.') + ' Podes mudar sem sair da ementa.</p></div><button class="switch ' + (nightTheme ? 'is-on' : '') + '" type="button" data-action="canteen-toggle-theme" aria-label="Alternar tema da Cantina" aria-pressed="' + nightTheme + '"><span></span></button></section>';
     var body = '<div class="campus-info-days"><strong>Escolher dia</strong><div>' + days.map(canteenDayChip).join("") + '</div></div>' +
       '<section class="campus-info-section campus-info-facts"><div><span>Almoço</span><strong>' + esc(hours.lunch.start) + ' às ' + esc(hours.lunch.end) + '</strong></div><div><span>Jantar</span><strong>' + esc(hours.dinner.start) + ' às ' + esc(hours.dinner.end) + '</strong></div><div><span>Preço social</span><strong>' + esc(social.amount || '3,10 €') + '</strong></div></section>' +
       (social.includes ? '<section class="campus-info-section"><h3>Incluído na refeição</h3><p>' + esc(social.includes) + '</p></section>' : '') +
       dinnerDifference +
       '<section class="campus-info-section"><h3>Alergénios</h3><div class="campus-info-allergens">' + allergenRows + '</div><p class="campus-info-notice">' + esc(canteenMenu.allergenNotice || 'Confirma sempre os alergénios junto da unidade.') + '</p></section>' +
       '<section class="campus-info-section"><h3>Funcionamento</h3><p>' + esc(closures.summer || 'O funcionamento pode mudar durante férias e pausas letivas.') + '</p>' + (closures.seasonal ? '<p>' + esc(closures.seasonal) + '</p>' : '') + (closures.alternatives ? '<p>' + esc(closures.alternatives) + '</p>' : '') + '</section>' +
+      themeControl +
       '<section class="campus-info-section campus-info-source"><a href="' + attr(source) + '" target="_blank" rel="noopener noreferrer">Abrir fonte oficial</a><button type="button" data-action="refresh-canteen">Atualizar ementa</button>' + aiAction + '</section>';
     openModal('Informação da cantina', body, { className: 'canteen-info-modal', footer: '<footer class="modal-foot"><button class="campus-info-close" type="button" data-action="close-modal">Fechar</button></footer>' });
   }
@@ -5832,7 +5838,7 @@
       }
       return divider + canteenDishCard(item, menu, { interactive: !visit, readonly: !!visit, index: index, selected: visit ? item.description === selectedDescription : (selection.dishIndex !== null && Number(selection.dishIndex) === index) });
     }).join("") : (mainDishes.length ? '<p class="campus-menu-empty">As opções deste almoço foram escondidas pelos teus alergénios.</p>' : '<p class="campus-menu-empty">Sem pratos publicados.</p>');
-    var allergenNotice = hiddenCount ? '<div class="campus-allergen-hidden-note"><i data-lucide="eye-off"></i><span>' + hiddenCount + ' ' + (hiddenCount === 1 ? 'opção escondida' : 'opções escondidas') + ' pelos teus alergénios.</span><button type="button" data-route="settings" data-tab="experience">Alterar</button></div>' : "";
+    var allergenNotice = hiddenCount ? '<div class="campus-allergen-hidden-note"><i data-lucide="eye-off"></i><span>' + hiddenCount + ' ' + (hiddenCount === 1 ? 'opção escondida' : 'opções escondidas') + ' pelos teus alergénios.</span><button type="button" data-route="settings" data-tab="canteen">Alterar</button></div>' : "";
     var soupReady = !soups.length || (selection.soupIndex !== null && selection.soupIndex !== "" && Number.isInteger(Number(selection.soupIndex)) && Number(selection.soupIndex) >= 0);
     var dishReady = selection.dishIndex !== null && selection.dishIndex !== "" && Number.isInteger(Number(selection.dishIndex)) && Number(selection.dishIndex) >= 0;
     var ready = soupReady && dishReady && !!selection.dessertId;
@@ -5855,6 +5861,8 @@
   }
   function renderCanteen() {
     setHeader("Cantina", "Campus · SAS NOVA");
+    var canteenTheme = state.settings.canteenTheme === "night" ? "night" : "light";
+    document.body.dataset.canteenTheme = canteenTheme;
     if (!canteenMenu && (canteenStatus === "idle" || canteenStatus === "loading")) {
       return '<section class="campus-dining-page"><div class="campus-dining-loading"><span></span><h2>A preparar a ementa</h2><p>A consultar a informação oficial da SAS NOVA.</p></div></section>';
     }
@@ -5878,7 +5886,7 @@
     var body = lunch
       ? renderCanteenMeal(lunch, canteenMenu, { date: selected.date, hours: hours, service: service, selectedIsToday: selectedIsToday })
       : '<div class="campus-dining-state"><div><small>SEM ALMOÇO</small><h3>Não há ementa publicada para este dia.</h3><p>Consulta outro dia no botão de informação.</p></div></div>';
-    return '<section class="campus-dining-page">' +
+    return '<section class="campus-dining-page campus-theme-' + attr(canteenTheme) + '">' +
       '<header class="campus-dining-hero"><div class="campus-dining-brand"><h2>CAMPUS<br>DINING</h2><p>DINE IN CAFETERIA</p></div><div class="campus-dining-stamp ' + (service.open && selectedIsToday ? 'is-open' : '') + '">' + esc(statusLabel) + '</div><button class="campus-dining-info" type="button" data-action="canteen-open-info" aria-label="Informação da cantina">i</button></header>' +
       body +
       '</section>';
@@ -5893,17 +5901,28 @@
     return '<span>' + esc(initials(profile.name || "Twenty")) + '</span>';
   }
 
+  function personalSettingsPhotoValue() {
+    return profilePhotoDraft === null ? (state.profile.photoDataUrl || "") : profilePhotoDraft;
+  }
+
   function renderPersonalSettingsCard() {
     var profile = canteenStudentCardProfile();
-    return '<article class="card settings-card settings-personal-card span-12">' +
-      '<div class="settings-personal-copy"><p class="card-label">Dados pessoais</p><h3>O teu cartão, à tua maneira</h3><p class="card-subtitle">A foto e estes dados aparecem apenas no cartão Campus e ficam guardados nos teus dados Twenty.</p><div class="settings-personal-meta"><span><i data-lucide="graduation-cap"></i>' + esc(profile.degree) + '</span><span><i data-lucide="hash"></i>' + esc(profile.studentNumber) + '</span><span><i data-lucide="calendar-range"></i>' + esc(profile.academicYear) + '</span></div><button class="button button-dark" type="button" data-action="edit-profile"><i data-lucide="pencil"></i>Editar dados pessoais</button></div>' +
-      '<div class="settings-student-card-preview">' + canteenStudentCardHTML() + '</div>' +
-    '</article>';
+    var photoValue = personalSettingsPhotoValue();
+    var photoPreview = photoValue
+      ? '<img src="' + attr(photoValue) + '" alt="Pré-visualização da fotografia">'
+      : '<span>' + esc(initials(state.profile.name || "Twenty")) + '</span>';
+    return '<form id="personalSettingsForm" class="card settings-card settings-profile-editor-card" autocomplete="on">' +
+      '<div class="settings-profile-title"><div><p class="card-label">Dados pessoais</p><h3>Identificação académica</h3><p class="card-subtitle">Edita tudo aqui sem abrir outro menu. As alterações só são guardadas quando carregas em Guardar dados.</p></div><span class="metric-icon"><i data-lucide="id-card"></i></span></div>' +
+      '<div class="settings-profile-photo-row"><div id="settingsProfilePhotoPreview" class="profile-photo-preview">' + photoPreview + '</div><div><label class="profile-photo-button"><i data-lucide="camera"></i><span>Escolher fotografia</span><input id="settingsProfilePhotoInput" type="file" accept="image/jpeg,image/png,image/webp" hidden></label><button class="profile-photo-remove" type="button" data-action="settings-remove-profile-photo">Remover fotografia</button><small>A imagem é reduzida no browser antes de ser guardada.</small></div></div>' +
+      '<div class="settings-profile-fields"><div class="field field-full"><label>Nome completo</label><input name="name" required value="' + attr(state.profile.name || "") + '" placeholder="O teu nome"></div><div class="field"><label>Instituição</label><input name="institution" value="' + attr(state.profile.institution || "NOVA FCT") + '"></div><div class="field"><label>Curso</label><input name="degree" value="' + attr(state.profile.degree || "Engenharia Informática") + '"></div><div class="field"><label>Número de estudante</label><input name="studentNumber" inputmode="numeric" value="' + attr(state.profile.studentNumber || "") + '" placeholder="Ex. 65432"></div><div class="field"><label>Ano letivo</label><input name="academicYear" value="' + attr(state.profile.academicYear || "2026/2027") + '" placeholder="2026/2027"></div><div class="field"><label>Válido até</label><input name="validUntil" value="' + attr(state.profile.validUntil || "") + '" placeholder="09/2027"></div><div class="field"><label>Data de nascimento</label><input name="birthDate" type="date" value="' + attr(state.profile.birthDate || "") + '"></div><div class="field"><label>Pagamento preferido</label><select name="paymentMethod"><option value="campus" ' + (state.profile.paymentMethod !== "other" ? "selected" : "") + '>Cartão Campus</option><option value="other" ' + (state.profile.paymentMethod === "other" ? "selected" : "") + '>Outro</option></select></div><div class="field"><label>Meta académica</label><input name="targetGrade" type="number" min="0" max="20" step="0.1" value="' + attr(state.profile.targetGrade || 20) + '"></div></div>' +
+      '<div class="settings-profile-actions"><span data-role="personal-save-status">As alterações ainda não foram guardadas.</span><button class="button button-dark" type="button" data-action="save-personal-settings"><i data-lucide="save"></i>Guardar dados</button></div>' +
+    '</form>' +
+    '<article class="card settings-card settings-profile-preview-card"><div class="card-title-row"><div><p class="card-label">Pré-visualização</p><h3>Cartão Campus</h3><p class="card-subtitle">É este cartão que aparece no momento de confirmar o pedido.</p></div><span class="metric-icon"><i data-lucide="badge-check"></i></span></div><div class="settings-profile-live-preview">' + canteenStudentCardHTML() + '</div><div class="settings-personal-meta"><span><i data-lucide="graduation-cap"></i>' + esc(profile.degree) + '</span><span><i data-lucide="hash"></i>' + esc(profile.studentNumber) + '</span><span><i data-lucide="calendar-range"></i>' + esc(profile.academicYear) + '</span></div></article>';
   }
 
   function renderSettings() {
     setHeader("Definições", "Twenty · controlo do sistema");
-    var section = ["overview", "personal", "academic", "data", "experience", "developer"].indexOf(route.tab) >= 0 ? route.tab : "overview";
+    var section = ["overview", "personal", "academic", "canteen", "data", "system", "developer"].indexOf(route.tab) >= 0 ? route.tab : "overview";
     var semester = currentSemester();
     var archived = state.semesters.filter(function (item) { return item.archived; }).length;
     var lastCheck = state.meta.externalCheckedAt ? new Intl.DateTimeFormat("pt-PT", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" }).format(new Date(state.meta.externalCheckedAt)) : "Nunca";
@@ -5934,6 +5953,8 @@
     }).join("");
     var allergenCountLabel = allergenSettings.selected.length ? allergenSettings.selected.length + ' selecionado' + (allergenSettings.selected.length === 1 ? '' : 's') : 'Nenhum selecionado';
     var canteenAllergenCard = '<article class="card settings-card canteen-allergen-settings-card"><div class="card-title-row"><div><p class="card-label">Cantina</p><h3>Alergénios</h3><p class="card-subtitle">Escolhe os códigos que queres evitar. A Twenty esconde apenas opções que tenham esses alergénios indicados na ementa oficial.</p></div><span class="metric-icon"><i data-lucide="shield-alert"></i></span></div><div class="settings-row"><div><strong>Esconder opções incompatíveis</strong><small>Também impede a Chef’s Note de recomendar esses pratos.</small></div><button class="switch ' + (allergenSettings.hideDishes ? 'is-on' : '') + '" type="button" data-action="canteen-toggle-hide-allergens" aria-label="Esconder pratos com alergénios selecionados"><span></span></button></div><div class="settings-allergen-summary"><span class="badge ' + (allergenSettings.selected.length ? 'badge-yellow' : 'badge-mint') + '">' + esc(allergenCountLabel) + '</span><button type="button" data-action="canteen-clear-allergens" ' + (allergenSettings.selected.length ? '' : 'disabled') + '>Limpar seleção</button></div><div class="settings-allergen-grid">' + allergenOptions + '</div><p class="settings-allergen-note">O filtro depende dos códigos publicados pela cantina. As sobremesas não são filtradas porque a fonte oficial não publica os respetivos códigos. Confirma sempre a informação com a unidade, sobretudo em casos de alergia grave.</p></article>';
+    var canteenNightTheme = state.settings.canteenTheme === "night";
+    var canteenThemeCard = '<article class="card settings-card canteen-theme-settings-card"><div class="card-title-row"><div><p class="card-label">Cantina</p><h3>Tema do menu</h3><p class="card-subtitle">Alterna entre o menu claro do teu mockup e uma versão noite com a mesma estrutura.</p></div><span class="metric-icon"><i data-lucide="palette"></i></span></div><div class="settings-row"><div><strong>' + (canteenNightTheme ? 'Tema noite' : 'Tema claro') + '</strong><small>Este controlo também está disponível no botão i da Cantina.</small></div><button class="switch ' + (canteenNightTheme ? 'is-on' : '') + '" type="button" data-action="canteen-toggle-theme" aria-label="Alternar tema da Cantina"><span></span></button></div><div class="canteen-theme-preview ' + (canteenNightTheme ? 'is-night' : '') + '"><b>CAMPUS DINING</b><span>Chef’s Note</span><i></i></div></article>';
     var motionCard = '<article class="card settings-card"><div class="card-title-row"><div><p class="card-label">Interface</p><h3>Movimento e conforto</h3><p class="card-subtitle">Controla animações sem perder a informação importante.</p></div><span class="metric-icon"><i data-lucide="accessibility"></i></span></div><div class="settings-row"><div><strong>Reduzir movimento</strong><small>Desativa transições e celebrações mais intensas.</small></div><button class="switch ' + (state.settings.reduceMotion ? "is-on" : "") + '" type="button" data-action="toggle-reduce-motion"><span></span></button></div></article>';
     var campusCard = '<article class="card settings-card card-yellow"><div class="card-title-row"><div><p class="card-label">Home</p><h3>Atividade simulada</h3><p class="card-subtitle">Mostra indicadores de presença no campus claramente assinalados como simulação.</p></div><span class="metric-icon"><i data-lucide="users-round"></i></span></div><div class="settings-row"><div><strong>Contador simulado</strong><small>É apenas ambiente visual; não representa utilizadores reais.</small></div><button class="switch ' + (state.settings.campusSimulation ? "is-on" : "") + '" type="button" data-action="toggle-campus"><span></span></button></div></article>';
     var tutorialCard = '<article class="card settings-card"><div class="card-title-row"><div><p class="card-label">Ajuda</p><h3>Aprender a Twenty</h3><p class="card-subtitle">Revê a visita guiada ou testa um dia escolar completo.</p></div><span class="metric-icon"><i data-lucide="map"></i></span></div><div class="list-actions"><button class="button button-dark button-small" type="button" data-action="show-tutorial"><i data-lucide="map"></i>Visita guiada</button><button class="button button-small" type="button" data-action="debug-start-tutorial"><i data-lucide="play"></i>Simular dia</button></div></article>';
@@ -5943,22 +5964,25 @@
 
     var titles = {
       overview: ["Visão geral", "O essencial da tua conta académica e do sistema."],
-      personal: ["Dados pessoais", "Foto, identificação académica e cartão Campus."],
-      academic: ["Académico", "Perfil, semestre, rotina e criação de conteúdo."],
+      personal: ["Dados pessoais", "Foto, identificação académica e cartão Campus, tudo no mesmo ecrã."],
+      academic: ["Académico", "Semestre, rotina de estudo e criação de conteúdo."],
+      canteen: ["Cantina", "Tema, Chef’s Note, alergénios e preferências do menu."],
       data: ["Dados e sincronização", "Git, JSON, armazenamento e backups num só lugar."],
-      experience: ["Experiência", "Cantina inteligente, movimento, ambiente e ajuda."],
+      system: ["Sistema e interface", "Movimento, ambiente visual e ajuda."],
       developer: ["Laboratório", "Debug, simulação e ferramentas avançadas."]
     };
     var content = {
       overview: systemCard + profileCard + semesterCard + quickCard,
       personal: renderPersonalSettingsCard(),
-      academic: profileCard + semesterCard + planningCard + quickCard,
+      academic: semesterCard + planningCard + quickCard,
+      canteen: canteenThemeCard + canteenAICard + canteenAllergenCard,
       data: syncCard + jsonCard + storageCard + safetyCard,
-      experience: canteenAICard + canteenAllergenCard + motionCard + campusCard + tutorialCard,
+      system: motionCard + campusCard + tutorialCard,
       developer: debugCard + jsonCard + storageCard + safetyCard
     }[section];
-    var nav = settingsNavButton("overview", "layout-dashboard", "Visão geral", section) + settingsNavButton("personal", "id-card", "Dados pessoais", section) + settingsNavButton("academic", "graduation-cap", "Académico", section) + settingsNavButton("data", "database", "Dados e sync", section) + settingsNavButton("experience", "sparkles", "Experiência", section) + settingsNavButton("developer", "flask-conical", "Laboratório", section);
-    return '<div class="page-head settings-page-head"><div><p class="settings-eyebrow">Twenty control room</p><h2>Definições</h2><p>Organizadas por contexto, não por ordem aleatória de cartões.</p></div><div class="page-actions"><button class="button button-dark" type="button" data-action="quick-add"><i data-lucide="plus"></i>Adicionar conteúdo</button></div></div><div class="settings-shell"><aside class="settings-nav"><div class="settings-nav-title"><span><i data-lucide="sliders-horizontal"></i></span><div><strong>Definições</strong><small>Escolhe uma área</small></div></div>' + nav + '</aside><section class="settings-panel"><header class="settings-section-head"><div><span>' + esc(titles[section][0]) + '</span><h3>' + esc(titles[section][0]) + '</h3><p>' + esc(titles[section][1]) + '</p></div><i data-lucide="' + (section === "overview" ? "layout-dashboard" : section === "personal" ? "id-card" : section === "academic" ? "graduation-cap" : section === "data" ? "database" : section === "experience" ? "sparkles" : "flask-conical") + '"></i></header><div class="settings-grid">' + content + '</div></section></div>';
+    var nav = settingsNavButton("overview", "layout-dashboard", "Visão geral", section) + settingsNavButton("personal", "id-card", "Dados pessoais", section) + settingsNavButton("academic", "graduation-cap", "Académico", section) + settingsNavButton("canteen", "utensils", "Cantina", section) + settingsNavButton("data", "database", "Dados e sync", section) + settingsNavButton("system", "sliders-horizontal", "Sistema", section) + settingsNavButton("developer", "flask-conical", "Laboratório", section);
+    var sectionIcon = section === "overview" ? "layout-dashboard" : section === "personal" ? "id-card" : section === "academic" ? "graduation-cap" : section === "canteen" ? "utensils" : section === "data" ? "database" : section === "system" ? "sliders-horizontal" : "flask-conical";
+    return '<div class="page-head settings-page-head"><div><p class="settings-eyebrow">Twenty control room</p><h2>Definições</h2><p>Cada área tem agora um propósito claro.</p></div><div class="page-actions"><button class="button button-dark" type="button" data-action="quick-add"><i data-lucide="plus"></i>Adicionar conteúdo</button></div></div><div class="settings-shell"><aside class="settings-nav"><div class="settings-nav-title"><span><i data-lucide="sliders-horizontal"></i></span><div><strong>Definições</strong><small>Escolhe uma área</small></div></div>' + nav + '</aside><section class="settings-panel"><header class="settings-section-head"><div><span>' + esc(titles[section][0]) + '</span><h3>' + esc(titles[section][0]) + '</h3><p>' + esc(titles[section][1]) + '</p></div><i data-lucide="' + sectionIcon + '"></i></header><div class="settings-grid">' + content + '</div></section></div>';
   }
 
   function updateStorageCount() {
@@ -8048,7 +8072,37 @@
       state.settings.studyPlanDate = addCalendarDays(state.settings.studyPlanDate || todayISO(), Number(button.dataset.delta || 0));
       await save(true); render();
     } else if (action === "edit-profile") {
-      openEntityForm("profile", {});
+      if (modalRoot && modalRoot.innerHTML) closeModal();
+      setRoute("settings", null, "personal");
+    } else if (action === "save-personal-settings") {
+      var personalForm = document.getElementById("personalSettingsForm");
+      if (!personalForm) return;
+      var personalData = new FormData(personalForm);
+      var personalName = String(personalData.get("name") || "").trim();
+      if (!personalName) {
+        toast("Escreve o teu nome antes de guardar.", "warning");
+        var personalNameInput = personalForm.elements.name;
+        if (personalNameInput) personalNameInput.focus();
+        return;
+      }
+      state.profile.name = personalName;
+      state.profile.institution = String(personalData.get("institution") || "NOVA FCT").trim();
+      state.profile.degree = String(personalData.get("degree") || "Engenharia Informática").trim();
+      state.profile.studentNumber = String(personalData.get("studentNumber") || "").trim();
+      state.profile.academicYear = String(personalData.get("academicYear") || "").trim();
+      state.profile.validUntil = String(personalData.get("validUntil") || "").trim();
+      state.profile.birthDate = String(personalData.get("birthDate") || "").trim();
+      state.profile.paymentMethod = personalData.get("paymentMethod") === "other" ? "other" : "campus";
+      state.profile.targetGrade = clamp(personalData.get("targetGrade"), 0, 20) || 20;
+      if (profilePhotoDraft !== null) state.profile.photoDataUrl = profilePhotoDraft || "";
+      profilePhotoDraft = null;
+      await save(true);
+      render();
+      toast("Dados pessoais guardados.");
+    } else if (action === "settings-remove-profile-photo") {
+      profilePhotoDraft = "";
+      var settingsProfilePreview = document.getElementById("settingsProfilePhotoPreview");
+      if (settingsProfilePreview) settingsProfilePreview.innerHTML = '<span>' + esc(initials((document.querySelector('#personalSettingsForm [name="name"]') || {}).value || state.profile.name || "Twenty")) + '</span>';
     } else if (action === "profile-remove-photo") {
       profilePhotoDraft = "";
       var profilePreview = modalRoot.querySelector("#profilePhotoPreview");
@@ -8317,8 +8371,14 @@
     } else if (action === "debug-exit") {
       stopHomeDebug();
     } else if (action === "settings-section") {
-      route.tab = ["overview", "personal", "academic", "data", "experience", "developer"].indexOf(button.dataset.section) >= 0 ? button.dataset.section : "overview";
+      route.tab = ["overview", "personal", "academic", "canteen", "data", "system", "developer"].indexOf(button.dataset.section) >= 0 ? button.dataset.section : "overview";
       render();
+    } else if (action === "canteen-toggle-theme") {
+      var reopenCanteenInfo = !!button.closest(".canteen-info-modal");
+      state.settings.canteenTheme = state.settings.canteenTheme === "night" ? "light" : "night";
+      await save(true);
+      render();
+      if (reopenCanteenInfo) showCanteenInfo();
     } else if (action === "toggle-canteen-ai") {
       state.settings.canteenAIEnabled = !state.settings.canteenAIEnabled;
       if (!state.settings.canteenAIEnabled) canteenAIState = { key: "", status: "idle", availability: "unknown", source: "rules", data: null, error: "", progress: null, streamText: "" };
@@ -8456,7 +8516,7 @@
       searchResults.hidden = true;
       if (!searchInput.value) document.querySelector(".search-box").classList.remove("is-open");
     }
-    if (event.target.classList.contains("modal-layer")) {
+    if (event.target.classList.contains("modal-layer") && event.target.getAttribute("data-close-on-backdrop") === "true") {
       await closeModalSavingNotebook();
       if (onboarding) renderOnboarding();
     }
@@ -8509,7 +8569,7 @@
       }, 60000);
       if (!state.profile.onboardingComplete || !state.currentSemesterId || !activeCourses().length) startOnboarding(state.semesters.length ? "new-semester" : "first");
       if ("serviceWorker" in navigator && location.protocol !== "file:") {
-        navigator.serviceWorker.register("sw.js?v=27.9-campus-card-order", { updateViaCache: "none" }).then(function () {
+        navigator.serviceWorker.register("sw.js?v=28.0-settings-canteen-theme", { updateViaCache: "none" }).then(function () {
           if (Sync && Sync.getStatus().configured) Sync.startAutoSync();
         }).catch(function () {
           if (Sync && Sync.getStatus().configured) Sync.startAutoSync();
@@ -8528,7 +8588,24 @@
   }
 
   document.addEventListener("click", handleDocumentClick);
+  document.addEventListener("submit", function (event) {
+    if (event.target.id !== "personalSettingsForm") return;
+    event.preventDefault();
+    var savePersonalButton = event.target.querySelector('[data-action="save-personal-settings"]');
+    if (savePersonalButton) handleAction(savePersonalButton).catch(function (error) { console.error(error); toast("Não foi possível guardar os dados pessoais.", "error"); });
+  });
   document.addEventListener("change", function (event) {
+    if (event.target.matches("#settingsProfilePhotoInput")) {
+      var settingsProfileFile = event.target.files && event.target.files[0];
+      if (!settingsProfileFile) return;
+      resizeProfilePhoto(settingsProfileFile).then(function (dataUrl) {
+        profilePhotoDraft = dataUrl;
+        var settingsPreview = document.getElementById("settingsProfilePhotoPreview");
+        if (settingsPreview) settingsPreview.innerHTML = '<img src="' + attr(dataUrl) + '" alt="Pré-visualização da fotografia">';
+      }).catch(function (error) { toast(error.message || "Não foi possível preparar a fotografia.", "error"); });
+      event.target.value = "";
+      return;
+    }
     if (event.target === pptxInput) {
       handleAIPptxFile(event.target.files && event.target.files[0]);
       return;
