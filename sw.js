@@ -1,16 +1,16 @@
 "use strict";
 
-var CACHE = "twenty-study-os-v31-0-adaptive-confidence";
+var CACHE = "twenty-study-os-v30-0-core-learning-loop";
 var APP_SHELL = [
   "./",
   "./index.html",
-  "./styles.css?v=31.0-adaptive-confidence",
-  "./sync.js?v=31.0-adaptive-confidence",
-  "./db.js?v=31.0-adaptive-confidence",
-  "./ai.js?v=31.0-adaptive-confidence",
-  "./ai-worker.js?v=31.0-adaptive-confidence",
-  "./app.js?v=31.0-adaptive-confidence",
-  "./lucide.min.js?v=31.0-adaptive-confidence",
+  "./styles.css?v=30.0-core-learning-loop",
+  "./sync.js?v=30.0-core-learning-loop",
+  "./db.js?v=30.0-core-learning-loop",
+  "./ai.js?v=30.0-core-learning-loop",
+  "./ai-worker.js?v=30.0-core-learning-loop",
+  "./app.js?v=30.0-core-learning-loop",
+  "./lucide.min.js?v=30.0-core-learning-loop",
   "./manifest.webmanifest",
   "./icon.svg",
   "./icon-192.png",

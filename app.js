@@ -89,15 +89,13 @@
   var homeworkSessionRuntime = null;
   var studyFocusRuntime = null;
   var studyFocusTimer = null;
-  var pendingStudyReflectionSessionId = null;
   var reviewRuntime = null;
   var REVIEW_INTERVALS = [1, 3, 7, 14, 28, 60];
-  var CONFIDENCE_LABELS = { 1: "Adivinhei", 2: "Pouco confiante", 3: "Confiante", 4: "Tenho a certeza" };
   var homeDebug = null;
   var COLORS = ["#a99df7", "#ff92ae", "#ffad72", "#79cdb8", "#80bee8", "#f3e873", "#cab6ea", "#87d7df"];
   var WEEKDAYS = ["Domingo", "Segunda", "Terça", "Quarta", "Quinta", "Sexta", "Sábado"];
   var SHORT_WEEKDAYS = ["Dom", "Seg", "Ter", "Qua", "Qui", "Sex", "Sáb"];
-  var ENTITY_ARRAYS = ["semesters", "courses", "schedule", "assessments", "events", "tasks", "lessons", "materials", "pastExams", "questions", "quizzes", "grades", "studyBlocks", "studySessions", "reviewItems", "diagnostics", "weeklyReviews", "aiProjects", "canteenVisits"];
+  var ENTITY_ARRAYS = ["semesters", "courses", "schedule", "assessments", "events", "tasks", "lessons", "materials", "pastExams", "questions", "quizzes", "grades", "studyBlocks", "studySessions", "reviewItems", "weeklyReviews", "aiProjects", "canteenVisits"];
 
   function uid(prefix) {
     return (prefix || "id") + "_" + Date.now().toString(36) + "_" + Math.random().toString(36).slice(2, 8);
@@ -692,7 +690,7 @@
 
   function defaultState() {
     return {
-      schemaVersion: 9,
+      schemaVersion: 8,
       meta: {
         revision: 0,
         updatedAt: "",
@@ -732,9 +730,6 @@
         studyLunchStart: "13:00",
         studyLunchMinutes: 60,
         reviewDailyGoal: 10,
-        studyConfidencePrompts: true,
-        studyReflectionEnabled: true,
-        diagnosticQuestionCount: 5,
         studyNotificationsEnabled: false,
         studyNotificationTypes: { contextual: true, risk: true, continuity: true },
         studyNotificationLastShown: {},
@@ -772,7 +767,6 @@
       studyBlocks: [],
       studySessions: [],
       reviewItems: [],
-      diagnostics: [],
       weeklyReviews: [],
       aiProjects: [],
       canteenVisits: []
@@ -782,7 +776,7 @@
   function normalizeState(input) {
     var base = defaultState();
     var source = input && typeof input === "object" ? input : {};
-    base.schemaVersion = Math.max(9, Number(source.schemaVersion) || 0);
+    base.schemaVersion = Math.max(8, Number(source.schemaVersion) || 0);
     base.meta = Object.assign(base.meta, source.meta || {});
     base.meta.completedLessonQuizIds = Array.from(new Set(asArray(base.meta.completedLessonQuizIds).map(String).filter(Boolean)));
     base.meta.completedHomeworkIds = Array.from(new Set(asArray(base.meta.completedHomeworkIds).map(String).filter(Boolean)));
@@ -796,9 +790,6 @@
     base.settings.studyBreakMinutes = clamp(base.settings.studyBreakMinutes || 10, 0, 60);
     base.settings.studyLunchMinutes = clamp(base.settings.studyLunchMinutes || 60, 0, 180);
     base.settings.reviewDailyGoal = clamp(base.settings.reviewDailyGoal || 10, 3, 50);
-    base.settings.studyConfidencePrompts = base.settings.studyConfidencePrompts !== false;
-    base.settings.studyReflectionEnabled = base.settings.studyReflectionEnabled !== false;
-    base.settings.diagnosticQuestionCount = clamp(base.settings.diagnosticQuestionCount || 5, 3, 10);
     base.settings.studyNotificationsEnabled = !!base.settings.studyNotificationsEnabled;
     base.settings.studyNotificationTypes = Object.assign({ contextual: true, risk: true, continuity: true }, base.settings.studyNotificationTypes || {});
     base.settings.studyNotificationLastShown = Object.assign({}, base.settings.studyNotificationLastShown || {});
@@ -927,13 +918,12 @@
       });
     });
     base.studySessions = base.studySessions.map(function (session) {
-      return Object.assign({ id: uid("studysession"), semesterId: base.currentSemesterId, courseId: null, sourceType: "custom", sourceId: null, studyBlockId: null, title: "Sessão de estudo", goal: "", plannedMinutes: 25, startedAt: "", endedAt: "", actualSeconds: 0, pausedSeconds: 0, pausedAt: "", status: "completed", steps: [], reflection: null, createdAt: "" }, session, {
-        steps: asArray(session.steps).map(function (step, index) { return Object.assign({ id: uid("step"), title: "Passo " + (index + 1), done: false }, step || {}); }),
-        reflection: session.reflection && typeof session.reflection === "object" ? Object.assign({ outcome: "", reason: "", note: "", nextStep: "", reflectedAt: "", continuationBlockId: null }, session.reflection) : null
+      return Object.assign({ id: uid("studysession"), semesterId: base.currentSemesterId, courseId: null, sourceType: "custom", sourceId: null, studyBlockId: null, title: "Sessão de estudo", goal: "", plannedMinutes: 25, startedAt: "", endedAt: "", actualSeconds: 0, pausedSeconds: 0, pausedAt: "", status: "completed", steps: [], createdAt: "" }, session, {
+        steps: asArray(session.steps).map(function (step, index) { return Object.assign({ id: uid("step"), title: "Passo " + (index + 1), done: false }, step || {}); })
       });
     });
     base.reviewItems = base.reviewItems.map(function (item) {
-      var normalized = Object.assign({ id: uid("review"), semesterId: base.currentSemesterId, courseId: null, quizId: null, lessonId: null, sourceType: "quiz", sourceKey: "", front: "", frontBlocks: [], back: "", backBlocks: [], optionBlocks: [], answerIndex: null, images: [], dueDate: todayISO(), intervalStep: 0, repetitions: 0, lapses: 0, lastResult: "", lastConfidence: 0, calibration: "", confidentErrors: 0, confidenceHistory: [], lastExplanation: "", lastDiagnosticAt: "", diagnosticMasteredAt: "", lastReviewedAt: "", createdAt: "", updatedAt: "", suspended: false }, item);
+      var normalized = Object.assign({ id: uid("review"), semesterId: base.currentSemesterId, courseId: null, quizId: null, lessonId: null, sourceType: "quiz", sourceKey: "", front: "", frontBlocks: [], back: "", backBlocks: [], optionBlocks: [], answerIndex: null, images: [], dueDate: todayISO(), intervalStep: 0, repetitions: 0, lapses: 0, lastResult: "", lastReviewedAt: "", createdAt: "", updatedAt: "", suspended: false }, item);
       normalized.frontBlocks = normalizeContentBlocks(normalized.frontBlocks || normalized.front || "");
       normalized.backBlocks = normalizeContentBlocks(normalized.backBlocks || normalized.back || "");
       normalized.optionBlocks = asArray(normalized.optionBlocks).map(normalizeContentBlocks);
@@ -943,18 +933,9 @@
       normalized.intervalStep = clamp(normalized.intervalStep || 0, 0, REVIEW_INTERVALS.length - 1);
       normalized.repetitions = Math.max(0, Number(normalized.repetitions) || 0);
       normalized.lapses = Math.max(0, Number(normalized.lapses) || 0);
-      normalized.lastConfidence = clamp(normalized.lastConfidence || 0, 0, 4);
-      normalized.confidentErrors = Math.max(0, Number(normalized.confidentErrors) || 0);
-      normalized.confidenceHistory = asArray(normalized.confidenceHistory).slice(-50);
       normalized.suspended = !!normalized.suspended;
       if (!/^\d{4}-\d{2}-\d{2}$/.test(normalized.dueDate || "")) normalized.dueDate = todayISO();
       return normalized;
-    });
-    base.diagnostics = base.diagnostics.map(function (record) {
-      return Object.assign({ id: uid("diagnostic"), semesterId: base.currentSemesterId, courseId: null, quizId: null, title: "Diagnóstico rápido", completedAt: "", total: 0, correct: 0, mastered: 0, fragile: 0, learning: 0, misconceptions: 0, itemIds: [], results: [] }, record, {
-        itemIds: asArray(record.itemIds).map(String).filter(Boolean),
-        results: asArray(record.results)
-      });
     });
     base.grades = base.grades.map(function (grade) {
       return Object.assign({ defenseStatus: "not-applicable", defenseType: "", defenseFinalScore: null }, grade);
@@ -4305,78 +4286,6 @@
     }
   }
 
-  function normalizeConfidence(value) {
-    return clamp(Number(value) || 0, 0, 4);
-  }
-
-  function confidenceLabel(value) {
-    return CONFIDENCE_LABELS[normalizeConfidence(value)] || "Não indicado";
-  }
-
-  function calibrationFromPerformance(correct, confidence) {
-    confidence = normalizeConfidence(confidence);
-    if (!confidence) return correct ? "correct" : "error";
-    if (correct && confidence >= 3) return "mastered";
-    if (correct) return "fragile";
-    if (confidence >= 3) return "misconception";
-    return "learning";
-  }
-
-  function calibrationLabel(value) {
-    return value === "mastered" ? "Dominado" : value === "fragile" ? "Acerto frágil" : value === "misconception" ? "Erro confiante" : value === "learning" ? "Por aprender" : value === "correct" ? "Correto" : "Em aprendizagem";
-  }
-
-  function calibrationPriority(item) {
-    if (!item) return 0;
-    if (item.calibration === "misconception") return 4;
-    if (item.calibration === "fragile") return 3;
-    if (item.lastResult === "again") return 2;
-    if (item.lastResult === "hard") return 1;
-    return 0;
-  }
-
-  function renderConfidenceScale(action, selected) {
-    selected = normalizeConfidence(selected);
-    return '<div class="confidence-scale" role="group" aria-label="Nível de confiança"><p><strong>Quão confiante estás?</strong><span>Responde antes de veres a solução.</span></p><div>' + [1, 2, 3, 4].map(function (value) {
-      return '<button type="button" class="confidence-choice ' + (selected === value ? 'is-selected' : '') + '" data-action="' + attr(action) + '" data-value="' + value + '"><strong>' + value + '</strong><span>' + esc(CONFIDENCE_LABELS[value]) + '</span></button>';
-    }).join("") + '</div></div>';
-  }
-
-  function recordReviewConfidence(item, correct, confidence, source) {
-    confidence = normalizeConfidence(confidence);
-    if (!item || !confidence) return calibrationFromPerformance(correct, confidence);
-    var calibration = calibrationFromPerformance(correct, confidence);
-    item.lastConfidence = confidence;
-    item.calibration = calibration;
-    if (calibration === "misconception") item.confidentErrors = Math.max(0, Number(item.confidentErrors) || 0) + 1;
-    item.confidenceHistory = asArray(item.confidenceHistory);
-    item.confidenceHistory.push({ at: new Date().toISOString(), confidence: confidence, correct: !!correct, calibration: calibration, source: source || "review" });
-    if (item.confidenceHistory.length > 50) item.confidenceHistory = item.confidenceHistory.slice(-50);
-    return calibration;
-  }
-
-  function ratingFromPerformance(correct, confidence) {
-    confidence = normalizeConfidence(confidence);
-    if (!correct) return "again";
-    if (confidence <= 2) return "hard";
-    return confidence >= 4 ? "easy" : "good";
-  }
-
-  function shouldAskQuizExplanation(quiz, question, index, confidence) {
-    var item = reviewItemBySourceKey(reviewQuestionKey(quiz, question, index));
-    return normalizeConfidence(confidence) >= 4 || !!(item && (item.lapses || item.confidentErrors));
-  }
-
-  function quizRuntimeQuestions(quiz) {
-    var questions = asArray(quiz && quiz.questions);
-    if (!quizRuntime || !asArray(quizRuntime.questionIndexes).length) return questions;
-    return quizRuntime.questionIndexes.map(function (index) { return questions[index]; }).filter(Boolean);
-  }
-
-  function quizRuntimeSourceIndex(position) {
-    return quizRuntime && asArray(quizRuntime.questionIndexes).length ? Number(quizRuntime.questionIndexes[position]) : position;
-  }
-
   function reviewQuestionKey(quiz, question, index) {
     return String(quiz.id) + ":" + String(question.id || question.sourceQuestionId || index);
   }
@@ -4389,15 +4298,15 @@
     return semesterItems("reviewItems").filter(function (item) {
       return !item.suspended && item.dueDate <= todayISO() && (!courseId || item.courseId === courseId);
     }).sort(function (a, b) {
-      return calibrationPriority(b) - calibrationPriority(a) || String(a.dueDate).localeCompare(String(b.dueDate)) || Number(b.lapses || 0) - Number(a.lapses || 0) || String(a.createdAt || "").localeCompare(String(b.createdAt || ""));
+      return String(a.dueDate).localeCompare(String(b.dueDate)) || Number(b.lapses || 0) - Number(a.lapses || 0) || String(a.createdAt || "").localeCompare(String(b.createdAt || ""));
     });
   }
 
   function errorReviewItems(courseId) {
     return semesterItems("reviewItems").filter(function (item) {
-      return !item.suspended && (Number(item.lapses || 0) > 0 || Number(item.confidentErrors || 0) > 0 || item.calibration === "fragile" || item.calibration === "misconception" || item.lastResult === "again" || item.lastResult === "hard") && (!courseId || item.courseId === courseId);
+      return !item.suspended && (Number(item.lapses || 0) > 0 || item.lastResult === "again" || item.lastResult === "hard") && (!courseId || item.courseId === courseId);
     }).sort(function (a, b) {
-      return calibrationPriority(b) - calibrationPriority(a) || Number(b.confidentErrors || 0) - Number(a.confidentErrors || 0) || Number(b.lapses || 0) - Number(a.lapses || 0) || String(a.dueDate).localeCompare(String(b.dueDate));
+      return Number(b.lapses || 0) - Number(a.lapses || 0) || String(a.dueDate).localeCompare(String(b.dueDate));
     });
   }
 
@@ -4426,7 +4335,7 @@
 
   function studyMasterySummary() {
     var items = semesterItems("reviewItems").filter(function (item) { return !item.suspended; });
-    var mature = items.filter(function (item) { return Number(item.intervalStep || 0) >= 3 && item.lastResult !== "again" && (!item.lastConfidence || Number(item.lastConfidence) >= 3); }).length;
+    var mature = items.filter(function (item) { return Number(item.intervalStep || 0) >= 3 && item.lastResult !== "again"; }).length;
     var learning = items.filter(function (item) { return Number(item.intervalStep || 0) < 3; }).length;
     return { total: items.length, mature: mature, learning: learning, percent: items.length ? Math.round(mature / items.length * 100) : 0 };
   }
@@ -4438,11 +4347,8 @@
     return options[Number(question.answerIndex)] || [];
   }
 
-  function scheduleReviewItem(item, rating, baseDate, confidence, correct, source) {
+  function scheduleReviewItem(item, rating, baseDate) {
     var step = clamp(Number(item.intervalStep) || 0, 0, REVIEW_INTERVALS.length - 1);
-    confidence = normalizeConfidence(confidence);
-    if (correct === false) rating = "again";
-    if (correct === true && confidence && confidence <= 2 && (rating === "good" || rating === "easy")) rating = rating === "easy" ? "good" : "hard";
     if (rating === "again") {
       step = 0;
       item.lapses = Math.max(0, Number(item.lapses) || 0) + 1;
@@ -4459,31 +4365,21 @@
     }
     item.intervalStep = step;
     item.lastResult = rating;
-    if (correct != null) recordReviewConfidence(item, !!correct, confidence, source || "review");
     item.lastReviewedAt = new Date().toISOString();
     item.updatedAt = item.lastReviewedAt;
     item.dueDate = addCalendarDays(baseDate || todayISO(), REVIEW_INTERVALS[step]);
-    return rating;
+    return item;
   }
 
-  function syncQuizReviewItems(quiz, answers, confidences, explanations, options) {
-    options = options || {};
+  function syncQuizReviewItems(quiz, answers) {
     var now = new Date().toISOString();
-    var summary = { errors: 0, fragile: 0, misconceptions: 0, mastered: 0, learning: 0, itemIds: [], results: [] };
-    var questions = options.questions || asArray(quiz.questions);
-    questions.forEach(function (question, index) {
-      var sourceIndex = options.sourceIndexes ? Number(options.sourceIndexes[index]) : index;
+    var errors = 0;
+    asArray(quiz.questions).forEach(function (question, index) {
       var answer = answers[index];
-      var confidence = normalizeConfidence(confidences && confidences[index]);
       var selfCheck = question.mode === "self-check" || !asArray(question.options).length;
       var correct = selfCheck ? answer === 1 : answer === Number(question.answerIndex);
-      var calibration = calibrationFromPerformance(correct, confidence);
-      if (!correct) summary.errors += 1;
-      if (calibration === "fragile") summary.fragile += 1;
-      if (calibration === "misconception") summary.misconceptions += 1;
-      if (calibration === "mastered") summary.mastered += 1;
-      if (calibration === "learning") summary.learning += 1;
-      var key = reviewQuestionKey(quiz, question, sourceIndex);
+      if (!correct) errors += 1;
+      var key = reviewQuestionKey(quiz, question, index);
       var item = reviewItemBySourceKey(key);
       if (!item) {
         item = {
@@ -4494,7 +4390,7 @@
           back: contentBlocksPlainText(reviewBackBlocks(question)), backBlocks: reviewBackBlocks(question),
           optionBlocks: asArray(question.optionBlocks).length ? question.optionBlocks.map(normalizeContentBlocks) : asArray(question.options).map(normalizeContentBlocks),
           answerIndex: question.answerIndex == null ? null : Number(question.answerIndex), images: normalizeImageRefs(question.images),
-          dueDate: todayISO(), intervalStep: 0, repetitions: 0, lapses: 0, lastResult: "", lastConfidence: 0, calibration: "", confidentErrors: 0, confidenceHistory: [], lastExplanation: "", lastDiagnosticAt: "", diagnosticMasteredAt: "",
+          dueDate: todayISO(), intervalStep: correct ? 0 : 0, repetitions: 0, lapses: 0, lastResult: "",
           lastReviewedAt: "", createdAt: now, updatedAt: now, suspended: false
         };
         state.reviewItems.push(item);
@@ -4508,40 +4404,15 @@
         item.images = normalizeImageRefs(question.images);
         item.suspended = false;
       }
-      item.lastExplanation = String(explanations && explanations[index] || "").trim();
-      if (options.diagnostic) {
-        item.lastDiagnosticAt = now;
-        if (correct && confidence >= 3) {
-          recordReviewConfidence(item, true, confidence, "diagnostic");
-          item.intervalStep = 4;
-          item.lastResult = "easy";
-          item.repetitions = Math.max(0, Number(item.repetitions) || 0) + 1;
-          item.lastReviewedAt = now;
-          item.updatedAt = now;
-          item.dueDate = addCalendarDays(todayISO(), 28);
-          item.diagnosticMasteredAt = now;
-        } else {
-          scheduleReviewItem(item, ratingFromPerformance(correct, confidence), todayISO(), confidence, correct, "diagnostic");
-          item.diagnosticMasteredAt = "";
-        }
-      } else {
-        scheduleReviewItem(item, ratingFromPerformance(correct, confidence), todayISO(), confidence, correct, "quiz");
-      }
-      summary.itemIds.push(item.id);
-      summary.results.push({ itemId: item.id, sourceIndex: sourceIndex, correct: correct, confidence: confidence, calibration: calibration });
+      scheduleReviewItem(item, correct ? "good" : "again", todayISO());
     });
-    return summary;
+    return errors;
   }
 
   function studyRecommendation() {
     var active = activeStudySession();
     if (active) {
       return { kind: "continuity", icon: "play-circle", label: "Retomar sessão", title: active.title, reason: "A sessão ficou em curso. Continua exatamente onde paraste.", action: "resume-study-session", id: active.id, minutes: Math.max(1, Math.ceil((Number(active.plannedMinutes || 25) * 60 - studySessionElapsed(active)) / 60)) };
-    }
-    var misconceptions = errorReviewItems().filter(function (item) { return item.calibration === "misconception" && item.dueDate <= todayISO(); });
-    if (misconceptions.length) {
-      var misconceptionCourse = courseById(misconceptions[0].courseId);
-      return { kind: "review", icon: "shield-alert", label: "Corrigir conceção", title: misconceptions.length + " erro" + (misconceptions.length === 1 ? " confiante" : "s confiantes"), reason: (misconceptionCourse ? misconceptionCourse.name + " · " : "") + "Respondeste com confiança, mas a resposta estava errada. Estes itens têm prioridade.", action: "start-review-session", minutes: Math.min(15, Math.max(4, misconceptions.length * 2)) };
     }
     var due = dueReviewItems();
     if (due.length) {
@@ -4555,15 +4426,6 @@
       var pendingLesson = pendingLessons[0];
       var pendingCourse = courseById(pendingLesson.courseId);
       return { kind: "quiz", icon: "brain", label: "Fazer mini-quiz", title: pendingLesson.title, reason: (pendingCourse ? pendingCourse.name + " · " : "") + "A aula já terminou e ainda não verificaste o que ficou na memória.", action: "do-beonline-quiz", lessonId: pendingLesson.id, minutes: 5 };
-    }
-    var diagnosticAssessment = semesterItems("assessments").filter(function (assessment) { var days = daysUntil(assessment.date); return assessment.date && days >= 0 && days <= 14; }).sort(function (a, b) { return String(a.date).localeCompare(String(b.date)); })[0];
-    if (diagnosticAssessment) {
-      var diagnosticQuiz = semesterItems("quizzes").find(function (item) { return item.courseId === diagnosticAssessment.courseId && asArray(item.questions).length >= 3; });
-      var recentDiagnostic = semesterItems("diagnostics").find(function (item) { return item.courseId === diagnosticAssessment.courseId && String(item.completedAt || "").slice(0, 10) >= addCalendarDays(todayISO(), -14); });
-      if (diagnosticQuiz && !recentDiagnostic) {
-        var diagnosticCourse = courseById(diagnosticAssessment.courseId);
-        return { kind: "diagnostic", icon: "scan-search", label: "Diagnóstico rápido", title: "Descobrir o que já dominas", reason: (diagnosticCourse ? diagnosticCourse.name + " · " : "") + relativeDate(diagnosticAssessment.date) + ". Cinco perguntas poupam revisão desnecessária.", action: "start-diagnostic", id: diagnosticQuiz.id, minutes: 3 };
-      }
     }
     var riskTask = semesterItems("tasks").filter(function (task) { return !task.done && task.type !== "lesson-quiz"; }).sort(function (a, b) {
       return String(a.dueDate || "9999").localeCompare(String(b.dueDate || "9999")) || Number(b.priority === "high") - Number(a.priority === "high");
@@ -4598,7 +4460,7 @@
 
   function renderStudyTabs(active) {
     var tabs = [
-      ["overview", "sparkles", "Visão geral"], ["diagnostic", "scan-search", "Diagnóstico"], ["review", "rotate-ccw", "Revisão"], ["errors", "triangle-alert", "Banco de erros"],
+      ["overview", "sparkles", "Visão geral"], ["review", "rotate-ccw", "Revisão"], ["errors", "triangle-alert", "Banco de erros"],
       ["flashcards", "layers-3", "Flashcards"], ["history", "history", "Histórico"], ["weekly", "clipboard-check", "Semanal"], ["ai", "brain", "IA"]
     ];
     return '<nav class="study-tabs" aria-label="Áreas de estudo">' + tabs.map(function (tab) {
@@ -4633,39 +4495,6 @@
     }).join("") + '</div>';
   }
 
-  function dailyStudyFeedback() {
-    var today = todayISO();
-    var sessions = semesterItems("studySessions").filter(function (session) { return session.status === "completed" && String(session.endedAt || session.startedAt || "").slice(0, 10) === today && session.sourceType !== "review"; });
-    if (!sessions.length) return null;
-    var planned = sessions.reduce(function (sum, session) { return sum + Number(session.plannedMinutes || 0); }, 0);
-    var actual = Math.round(sessions.reduce(function (sum, session) { return sum + Number(session.actualSeconds || 0); }, 0) / 60);
-    var totalSteps = sessions.reduce(function (sum, session) { return sum + asArray(session.steps).length; }, 0);
-    var doneSteps = sessions.reduce(function (sum, session) { return sum + asArray(session.steps).filter(function (step) { return step.done; }).length; }, 0);
-    var incomplete = sessions.filter(function (session) { return session.reflection && session.reflection.outcome && session.reflection.outcome !== "complete"; });
-    var suggestion = incomplete.length ? "Retoma apenas o passo que ficou por fazer, em vez de repetires a sessão inteira." : actual < planned * 0.75 ? "O plano ficou maior do que o tempo real. Reduz o próximo bloco em 10–15 minutos." : "O plano foi realista. Fecha o ciclo com um mini-quiz ou uma revisão curta.";
-    return { planned: planned, actual: actual, totalSteps: totalSteps, doneSteps: doneSteps, incomplete: incomplete.length, suggestion: suggestion };
-  }
-
-  function renderDailyStudyFeedback() {
-    var feedback = dailyStudyFeedback();
-    if (!feedback) return "";
-    var action = feedback.incomplete ? '<button class="button button-dark" type="button" data-action="guided-study-plan"><i data-lucide="arrow-right"></i>Planear continuação</button>' : dueReviewItems().length ? '<button class="button button-dark" type="button" data-action="start-review-session"><i data-lucide="rotate-ccw"></i>Fechar com revisão</button>' : '<button class="button button-dark" type="button" data-action="guided-study-plan"><i data-lucide="calendar-plus"></i>Planear próximo bloco</button>';
-    return '<article class="card span-12 daily-study-feedback"><div><p class="card-label">Feedback de hoje</p><h3>' + feedback.actual + ' de ' + feedback.planned + ' min realizados</h3><p>' + esc(feedback.suggestion) + '</p></div><div class="daily-study-feedback-stats"><span><strong>' + feedback.doneSteps + '/' + feedback.totalSteps + '</strong><small>passos</small></span><span><strong>' + feedback.incomplete + '</strong><small>por continuar</small></span></div>' + action + '</article>';
-  }
-
-  function renderDiagnosticPage() {
-    var quizzes = semesterItems("quizzes").filter(function (quiz) { return asArray(quiz.questions).length >= 3; });
-    var records = semesterItems("diagnostics").slice().sort(function (a, b) { return String(b.completedAt || "").localeCompare(String(a.completedAt || "")); });
-    var latest = records[0];
-    var latestHtml = latest ? '<article class="diagnostic-latest"><div><p class="card-label">Último diagnóstico</p><h3>' + esc(latest.title) + '</h3><p>' + esc(formatDate(String(latest.completedAt).slice(0, 10))) + ' · ' + latest.total + ' perguntas</p></div><div class="diagnostic-summary"><span class="is-mastered"><strong>' + latest.mastered + '</strong><small>dominados</small></span><span class="is-fragile"><strong>' + latest.fragile + '</strong><small>frágeis</small></span><span class="is-learning"><strong>' + latest.learning + '</strong><small>por aprender</small></span><span class="is-misconception"><strong>' + latest.misconceptions + '</strong><small>erros confiantes</small></span></div>' + ((latest.fragile + latest.learning + latest.misconceptions) ? '<button class="button button-dark" type="button" data-action="start-diagnostic-review" data-id="' + attr(latest.id) + '"><i data-lucide="play"></i>Rever lacunas</button>' : '') + '</article>' : '<div class="form-note"><strong>Para que serve?</strong> Um diagnóstico curto identifica matéria já dominada e evita que a Twenty te faça rever tudo por igual.</div>';
-    var list = quizzes.length ? '<div class="diagnostic-grid">' + quizzes.map(function (quiz) {
-      var course = courseById(quiz.courseId);
-      var recent = records.find(function (record) { return record.quizId === quiz.id; });
-      return '<article class="diagnostic-card"><span class="metric-icon"><i data-lucide="scan-search"></i></span><div><span class="badge" style="background:' + safeColor(course && course.color, '#eeeaff') + '">' + esc(course ? course.code || course.name : 'Quiz') + '</span><h3>' + esc(quiz.title) + '</h3><p>' + asArray(quiz.questions).length + ' perguntas disponíveis' + (recent ? ' · último ' + relativeDate(String(recent.completedAt).slice(0, 10)).toLowerCase() : '') + '</p></div><button class="button button-dark" type="button" data-action="start-diagnostic" data-id="' + attr(quiz.id) + '"><i data-lucide="play"></i>Diagnóstico de ' + Math.min(Number(state.settings.diagnosticQuestionCount || 5), asArray(quiz.questions).length) + ' perguntas</button></article>';
-    }).join("") + '</div>' : emptyState("scan-search", "Ainda sem quizzes para diagnosticar", "Cria um quiz com pelo menos três perguntas. A Twenty usa perguntas reais da cadeira, sem inventar matéria.", "add-quiz", "Criar quiz");
-    return '<div class="page-head"><div><h2>Diagnóstico rápido</h2><p>Descobre o que já sabes antes de criares um plano de revisão.</p></div><div class="page-actions"><span class="badge badge-violet">3–5 min</span></div></div>' + latestHtml + '<div class="section-heading"><div><h3>Escolher matéria</h3><p>Os itens dominados saem da fila imediata; acertos inseguros continuam em revisão.</p></div></div>' + list;
-  }
-
   function renderStudyOverview() {
     var due = dueReviewItems();
     var errors = errorReviewItems();
@@ -4673,13 +4502,12 @@
     var sessions = completedStudySessions(7);
     var studiedMinutes = Math.round(sessions.reduce(function (sum, session) { return sum + Number(session.actualSeconds || 0); }, 0) / 60);
     var recommendation = renderStudyRecommendationCard(false);
-    var dailyFeedback = renderDailyStudyFeedback();
     var recent = sessions.slice().sort(function (a, b) { return String(b.endedAt || "").localeCompare(String(a.endedAt || "")); }).slice(0, 4);
     var recentHtml = recent.length ? recent.map(function (session) {
       var course = courseById(session.courseId);
       return '<div class="list-row"><span class="list-icon mint"><i data-lucide="check-circle-2"></i></span><span class="list-content"><strong>' + esc(session.title) + '</strong><small>' + esc(course ? course.name : "Estudo") + ' · ' + Math.max(1, Math.round(Number(session.actualSeconds || 0) / 60)) + ' min</small></span><span class="badge">' + asArray(session.steps).filter(function (step) { return step.done; }).length + '/' + asArray(session.steps).length + ' passos</span></div>';
     }).join("") : emptyState("timer-reset", "Ainda sem sessões", "Planeia uma tarefa e começa uma sessão curta. O histórico aparece aqui.", "guided-study-plan", "Planear sessão");
-    return renderStudyNotificationStrip() + '<div class="bento-grid study-core-grid">' + recommendation + dailyFeedback
+    return renderStudyNotificationStrip() + '<div class="bento-grid study-core-grid">' + recommendation
       + '<article class="card span-3 metric-card card-mint"><div class="metric-top"><p class="card-label">Para hoje</p><span class="metric-icon"><i data-lucide="rotate-ccw"></i></span></div><div><p class="metric-value">' + due.length + '</p><p class="metric-caption">revisões disponíveis</p></div><button class="button button-small" type="button" data-route="study" data-tab="review">Abrir fila</button></article>'
       + '<article class="card span-3 metric-card card-pink"><div class="metric-top"><p class="card-label">Banco de erros</p><span class="metric-icon"><i data-lucide="triangle-alert"></i></span></div><div><p class="metric-value">' + errors.length + '</p><p class="metric-caption">itens a reforçar</p></div><button class="button button-small" type="button" data-route="study" data-tab="errors">Ver erros</button></article>'
       + '<article class="card span-3 metric-card card-violet"><div class="metric-top"><p class="card-label">Domínio</p><span class="metric-icon"><i data-lucide="badge-check"></i></span></div><div><p class="metric-value">' + mastery.percent + '%</p><p class="metric-caption">' + mastery.mature + ' consolidados</p></div><div class="study-mastery-bar"><span style="width:' + mastery.percent + '%"></span></div></article>'
@@ -4707,7 +4535,7 @@
     var content = Object.keys(grouped).length ? Object.keys(grouped).map(function (courseId) {
       var course = courseById(courseId);
       return '<section class="error-course-group"><div class="section-heading"><div><h3>' + esc(course ? course.name : "Revisão geral") + '</h3><p>' + grouped[courseId].length + ' conceito(s) que já falharam</p></div><button class="button button-small" type="button" data-action="start-review-session" data-errors="true" data-course="' + attr(courseId === "general" ? "" : courseId) + '"><i data-lucide="play"></i>Rever cadeira</button></div><div class="error-bank-grid">' + grouped[courseId].map(function (item) {
-        return '<article class="error-bank-card ' + (item.calibration === 'misconception' ? 'is-misconception' : item.calibration === 'fragile' ? 'is-fragile' : '') + '"><div class="error-count"><strong>' + Math.max(1, Number(item.lapses || 0)) + '</strong><span>falha' + (Number(item.lapses || 0) === 1 ? '' : 's') + '</span></div><div><span class="badge ' + (item.calibration === 'misconception' ? 'badge-pink' : item.calibration === 'fragile' ? 'badge-yellow' : '') + '">' + esc(calibrationLabel(item.calibration)) + '</span><h4>' + esc(item.front) + '</h4><p>Próxima revisão: ' + esc(relativeDate(item.dueDate)) + (item.lastConfidence ? ' · confiança ' + item.lastConfidence + '/4' : '') + '</p></div><div class="list-actions"><button class="row-button" type="button" data-action="start-review-session" data-id="' + attr(item.id) + '" aria-label="Rever agora"><i data-lucide="play"></i></button><button class="row-button" type="button" data-action="archive-review-item" data-id="' + attr(item.id) + '" aria-label="Arquivar como dominado"><i data-lucide="archive"></i></button></div></article>';
+        return '<article class="error-bank-card"><div class="error-count"><strong>' + Math.max(1, Number(item.lapses || 0)) + '</strong><span>falha' + (Number(item.lapses || 0) === 1 ? '' : 's') + '</span></div><div><h4>' + esc(item.front) + '</h4><p>Próxima revisão: ' + esc(relativeDate(item.dueDate)) + '</p></div><div class="list-actions"><button class="row-button" type="button" data-action="start-review-session" data-id="' + attr(item.id) + '" aria-label="Rever agora"><i data-lucide="play"></i></button><button class="row-button" type="button" data-action="archive-review-item" data-id="' + attr(item.id) + '" aria-label="Arquivar como dominado"><i data-lucide="archive"></i></button></div></article>';
       }).join("") + '</div></section>';
     }).join("") : emptyState("badge-check", "Banco de erros vazio", "As perguntas falhadas aparecem aqui automaticamente depois de cada quiz.", null);
     return '<div class="page-head"><div><h2>Banco de erros</h2><p>Não é uma lista de castigos. É a fila do que merece mais uma tentativa.</p></div><div class="page-actions"><span class="badge badge-pink">' + errors.length + ' por reforçar</span><button class="button button-dark" type="button" data-action="start-review-session" data-errors="true" ' + (!errors.length ? 'disabled' : '') + '><i data-lucide="rotate-ccw"></i>Rever erros</button></div></div>' + content;
@@ -4733,8 +4561,7 @@
     var rows = sessions.length ? sessions.map(function (session) {
       var course = courseById(session.courseId);
       var stepsDone = asArray(session.steps).filter(function (step) { return step.done; }).length;
-      var reflection = session.reflection && session.reflection.outcome ? '<span class="badge ' + (session.reflection.outcome === 'complete' ? 'badge-mint' : 'badge-yellow') + '">' + esc(session.reflection.outcome === 'complete' ? 'Objetivo concluído' : 'Continuação necessária') + '</span>' : '<span class="badge">Sem reflexão</span>';
-      return '<div class="study-history-row"><time>' + esc(formatDate(String(session.endedAt || session.startedAt).slice(0, 10))) + '</time><span class="list-icon mint"><i data-lucide="timer"></i></span><div><strong>' + esc(session.title) + '</strong><small>' + esc(course ? course.name : "Estudo") + ' · ' + Math.max(1, Math.round(Number(session.actualSeconds || 0) / 60)) + '/' + Number(session.plannedMinutes || 0) + ' min · ' + stepsDone + '/' + asArray(session.steps).length + ' passos</small></div>' + reflection + '</div>';
+      return '<div class="study-history-row"><time>' + esc(formatDate(String(session.endedAt || session.startedAt).slice(0, 10))) + '</time><span class="list-icon mint"><i data-lucide="timer"></i></span><div><strong>' + esc(session.title) + '</strong><small>' + esc(course ? course.name : "Estudo") + ' · ' + Math.max(1, Math.round(Number(session.actualSeconds || 0) / 60)) + ' min · ' + stepsDone + '/' + asArray(session.steps).length + ' passos</small></div><span class="badge">' + esc(session.goal || "Sessão concluída") + '</span></div>';
     }).join("") : emptyState("history", "Sem histórico de estudo", "As sessões guiadas concluídas aparecem aqui, sem pontos ou rankings artificiais.", "guided-study-plan", "Começar sessão");
     return '<div class="page-head"><div><h2>Histórico real</h2><p>Tempo, objetivos e passos concluídos. Apenas trabalho académico com significado.</p></div><div class="page-actions"><span class="badge badge-mint">' + Math.round(total / 60) + ' min totais</span></div></div><div class="study-history-list">' + rows + '</div>';
   }
@@ -4751,25 +4578,15 @@
     var course = courseById(item.courseId);
     var progress = reviewRuntime.index + 1;
     var reveal = !!reviewRuntime.revealed;
-    var confidence = normalizeConfidence(reviewRuntime.confidence);
     var answerOptions = reveal && asArray(item.optionBlocks).length ? '<div class="review-answer-options">' + item.optionBlocks.map(function (option, index) {
       return '<div class="review-answer-option ' + (index === Number(item.answerIndex) ? 'is-correct' : '') + '"><span>' + String.fromCharCode(65 + index) + '</span>' + renderQuizOptionContent(option) + '</div>';
     }).join("") + '</div>' : '';
-    var confidencePanel = renderConfidenceScale("review-confidence", confidence);
-    var answer = reveal ? '<section class="review-revealed"><div class="calibration-preview"><span class="badge badge-violet">Confiança ' + confidence + '/4 · ' + esc(confidenceLabel(confidence)) + '</span><small>Agora compara com honestidade e escolhe o resultado.</small></div><p class="card-label">Resposta</p>' + answerOptions + (asArray(item.backBlocks).length ? '<div class="review-explanation">' + renderContentBlocks(item.backBlocks) + '</div>' : '') + '</section>' : '<div class="review-recall-prompt"><i data-lucide="brain"></i><strong>Tenta responder antes de revelar.</strong><span>Recupera a ideia da memória, indica a confiança e só depois compara.</span></div>' + confidencePanel;
+    var answer = reveal ? '<section class="review-revealed"><p class="card-label">Resposta</p>' + answerOptions + (asArray(item.backBlocks).length ? '<div class="review-explanation">' + renderContentBlocks(item.backBlocks) + '</div>' : '') + '</section>' : '<div class="review-recall-prompt"><i data-lucide="brain"></i><strong>Tenta responder antes de revelar.</strong><span>Não precisas de escrever na app. Recupera a ideia da memória e só depois compara.</span></div>';
     var footer = reveal
-      ? '<footer class="modal-foot review-rating-actions"><button class="button review-again" type="button" data-action="review-rate" data-value="again"><i data-lucide="rotate-ccw"></i>Não sabia<small>1 dia</small></button><button class="button" type="button" data-action="review-rate" data-value="hard"><i data-lucide="gauge"></i>Sabia com esforço<small>' + REVIEW_INTERVALS[Math.max(0, Number(item.intervalStep || 0))] + ' d</small></button><button class="button button-dark" type="button" data-action="review-rate" data-value="good"><i data-lucide="check"></i>Sabia<small>' + REVIEW_INTERVALS[Math.min(REVIEW_INTERVALS.length - 1, Number(item.intervalStep || 0) + 1)] + ' d</small></button><button class="button" type="button" data-action="review-rate" data-value="easy"><i data-lucide="fast-forward"></i>Muito fácil<small>' + REVIEW_INTERVALS[Math.min(REVIEW_INTERVALS.length - 1, Number(item.intervalStep || 0) + 2)] + ' d</small></button></footer>'
-      : '<footer class="modal-foot"><button class="button" type="button" data-action="review-stop"><i data-lucide="x"></i>Terminar</button><button class="button button-dark" type="button" data-action="review-reveal" ' + (state.settings.studyConfidencePrompts && !confidence ? 'disabled' : '') + '><i data-lucide="eye"></i>Revelar resposta</button></footer>';
-    var body = '<div class="review-session-progress"><span>Item ' + progress + ' de ' + reviewRuntime.ids.length + '</span><div><span style="width:' + Math.round(progress / reviewRuntime.ids.length * 100) + '%"></span></div></div><div class="review-session-meta"><span class="badge" style="background:' + safeColor(course && course.color, '#eeeaff') + '">' + esc(course ? course.code || course.name : 'Revisão') + '</span><span class="badge ' + (item.calibration === 'misconception' ? 'badge-pink' : item.calibration === 'fragile' ? 'badge-yellow' : item.lapses ? 'badge-pink' : 'badge-mint') + '">' + esc(item.calibration ? calibrationLabel(item.calibration) : item.lapses ? item.lapses + ' falha(s)' : 'Em aprendizagem') + '</span></div><div class="review-session-question">' + renderContentBlocks(item.frontBlocks || item.front) + renderImageGallery(item.images, "question", { ownerId: item.id }) + '</div>' + answer;
+      ? '<footer class="modal-foot review-rating-actions"><button class="button review-again" type="button" data-action="review-rate" data-value="again"><i data-lucide="rotate-ccw"></i>Outra vez<small>1 dia</small></button><button class="button" type="button" data-action="review-rate" data-value="hard"><i data-lucide="gauge"></i>Difícil<small>' + REVIEW_INTERVALS[Math.max(0, Number(item.intervalStep || 0))] + ' d</small></button><button class="button button-dark" type="button" data-action="review-rate" data-value="good"><i data-lucide="check"></i>Sabia<small>' + REVIEW_INTERVALS[Math.min(REVIEW_INTERVALS.length - 1, Number(item.intervalStep || 0) + 1)] + ' d</small></button><button class="button" type="button" data-action="review-rate" data-value="easy"><i data-lucide="fast-forward"></i>Fácil<small>' + REVIEW_INTERVALS[Math.min(REVIEW_INTERVALS.length - 1, Number(item.intervalStep || 0) + 2)] + ' d</small></button></footer>'
+      : '<footer class="modal-foot"><button class="button" type="button" data-action="review-stop"><i data-lucide="x"></i>Terminar</button><button class="button button-dark" type="button" data-action="review-reveal"><i data-lucide="eye"></i>Revelar resposta</button></footer>';
+    var body = '<div class="review-session-progress"><span>Item ' + progress + ' de ' + reviewRuntime.ids.length + '</span><div><span style="width:' + Math.round(progress / reviewRuntime.ids.length * 100) + '%"></span></div></div><div class="review-session-meta"><span class="badge" style="background:' + safeColor(course && course.color, '#eeeaff') + '">' + esc(course ? course.code || course.name : 'Revisão') + '</span><span class="badge ' + (item.lapses ? 'badge-pink' : 'badge-mint') + '">' + (item.lapses ? item.lapses + ' falha(s)' : 'Em aprendizagem') + '</span></div><div class="review-session-question">' + renderContentBlocks(item.frontBlocks || item.front) + renderImageGallery(item.images, "question", { ownerId: item.id }) + '</div>' + answer;
     openModal("Revisão ativa", body, { className: "modal-wide review-session-modal", footer: footer });
-  }
-
-  function startReviewItemsByIds(ids) {
-    ids = asArray(ids).filter(function (id) { return state.reviewItems.some(function (item) { return item.id === id && !item.suspended; }); });
-    if (!ids.length) { toast("Não existem lacunas disponíveis para rever.", "warning"); return; }
-    var limit = Math.max(1, Number(state.settings.reviewDailyGoal || 10));
-    reviewRuntime = { ids: ids.slice(0, limit), index: 0, revealed: false, confidence: 0, startedAt: Date.now(), ratings: [] };
-    renderReviewRuntime();
   }
 
   function startReviewSession(itemId, courseId, errorsOnly) {
@@ -4784,22 +4601,21 @@
       if (!items.length && courseId) items = semesterItems("reviewItems").filter(function (item) { return !item.suspended && item.courseId === courseId; });
     }
     if (!items.length) { toast("Não existem itens disponíveis para rever agora.", "warning"); return; }
-    startReviewItemsByIds(items.map(function (item) { return item.id; }));
+    var limit = Math.max(1, Number(state.settings.reviewDailyGoal || 10));
+    reviewRuntime = { ids: items.slice(0, limit).map(function (item) { return item.id; }), index: 0, revealed: false, startedAt: Date.now(), ratings: [] };
+    renderReviewRuntime();
   }
 
   async function rateReviewItem(rating) {
     if (!reviewRuntime) return;
     var item = state.reviewItems.find(function (entry) { return entry.id === reviewRuntime.ids[reviewRuntime.index]; });
     if (item) {
-      var confidence = normalizeConfidence(reviewRuntime.confidence);
-      var correct = rating !== "again";
-      var appliedRating = scheduleReviewItem(item, rating, todayISO(), confidence, correct, "review");
-      reviewRuntime.ratings.push({ id: item.id, rating: appliedRating, confidence: confidence, calibration: item.calibration });
+      scheduleReviewItem(item, rating, todayISO());
+      reviewRuntime.ratings.push({ id: item.id, rating: rating });
       await save(true);
     }
     reviewRuntime.index += 1;
     reviewRuntime.revealed = false;
-    reviewRuntime.confidence = 0;
     if (reviewRuntime.index >= reviewRuntime.ids.length) finishReviewSession();
     else renderReviewRuntime();
   }
@@ -4810,17 +4626,15 @@
     reviewRuntime = null;
     closeModal();
     var again = finished.ratings.filter(function (item) { return item.rating === "again"; }).length;
-    var misconceptions = finished.ratings.filter(function (item) { return item.calibration === "misconception"; }).length;
-    var fragile = finished.ratings.filter(function (item) { return item.calibration === "fragile"; }).length;
     var duration = Math.max(1, Math.round((Date.now() - finished.startedAt) / 60000));
     state.studySessions.push({
       id: uid("studysession"), semesterId: state.currentSemesterId, courseId: null, sourceType: "review", sourceId: null,
       title: "Revisão espaçada", goal: "Recuperar conteúdos sem consultar", plannedMinutes: duration, startedAt: new Date(finished.startedAt).toISOString(),
       endedAt: new Date().toISOString(), actualSeconds: Math.round((Date.now() - finished.startedAt) / 1000), pausedSeconds: 0, pausedAt: "", status: "completed",
-      steps: [{ id: uid("step"), title: finished.ratings.length + " itens revistos", done: true }], reflection: null, createdAt: new Date(finished.startedAt).toISOString()
+      steps: [{ id: uid("step"), title: finished.ratings.length + " itens revistos", done: true }], createdAt: new Date(finished.startedAt).toISOString()
     });
     save(true).catch(function (error) { console.error(error); });
-    openModal("Revisão concluída", '<div class="finish-card review-finish-card"><span class="study-finish-check"><i data-lucide="check"></i></span><p class="card-label">Recuperação ativa + calibração</p><h2>' + finished.ratings.length + ' itens revistos</h2><p>' + (misconceptions ? misconceptions + ' resposta(s) pareciam certas, mas estavam erradas. Foram colocadas no topo do Banco de Erros.' : fragile ? fragile + ' acerto(s) ainda estavam inseguros e regressam mais cedo.' : again ? again + ' voltam amanhã porque ainda precisam de reforço.' : 'Confiança e desempenho ficaram alinhados nesta sessão.') + '</p><div class="review-finish-stats"><span><strong>' + duration + '</strong><small>minutos</small></span><span><strong>' + fragile + '</strong><small>acertos frágeis</small></span><span><strong>' + misconceptions + '</strong><small>erros confiantes</small></span></div></div>', { footer: '<footer class="modal-foot"><button class="button" type="button" data-route="study" data-tab="errors"><i data-lucide="triangle-alert"></i>Banco de erros</button><button class="button button-dark" type="button" data-action="close-modal"><i data-lucide="check"></i>Concluir</button></footer>' });
+    openModal("Revisão concluída", '<div class="finish-card review-finish-card"><span class="study-finish-check"><i data-lucide="check"></i></span><p class="card-label">Recuperação ativa</p><h2>' + finished.ratings.length + ' itens revistos</h2><p>' + (again ? again + ' voltam amanhã porque ainda precisam de reforço.' : 'Nenhum item precisou de voltar ao início do ciclo.') + '</p><div class="review-finish-stats"><span><strong>' + duration + '</strong><small>minutos</small></span><span><strong>' + again + '</strong><small>a reforçar</small></span><span><strong>' + dueReviewItems().length + '</strong><small>ainda hoje</small></span></div></div>', { footer: '<footer class="modal-foot"><button class="button" type="button" data-route="study" data-tab="errors"><i data-lucide="triangle-alert"></i>Banco de erros</button><button class="button button-dark" type="button" data-action="close-modal"><i data-lucide="check"></i>Concluir</button></footer>' });
   }
 
   function openFlashcardForm(id) {
@@ -4866,7 +4680,7 @@
   }
 
   function openReviewSettings() {
-    var body = '<form id="reviewSettingsForm"><div class="field"><label>Meta diária de revisão</label><input type="number" name="dailyGoal" min="3" max="50" step="1" value="' + attr(state.settings.reviewDailyGoal || 10) + '"><small>É um limite de fila, não uma obrigação nem um streak.</small></div><div class="field"><label>Perguntas no diagnóstico</label><input type="number" name="diagnosticCount" min="3" max="10" step="1" value="' + attr(state.settings.diagnosticQuestionCount || 5) + '"><small>Um diagnóstico deve ser curto o suficiente para não se tornar outro teste.</small></div><label class="settings-switch"><span><strong>Pedir confiança antes da resposta</strong><small>Permite distinguir domínio real, acertos por sorte e erros confiantes.</small></span><input type="checkbox" name="confidence" ' + (state.settings.studyConfidencePrompts ? 'checked' : '') + '></label><label class="settings-switch"><span><strong>Reflexão curta depois das sessões</strong><small>Compara planeado e realizado e ajuda a criar o próximo passo.</small></span><input type="checkbox" name="reflection" ' + (state.settings.studyReflectionEnabled ? 'checked' : '') + '></label><label class="settings-switch"><span><strong>Lembretes contextuais dentro da Twenty</strong><small>Aulas próximas, prazos de risco, revisões e sessões interrompidas. Sem lembretes vagos diários.</small></span><input type="checkbox" name="notifications" ' + (state.settings.studyNotificationsEnabled ? 'checked' : '') + '></label></form>';
+    var body = '<form id="reviewSettingsForm"><div class="field"><label>Meta diária de revisão</label><input type="number" name="dailyGoal" min="3" max="50" step="1" value="' + attr(state.settings.reviewDailyGoal || 10) + '"><small>É um limite de fila, não uma obrigação nem um streak.</small></div><label class="settings-switch"><span><strong>Lembretes contextuais dentro da Twenty</strong><small>Aulas próximas, prazos de risco, revisões e sessões interrompidas. Sem lembretes vagos diários.</small></span><input type="checkbox" name="notifications" ' + (state.settings.studyNotificationsEnabled ? 'checked' : '') + '></label></form>';
     openModal("Preferências de estudo", body, { footer: formFooter("Guardar", "reviewSettingsForm") });
   }
 
@@ -4874,9 +4688,6 @@
     event.preventDefault();
     var data = new FormData(event.target);
     state.settings.reviewDailyGoal = clamp(data.get("dailyGoal") || 10, 3, 50);
-    state.settings.diagnosticQuestionCount = clamp(data.get("diagnosticCount") || 5, 3, 10);
-    state.settings.studyConfidencePrompts = data.get("confidence") === "on";
-    state.settings.studyReflectionEnabled = data.get("reflection") === "on";
     state.settings.studyNotificationsEnabled = data.get("notifications") === "on";
     await save(true); closeModal(); render(); toast("Preferências de estudo guardadas.");
   }
@@ -4935,7 +4746,7 @@
 
   function focusSessionFromBlock(block) {
     var source = block && block.sourceId ? studySource(block.sourceType, block.sourceId) : null;
-    return { id: uid("studysession"), semesterId: state.currentSemesterId, courseId: block && block.courseId || source && source.courseId || null, sourceType: block && block.sourceType || source && source.type || "custom", sourceId: block && block.sourceId || source && source.id || null, studyBlockId: block && block.id || null, title: block && block.title || source && source.title || "Sessão de estudo", goal: block && block.goal || "Concluir uma parte concreta", plannedMinutes: Number(block && block.plannedMinutes || source && source.duration || 25), startedAt: new Date().toISOString(), endedAt: "", actualSeconds: 0, pausedSeconds: 0, pausedAt: "", status: "active", steps: asArray(block && block.steps).map(function (step) { return Object.assign({}, step, { done: !!step.done }); }), reflection: null, finishMode: block && block.finishMode || "quiz", createdAt: new Date().toISOString() };
+    return { id: uid("studysession"), semesterId: state.currentSemesterId, courseId: block && block.courseId || source && source.courseId || null, sourceType: block && block.sourceType || source && source.type || "custom", sourceId: block && block.sourceId || source && source.id || null, studyBlockId: block && block.id || null, title: block && block.title || source && source.title || "Sessão de estudo", goal: block && block.goal || "Concluir uma parte concreta", plannedMinutes: Number(block && block.plannedMinutes || source && source.duration || 25), startedAt: new Date().toISOString(), endedAt: "", actualSeconds: 0, pausedSeconds: 0, pausedAt: "", status: "active", steps: asArray(block && block.steps).map(function (step) { return Object.assign({}, step, { done: !!step.done }); }), finishMode: block && block.finishMode || "quiz", createdAt: new Date().toISOString() };
   }
 
   async function startStudyFocusSession(sourceType, sourceId, blockId) {
@@ -5032,54 +4843,6 @@
     return quizzes[0] || null;
   }
 
-  function studyReflectionOutcomeLabel(outcome) {
-    return outcome === "complete" ? "Consegui tudo" : outcome === "partial" ? "Fiz parcialmente" : outcome === "not-started" ? "Não consegui avançar" : outcome === "changed" ? "O objetivo mudou" : "Sem reflexão";
-  }
-
-  function openStudyReflection(session) {
-    if (!session) return;
-    pendingStudyReflectionSessionId = session.id;
-    var stepsDone = asArray(session.steps).filter(function (step) { return step.done; }).length;
-    var incomplete = stepsDone < asArray(session.steps).length;
-    var body = '<form id="studyReflectionForm" data-id="' + attr(session.id) + '"><div class="reflection-intro"><p class="card-label">20 segundos</p><h3>O que aconteceu neste bloco?</h3><p>Isto serve para ajustar o próximo plano, não para te avaliar.</p></div><div class="reflection-outcomes"><label><input type="radio" name="outcome" value="complete" ' + (!incomplete ? 'checked' : '') + '><span><i data-lucide="check-circle-2"></i><strong>Consegui tudo</strong></span></label><label><input type="radio" name="outcome" value="partial" ' + (incomplete ? 'checked' : '') + '><span><i data-lucide="circle-dashed"></i><strong>Fiz parcialmente</strong></span></label><label><input type="radio" name="outcome" value="not-started"><span><i data-lucide="pause-circle"></i><strong>Não consegui avançar</strong></span></label><label><input type="radio" name="outcome" value="changed"><span><i data-lucide="shuffle"></i><strong>O objetivo mudou</strong></span></label></div><div class="form-grid"><div class="field"><label>O que dificultou?</label><select name="reason"><option value="">Não se aplica</option><option value="more-time">Precisava de mais tempo</option><option value="harder">A matéria era mais difícil</option><option value="interrupted">Fui interrompido</option><option value="focus">Perdi a concentração</option><option value="too-large">O objetivo era demasiado grande</option><option value="other">Outro motivo</option></select></div><div class="field"><label>Próximo passo</label><input name="nextStep" value="' + attr(incomplete ? "Concluir o passo que ficou por fazer" : "Verificar a aprendizagem com um mini-quiz") + '"></div><div class="field field-full"><label>Nota opcional</label><textarea name="note" rows="2" placeholder="Uma frase curta, apenas se ajudar."></textarea></div></div><label class="settings-switch"><span><strong>Agendar continuação amanhã</strong><small>A Twenty usa apenas os passos que ficaram incompletos.</small></span><input type="checkbox" name="scheduleContinuation" ' + (incomplete ? 'checked' : '') + '></label></form>';
-    openModal("Reflexão da sessão", body, { className: "modal-wide study-reflection-modal", footer: '<footer class="modal-foot"><button class="button" type="button" data-action="skip-study-reflection" data-id="' + attr(session.id) + '">Agora não</button><button class="button button-dark" type="submit" form="studyReflectionForm"><i data-lucide="arrow-right"></i>Guardar próximo passo</button></footer>' });
-  }
-
-  function showStudySessionFinish(session) {
-    if (!session) return;
-    var quiz = suggestedQuizForSession(session);
-    var due = dueReviewItems(session.courseId || "");
-    var stepsDone = asArray(session.steps).filter(function (step) { return step.done; }).length;
-    var nextAction = session.finishMode === "review" && due.length ? '<button class="button button-dark" type="button" data-action="start-review-session" data-course="' + attr(session.courseId || '') + '"><i data-lucide="rotate-ccw"></i>Fazer revisão</button>' : session.finishMode !== "none" && quiz ? '<button class="button button-dark" type="button" data-action="start-quiz" data-id="' + attr(quiz.id) + '"><i data-lucide="brain"></i>Mini-quiz</button>' : '<button class="button button-dark" type="button" data-action="close-modal"><i data-lucide="check"></i>Concluir</button>';
-    var reflectionCopy = session.reflection && session.reflection.outcome ? '<div class="reflection-result"><span class="badge ' + (session.reflection.outcome === 'complete' ? 'badge-mint' : 'badge-yellow') + '">' + esc(studyReflectionOutcomeLabel(session.reflection.outcome)) + '</span><p>' + esc(session.reflection.nextStep || '') + '</p></div>' : '';
-    openModal("Sessão concluída", '<div class="finish-card study-session-finish"><span class="study-finish-check"><i data-lucide="check"></i></span><p class="card-label">Planeado versus realizado</p><h2>' + esc(session.title) + '</h2><p>' + esc(session.goal) + '</p><div class="review-finish-stats"><span><strong>' + Math.max(1, Math.round(session.actualSeconds / 60)) + '/' + Number(session.plannedMinutes || 0) + '</strong><small>minutos</small></span><span><strong>' + stepsDone + '/' + asArray(session.steps).length + '</strong><small>passos</small></span><span><strong>' + due.length + '</strong><small>revisões</small></span></div>' + reflectionCopy + '<p class="study-focus-note"><i data-lucide="arrow-right"></i>O próximo passo serve para verificar aprendizagem, não para prolongar tempo dentro da app.</p></div>', { footer: '<footer class="modal-foot"><button class="button" type="button" data-action="close-modal">Agora não</button>' + nextAction + '</footer>' });
-  }
-
-  async function handleStudyReflectionSubmit(event) {
-    event.preventDefault();
-    var form = event.target;
-    var session = studyFocusSessionById(form.dataset.id || pendingStudyReflectionSessionId);
-    if (!session) { closeModal(); return; }
-    var data = new FormData(form);
-    var outcome = String(data.get("outcome") || "partial");
-    var reflection = { outcome: outcome, reason: String(data.get("reason") || ""), note: String(data.get("note") || "").trim(), nextStep: String(data.get("nextStep") || "").trim(), reflectedAt: new Date().toISOString(), continuationBlockId: null };
-    if (data.get("scheduleContinuation") === "on" && outcome !== "complete") {
-      var remainingSteps = asArray(session.steps).filter(function (step) { return !step.done; }).map(function (step) { return { id: uid("step"), title: step.title, done: false }; });
-      if (!remainingSteps.length) remainingSteps = [{ id: uid("step"), title: reflection.nextStep || "Retomar a sessão", done: false }];
-      var minutes = clamp(Math.max(15, Number(session.plannedMinutes || 25) - Math.round(Number(session.actualSeconds || 0) / 60)), 15, 90);
-      var date = addCalendarDays(todayISO(), 1);
-      var start = firstFreeStudyTime(date, minutes);
-      var block = { id: uid("studyblock"), semesterId: state.currentSemesterId, date: date, title: "Continuar · " + session.title, start: start, end: minutesToTime(Math.min(1439, timeMinutes(start) + minutes)), kind: "study", courseId: session.courseId || null, sourceType: session.sourceType || "custom", sourceId: session.sourceId || null, completed: false, notes: "", goal: reflection.nextStep || session.goal, plannedMinutes: minutes, steps: remainingSteps, finishMode: session.finishMode || "quiz" };
-      state.studyBlocks.push(block);
-      reflection.continuationBlockId = block.id;
-    }
-    session.reflection = reflection;
-    pendingStudyReflectionSessionId = null;
-    await save(true);
-    closeModal(); render();
-    showStudySessionFinish(session);
-  }
-
   async function finishStudyFocusSession() {
     var session = studyFocusRuntime && studyFocusSessionById(studyFocusRuntime.id);
     if (!session) return;
@@ -5096,8 +4859,11 @@
     studyFocusRuntime = null;
     await save(true);
     closeModal(); render();
-    if (state.settings.studyReflectionEnabled) openStudyReflection(session);
-    else showStudySessionFinish(session);
+    var quiz = suggestedQuizForSession(session);
+    var due = dueReviewItems(session.courseId || "");
+    var stepsDone = asArray(session.steps).filter(function (step) { return step.done; }).length;
+    var nextAction = session.finishMode === "review" && due.length ? '<button class="button button-dark" type="button" data-action="start-review-session" data-course="' + attr(session.courseId || '') + '"><i data-lucide="rotate-ccw"></i>Fazer revisão</button>' : session.finishMode !== "none" && quiz ? '<button class="button button-dark" type="button" data-action="start-quiz" data-id="' + attr(quiz.id) + '"><i data-lucide="brain"></i>Mini-quiz</button>' : '<button class="button button-dark" type="button" data-action="close-modal"><i data-lucide="check"></i>Concluir</button>';
+    openModal("Sessão concluída", '<div class="finish-card study-session-finish"><span class="study-finish-check"><i data-lucide="check"></i></span><p class="card-label">Trabalho realizado</p><h2>' + esc(session.title) + '</h2><p>' + esc(session.goal) + '</p><div class="review-finish-stats"><span><strong>' + Math.max(1, Math.round(session.actualSeconds / 60)) + '</strong><small>minutos</small></span><span><strong>' + stepsDone + '/' + asArray(session.steps).length + '</strong><small>passos</small></span><span><strong>' + due.length + '</strong><small>revisões</small></span></div><p class="study-focus-note"><i data-lucide="arrow-right"></i>O próximo passo serve para verificar aprendizagem, não para prolongar tempo dentro da app.</p></div>', { footer: '<footer class="modal-foot"><button class="button" type="button" data-action="close-modal">Agora não</button>' + nextAction + '</footer>' });
   }
 
   function renderStudy() {
@@ -5105,8 +4871,8 @@
     if (tab === "weekly") return renderWeeklyReview();
     if (tab === "ai") return renderStudyAI();
     setHeader("Estudar", "Recuperar, planear e rever");
-    var content = tab === "diagnostic" ? renderDiagnosticPage() : tab === "review" ? renderReviewPage() : tab === "errors" ? renderErrorBank() : tab === "flashcards" ? renderFlashcardsPage() : tab === "history" ? renderStudyHistory() : renderStudyOverview();
-    return '<div class="study-core-shell"><div class="page-head study-core-head"><div><h2>Estudar com ação concreta.</h2><p>Próxima ação → sessão → confiança → reflexão → revisão marcada.</p></div><div class="page-actions"><button class="button" type="button" data-action="guided-study-plan"><i data-lucide="list-checks"></i>Planear</button><button class="button button-dark" type="button" data-action="start-review-session" ' + (!dueReviewItems().length ? 'disabled' : '') + '><i data-lucide="rotate-ccw"></i>Rever agora</button></div></div>' + renderStudyTabs(tab) + '<section class="study-tab-content">' + content + '</section></div>';
+    var content = tab === "review" ? renderReviewPage() : tab === "errors" ? renderErrorBank() : tab === "flashcards" ? renderFlashcardsPage() : tab === "history" ? renderStudyHistory() : renderStudyOverview();
+    return '<div class="study-core-shell"><div class="page-head study-core-head"><div><h2>Estudar com ação concreta.</h2><p>Próxima ação → sessão → mini-quiz → revisão marcada.</p></div><div class="page-actions"><button class="button" type="button" data-action="guided-study-plan"><i data-lucide="list-checks"></i>Planear</button><button class="button button-dark" type="button" data-action="start-review-session" ' + (!dueReviewItems().length ? 'disabled' : '') + '><i data-lucide="rotate-ccw"></i>Rever agora</button></div></div>' + renderStudyTabs(tab) + '<section class="study-tab-content">' + content + '</section></div>';
   }
 
   function gradeSimulatorAssessmentFields(courseId) {
@@ -8484,15 +8250,6 @@
     }
   }
 
-  function diagnosticQuestionIndexes(quiz) {
-    var count = Math.min(clamp(state.settings.diagnosticQuestionCount || 5, 3, 10), asArray(quiz.questions).length);
-    return asArray(quiz.questions).map(function (question, index) {
-      var item = reviewItemBySourceKey(reviewQuestionKey(quiz, question, index));
-      var priority = item ? calibrationPriority(item) * 100 + Number(item.lapses || 0) * 10 + Number(item.confidentErrors || 0) * 20 : 0;
-      return { index: index, priority: priority };
-    }).sort(function (a, b) { return b.priority - a.priority || a.index - b.index; }).slice(0, count).map(function (entry) { return entry.index; });
-  }
-
   function startQuiz(id) {
     var quiz = state.quizzes.find(function (item) { return item.id === id; });
     if (!quiz || !asArray(quiz.questions).length) { toast("Este quiz ainda não tem perguntas.", "warning"); return; }
@@ -8500,77 +8257,43 @@
       viewLessonQuiz(quiz.lessonId);
       return;
     }
-    quizRuntime = { quizId: id, mode: "quiz", questionIndexes: [], index: 0, answers: [], confidences: [], explanations: [], selected: null, confidence: 0, revealed: false };
+    quizRuntime = { quizId: id, index: 0, answers: [], selected: null, revealed: false };
     renderQuizQuestion();
-  }
-
-  function startDiagnostic(id) {
-    var quiz = state.quizzes.find(function (item) { return item.id === id; });
-    if (!quiz || asArray(quiz.questions).length < 3) { toast("O diagnóstico precisa de pelo menos três perguntas reais.", "warning"); return; }
-    quizRuntime = { quizId: id, mode: "diagnostic", questionIndexes: diagnosticQuestionIndexes(quiz), index: 0, answers: [], confidences: [], explanations: [], selected: null, confidence: 0, revealed: false };
-    renderQuizQuestion();
-  }
-
-  function captureQuizExplanation() {
-    if (!quizRuntime) return;
-    var input = document.getElementById("quizReason");
-    if (input) quizRuntime.explanations[quizRuntime.index] = String(input.value || "").trim();
   }
 
   function renderQuizQuestion() {
     var quiz = state.quizzes.find(function (item) { return quizRuntime && item.id === quizRuntime.quizId; });
     if (!quiz) return;
-    var questions = quizRuntimeQuestions(quiz);
+    var questions = asArray(quiz.questions);
     if (quizRuntime.index >= questions.length) { finishQuiz(quiz); return; }
     var question = questions[quizRuntime.index];
-    var sourceIndex = quizRuntimeSourceIndex(quizRuntime.index);
     var selected = quizRuntime.selected;
-    var confidence = normalizeConfidence(quizRuntime.confidence);
-    var progress = '<div class="quiz-progress"><span style="width:' + ((quizRuntime.index + 1) / questions.length * 100) + '%"></span></div><p class="card-label" style="margin-top:14px">' + (quizRuntime.mode === "diagnostic" ? "Diagnóstico" : "Pergunta") + ' ' + (quizRuntime.index + 1) + ' de ' + questions.length + '</p>';
+    var progress = '<div class="quiz-progress"><span style="width:' + ((quizRuntime.index + 1) / questions.length * 100) + '%"></span></div><p class="card-label" style="margin-top:14px">Pergunta ' + (quizRuntime.index + 1) + ' de ' + questions.length + '</p>';
     var body;
     var footer;
-    var reason = shouldAskQuizExplanation(quiz, question, sourceIndex, confidence) ? '<div class="quiz-reason"><label for="quizReason">Porque escolheste esta resposta? <small>Opcional · uma frase</small></label><textarea id="quizReason" rows="2" placeholder="Explica o teu raciocínio…">' + esc(quizRuntime.explanations[quizRuntime.index] || "") + '</textarea></div>' : '';
     if (question.mode === "self-check" || !asArray(question.options).length) {
       var source = [question.assessmentLabel, question.academicYear].filter(Boolean).join(" · ") || "Pergunta de teste anterior";
       body = progress + '<div class="self-check-source"><span class="badge badge-pink"><i data-lucide="history"></i>Pergunta anterior</span><small>' + esc(source) + '</small></div><h3 class="quiz-question">' + esc(question.prompt) + '</h3>' + renderImageGallery(question.images, "question", { ownerId: question.sourceQuestionId || "" });
       if (quizRuntime.revealed) {
-        body += '<div class="calibration-preview"><span class="badge badge-violet">Confiança ' + confidence + '/4 · ' + esc(confidenceLabel(confidence)) + '</span></div><div class="self-check-answer"><p class="card-label">Resposta guardada</p><div>' + nl2br(question.answer || "A resposta ainda não foi adicionada.") + '</div>' + renderImageGallery(question.images, "solution", { ownerId: question.sourceQuestionId || "" }) + (question.explanation || normalizeImageRefs(question.images).some(function (image) { return image.role === "explanation"; }) ? '<div class="self-check-explanation"><strong>Explicação:</strong> ' + nl2br(question.explanation || "") + renderImageGallery(question.images, "explanation", { ownerId: question.sourceQuestionId || "" }) + '</div>' : '') + '</div><p class="self-check-prompt">Compara a tua resposta com a solução guardada e regista se realmente sabias.</p>' + reason;
-        footer = '<footer class="modal-foot self-check-actions"><button class="button" type="button" data-action="close-modal">Sair</button><button class="button" type="button" data-action="quiz-self-rate" data-value="0"><i data-lucide="rotate-ccw"></i>Não sabia</button><button class="button button-dark" type="button" data-action="quiz-self-rate" data-value="1"><i data-lucide="check"></i>Sabia</button></footer>';
+        body += '<div class="self-check-answer"><p class="card-label">Resposta guardada</p><div>' + nl2br(question.answer || "A resposta ainda não foi adicionada.") + '</div>' + renderImageGallery(question.images, "solution", { ownerId: question.sourceQuestionId || "" }) + (question.explanation || normalizeImageRefs(question.images).some(function (image) { return image.role === "explanation"; }) ? '<div class="self-check-explanation"><strong>Explicação:</strong> ' + nl2br(question.explanation || "") + renderImageGallery(question.images, "explanation", { ownerId: question.sourceQuestionId || "" }) + '</div>' : '') + '</div><p class="self-check-prompt">Compara a tua resposta com a solução guardada e regista se precisas de rever.</p>';
+        footer = '<footer class="modal-foot self-check-actions"><button class="button" type="button" data-action="close-modal">Sair</button><button class="button" type="button" data-action="quiz-self-rate" data-value="0"><i data-lucide="rotate-ccw"></i>Preciso rever</button><button class="button button-dark" type="button" data-action="quiz-self-rate" data-value="1"><i data-lucide="check"></i>Sabia</button></footer>';
       } else {
-        body += '<div class="form-note self-check-note"><strong>Responde primeiro sem consultar os apontamentos.</strong><br>Indica a confiança antes de revelar a solução.</div>' + renderConfidenceScale("quiz-confidence", confidence);
-        footer = '<footer class="modal-foot"><button class="button" type="button" data-action="close-modal">Sair</button><button class="button button-dark" type="button" data-action="quiz-reveal" ' + (state.settings.studyConfidencePrompts && !confidence ? "disabled" : "") + '><i data-lucide="eye"></i>Revelar resposta</button></footer>';
+        body += '<div class="form-note self-check-note"><strong>Responde primeiro sem consultar os apontamentos.</strong><br>Quando estiveres pronta, revela a solução que guardaste na pergunta original.</div>';
+        footer = '<footer class="modal-foot"><button class="button" type="button" data-action="close-modal">Sair</button><button class="button button-dark" type="button" data-action="quiz-reveal"><i data-lucide="eye"></i>Revelar resposta</button></footer>';
       }
     } else {
       var quizOptions = asArray(question.optionBlocks).length ? question.optionBlocks : asArray(question.options);
       body = progress + '<div class="quiz-question">' + renderContentBlocks(question.promptBlocks || question.prompt) + '</div>' + renderImageGallery(question.images, "question", { ownerId: question.sourceQuestionId || "" }) + '<div class="quiz-options">' + quizOptions.map(function (option, index) {
         return '<button class="quiz-option ' + (selected === index ? "is-selected" : "") + '" type="button" data-action="quiz-answer" data-index="' + index + '"><span>' + String.fromCharCode(65 + index) + '</span>' + renderQuizOptionContent(option) + "</button>";
-      }).join("") + '</div>' + (selected == null ? '<div class="form-note"><strong>Escolhe primeiro uma resposta.</strong> A confiança só aparece depois para não influenciar a escolha.</div>' : renderConfidenceScale("quiz-confidence", confidence) + reason) + '<div id="quizFeedback"></div>';
-      footer = '<footer class="modal-foot"><button class="button" type="button" data-action="close-modal">Sair</button><button class="button button-dark" type="button" data-action="quiz-next" ' + (selected == null || (state.settings.studyConfidencePrompts && !confidence) ? "disabled" : "") + '>' + (quizRuntime.index === questions.length - 1 ? "Terminar" : "Seguinte") + '<i data-lucide="arrow-right"></i></button></footer>';
+      }).join("") + '</div><div id="quizFeedback"></div>';
+      footer = '<footer class="modal-foot"><button class="button" type="button" data-action="close-modal">Sair</button><button class="button button-dark" type="button" data-action="quiz-next" ' + (selected == null ? "disabled" : "") + '>' + (quizRuntime.index === questions.length - 1 ? "Terminar" : "Seguinte") + '<i data-lucide="arrow-right"></i></button></footer>';
     }
-    openModal((quizRuntime.mode === "diagnostic" ? "Diagnóstico · " : "") + quiz.title, body, { footer: footer });
-  }
-
-  async function finishDiagnostic(quiz, questions, sourceIndexes, answers, confidences, explanations) {
-    var completedAt = new Date().toISOString();
-    var summary = syncQuizReviewItems(quiz, answers, confidences, explanations, { diagnostic: true, questions: questions, sourceIndexes: sourceIndexes });
-    var correct = summary.mastered + summary.fragile;
-    var record = { id: uid("diagnostic"), semesterId: quiz.semesterId || state.currentSemesterId, courseId: quiz.courseId || null, quizId: quiz.id, title: quiz.title, completedAt: completedAt, total: questions.length, correct: correct, mastered: summary.mastered, fragile: summary.fragile, learning: summary.learning, misconceptions: summary.misconceptions, itemIds: summary.itemIds, results: summary.results };
-    state.diagnostics.push(record);
-    if (state.diagnostics.length > 100) state.diagnostics = state.diagnostics.slice(-100);
-    await save(true);
-    quizRuntime = null;
-    render();
-    var gaps = summary.fragile + summary.learning + summary.misconceptions;
-    openModal("Diagnóstico concluído", '<div class="finish-card diagnostic-finish"><span class="study-finish-check"><i data-lucide="scan-search"></i></span><p class="card-label">Plano personalizado sem IA</p><h2>' + summary.mastered + ' de ' + questions.length + ' claramente dominados</h2><p>' + (gaps ? 'A Twenty retirou os itens dominados da fila imediata e manteve ' + gaps + ' lacuna(s) para revisão.' : 'Todos os itens ficaram fora da fila imediata. Voltam apenas numa revisão futura de manutenção.') + '</p><div class="diagnostic-summary"><span class="is-mastered"><strong>' + summary.mastered + '</strong><small>dominados</small></span><span class="is-fragile"><strong>' + summary.fragile + '</strong><small>acertos frágeis</small></span><span class="is-learning"><strong>' + summary.learning + '</strong><small>por aprender</small></span><span class="is-misconception"><strong>' + summary.misconceptions + '</strong><small>erros confiantes</small></span></div></div>', { footer: '<footer class="modal-foot"><button class="button" type="button" data-route="study" data-tab="diagnostic">Fechar</button>' + (gaps ? '<button class="button button-dark" type="button" data-action="start-diagnostic-review" data-id="' + attr(record.id) + '"><i data-lucide="play"></i>Rever só as lacunas</button>' : '') + '</footer>' });
+    openModal(quiz.title, body, { footer: footer });
   }
 
   async function finishQuiz(quiz) {
-    var questions = quizRuntimeQuestions(quiz);
-    var sourceIndexes = questions.map(function (_, index) { return quizRuntimeSourceIndex(index); });
+    var questions = asArray(quiz.questions);
     var answers = asArray(quizRuntime.answers).slice();
-    var confidences = asArray(quizRuntime.confidences).slice();
-    var explanations = asArray(quizRuntime.explanations).slice();
-    if (quizRuntime.mode === "diagnostic") { await finishDiagnostic(quiz, questions, sourceIndexes, answers, confidences, explanations); return; }
     var correct = answers.reduce(function (sum, answer, index) {
       var question = questions[index] || {};
       if (question.mode === "self-check" || !asArray(question.options).length) return sum + (answer === 1 ? 1 : 0);
@@ -8578,13 +8301,13 @@
     }, 0);
     var score = Math.round(correct / questions.length * 100);
     var completedAt = new Date().toISOString();
-    var reviewSummary = syncQuizReviewItems(quiz, answers, confidences, explanations, { questions: questions, sourceIndexes: sourceIndexes });
+    var reviewErrors = syncQuizReviewItems(quiz, answers);
     quiz.lastScore = score;
     quiz.lastAnswers = answers;
     quiz.completedOnce = true;
     quiz.lastCompletedAt = completedAt;
     quiz.attempts = asArray(quiz.attempts);
-    quiz.attempts.push({ id: uid("attempt"), completedAt: completedAt, score: score, answers: answers, confidences: confidences, explanations: explanations, correct: correct, total: questions.length, reviewErrors: reviewSummary.errors, fragile: reviewSummary.fragile, misconceptions: reviewSummary.misconceptions });
+    quiz.attempts.push({ id: uid("attempt"), completedAt: completedAt, score: score, answers: answers, correct: correct, total: questions.length, reviewErrors: reviewErrors });
     if (quiz.attempts.length > 30) quiz.attempts = quiz.attempts.slice(-30);
     if (quiz.lessonId) completeLessonBeOnline(quiz.lessonId);
     ensureBeOnlineTasks();
@@ -8592,9 +8315,11 @@
     quizRuntime = null;
     render();
     var closesLesson = !!quiz.lessonId;
-    var resultCopy = reviewSummary.misconceptions ? reviewSummary.misconceptions + ' erro(s) foram respondidos com confiança e ficaram no topo do Banco de Erros.' : reviewSummary.fragile ? reviewSummary.fragile + ' acerto(s) estavam inseguros e regressam mais cedo.' : closesLesson ? (score === 100 ? "Aula acompanhada. Mantiveste-te em linha e sem matéria acumulada." : score >= 70 ? "Aula acompanhada. Os erros já entraram na revisão para não se perderem." : "Aula acompanhada, mas merece reforço. A Twenty marcou os itens falhados para revisão.") : (score === 100 ? "Excelente domínio deste quiz." : score >= 70 ? "Bom caminho. Os itens falhados já estão no Banco de erros." : "Os erros foram transformados numa fila curta de revisão.");
-    var reviewButton = reviewSummary.errors || reviewSummary.fragile ? '<button class="button button-dark" type="button" data-route="study" data-tab="errors"><i data-lucide="triangle-alert"></i>Rever ' + (reviewSummary.errors + reviewSummary.fragile) + ' item' + ((reviewSummary.errors + reviewSummary.fragile) === 1 ? '' : 's') + '</button>' : '<button class="button button-dark" type="button" data-route="study" data-tab="review"><i data-lucide="rotate-ccw"></i>Ver próxima revisão</button>';
-    openModal(closesLesson ? "Aula revista" : "Quiz concluído", '<div class="finish-card quiz-learning-finish"><span class="badge badge-dark"><i data-lucide="' + (closesLesson ? "book-check" : "sparkles") + '"></i>' + (closesLesson ? "Aula acompanhada" : "Resultado") + '</span><h2>' + score + '%</h2><p class="card-subtitle">' + correct + ' de ' + questions.length + ' respostas corretas</p><div class="progress-ring" style="--progress:' + score + '%"><strong>' + score + '%</strong></div><p>' + resultCopy + '</p><div class="quiz-review-summary"><span><strong>' + reviewSummary.errors + '</strong><small>erros</small></span><span><strong>' + reviewSummary.fragile + '</strong><small>acertos frágeis</small></span><span><strong>' + reviewSummary.misconceptions + '</strong><small>erros confiantes</small></span></div></div>', { footer: '<footer class="modal-foot"><button class="button" type="button" data-action="close-modal">Fechar</button>' + reviewButton + '</footer>' });
+    var resultCopy = closesLesson
+      ? (score === 100 ? "Aula acompanhada. Mantiveste-te em linha e sem matéria acumulada." : score >= 70 ? "Aula acompanhada. Os erros já entraram na revisão para não se perderem." : "Aula acompanhada, mas merece reforço. A Twenty marcou os itens falhados para revisão.")
+      : (score === 100 ? "Excelente domínio deste quiz." : score >= 70 ? "Bom caminho. Os itens falhados já estão no Banco de erros." : "Os erros foram transformados numa fila curta de revisão.");
+    var reviewButton = reviewErrors ? '<button class="button button-dark" type="button" data-route="study" data-tab="errors"><i data-lucide="triangle-alert"></i>Rever ' + reviewErrors + ' erro' + (reviewErrors === 1 ? '' : 's') + '</button>' : '<button class="button button-dark" type="button" data-route="study" data-tab="review"><i data-lucide="rotate-ccw"></i>Ver próxima revisão</button>';
+    openModal(closesLesson ? "Aula revista" : "Quiz concluído", '<div class="finish-card quiz-learning-finish"><span class="badge badge-dark"><i data-lucide="' + (closesLesson ? "book-check" : "sparkles") + '"></i>' + (closesLesson ? "Aula acompanhada" : "Resultado") + '</span><h2>' + score + '%</h2><p class="card-subtitle">' + correct + ' de ' + questions.length + ' itens dominados</p><div class="progress-ring" style="--progress:' + score + '%"><strong>' + score + '%</strong></div><p>' + resultCopy + '</p><div class="quiz-review-summary"><span><strong>' + reviewErrors + '</strong><small>erros guardados</small></span><span><strong>' + questions.length + '</strong><small>itens agendados</small></span><span><strong>' + dueReviewItems().length + '</strong><small>para hoje</small></span></div></div>', { footer: '<footer class="modal-foot"><button class="button" type="button" data-action="close-modal">Fechar</button>' + reviewButton + '</footer>' });
   }
 
   function showAssessmentScope(id) {
@@ -9029,8 +8754,6 @@
     if (!action) return;
     if (action === "close-modal") {
       if (quizRuntime) quizRuntime = null;
-      if (reviewRuntime) reviewRuntime = null;
-      pendingStudyReflectionSessionId = null;
       await closeModalSavingNotebook();
       if (onboarding) renderOnboarding();
     } else if (action === "view-report-card") {
@@ -9237,26 +8960,10 @@
       await resumeStudyFocusTimer();
     } else if (action === "study-focus-finish") {
       await finishStudyFocusSession();
-    } else if (action === "skip-study-reflection") {
-      var skippedReflectionSession = studyFocusSessionById(button.dataset.id || pendingStudyReflectionSessionId);
-      pendingStudyReflectionSessionId = null;
-      closeModal();
-      showStudySessionFinish(skippedReflectionSession);
     } else if (action === "start-review-session") {
       startReviewSession(button.dataset.id || "", button.dataset.course || "", button.dataset.errors === "true");
-    } else if (action === "start-diagnostic") {
-      startDiagnostic(button.dataset.id || "");
-    } else if (action === "start-diagnostic-review") {
-      var diagnosticRecord = state.diagnostics.find(function (item) { return item.id === button.dataset.id; });
-      if (diagnosticRecord) {
-        closeModal();
-        var gapIds = asArray(diagnosticRecord.results).filter(function (result) { return result.calibration !== "mastered"; }).map(function (result) { return result.itemId; });
-        startReviewItemsByIds(gapIds);
-      }
-    } else if (action === "review-confidence") {
-      if (reviewRuntime) { reviewRuntime.confidence = normalizeConfidence(button.dataset.value); renderReviewRuntime(); }
     } else if (action === "review-reveal") {
-      if (reviewRuntime && (!state.settings.studyConfidencePrompts || reviewRuntime.confidence)) { reviewRuntime.revealed = true; renderReviewRuntime(); }
+      if (reviewRuntime) { reviewRuntime.revealed = true; renderReviewRuntime(); }
     } else if (action === "review-rate") {
       await rateReviewItem(button.dataset.value || "good");
     } else if (action === "review-stop") {
@@ -9383,24 +9090,19 @@
       });
       if (pendingOnline.length) await doLessonQuiz(pendingOnline[0].id);
     } else if (action === "quiz-answer") {
-      if (quizRuntime) { captureQuizExplanation(); quizRuntime.selected = Number(button.dataset.index); quizRuntime.confidence = 0; renderQuizQuestion(); }
-    } else if (action === "quiz-confidence") {
-      if (quizRuntime) { captureQuizExplanation(); quizRuntime.confidence = normalizeConfidence(button.dataset.value); renderQuizQuestion(); }
+      if (quizRuntime) { quizRuntime.selected = Number(button.dataset.index); renderQuizQuestion(); }
     } else if (action === "quiz-reveal") {
-      if (quizRuntime && (!state.settings.studyConfidencePrompts || quizRuntime.confidence)) { quizRuntime.revealed = true; renderQuizQuestion(); }
+      if (quizRuntime) { quizRuntime.revealed = true; renderQuizQuestion(); }
     } else if (action === "quiz-self-rate") {
       if (quizRuntime) {
-        captureQuizExplanation();
         quizRuntime.answers.push(Number(button.dataset.value) === 1 ? 1 : 0);
-        quizRuntime.confidences.push(normalizeConfidence(quizRuntime.confidence));
         quizRuntime.selected = null;
-        quizRuntime.confidence = 0;
         quizRuntime.revealed = false;
         quizRuntime.index += 1;
         renderQuizQuestion();
       }
     } else if (action === "quiz-next") {
-      if (quizRuntime && quizRuntime.selected != null && (!state.settings.studyConfidencePrompts || quizRuntime.confidence)) { captureQuizExplanation(); quizRuntime.answers.push(quizRuntime.selected); quizRuntime.confidences.push(normalizeConfidence(quizRuntime.confidence)); quizRuntime.selected = null; quizRuntime.confidence = 0; quizRuntime.revealed = false; quizRuntime.index += 1; renderQuizQuestion(); }
+      if (quizRuntime && quizRuntime.selected != null) { quizRuntime.answers.push(quizRuntime.selected); quizRuntime.selected = null; quizRuntime.revealed = false; quizRuntime.index += 1; renderQuizQuestion(); }
     } else if (action === "assessment-scope" || action === "study-assessment") {
       showAssessmentScope(button.dataset.id);
     } else if (action === "show-event") {
@@ -9805,7 +9507,7 @@
       }, 60000);
       if (!state.profile.onboardingComplete || !state.currentSemesterId || !activeCourses().length) startOnboarding(state.semesters.length ? "new-semester" : "first");
       if ("serviceWorker" in navigator && location.protocol !== "file:") {
-        navigator.serviceWorker.register("sw.js?v=31.0-adaptive-confidence", { updateViaCache: "none" }).then(function () {
+        navigator.serviceWorker.register("sw.js?v=30.0-core-learning-loop", { updateViaCache: "none" }).then(function () {
           if (Sync && Sync.getStatus().configured) Sync.startAutoSync();
         }).catch(function () {
           if (Sync && Sync.getStatus().configured) Sync.startAutoSync();
@@ -10023,8 +9725,6 @@
       handleGuidedStudyPlanSubmit(event).catch(function (error) { console.error(error); setFormError(event.target, "Não foi possível criar a sessão."); });
     } else if (event.target.id === "reviewSettingsForm") {
       handleReviewSettingsSubmit(event).catch(function (error) { console.error(error); setFormError(event.target, "Não foi possível guardar as preferências."); });
-    } else if (event.target.id === "studyReflectionForm") {
-      handleStudyReflectionSubmit(event).catch(function (error) { console.error(error); setFormError(event.target, "Não foi possível guardar a reflexão."); });
     } else {
       handleEntitySubmit(event);
     }
