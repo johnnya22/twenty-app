@@ -80,15 +80,24 @@
   var profilePhotoDraft = null;
   var personalSettingsDraft = null;
   var lastRenderedRouteKey = "";
+  var lastPersistedState = null;
+  var modalReturnFocus = null;
+  var modalInitialFingerprint = "";
   var canteenClockTimer = null;
   var homeClockTimer = null;
   var homeworkClockTimer = null;
   var homeworkSessionRuntime = null;
+  var studyFocusRuntime = null;
+  var studyFocusTimer = null;
+  var pendingStudyReflectionSessionId = null;
+  var reviewRuntime = null;
+  var REVIEW_INTERVALS = [1, 3, 7, 14, 28, 60];
+  var CONFIDENCE_LABELS = { 1: "Adivinhei", 2: "Pouco confiante", 3: "Confiante", 4: "Tenho a certeza" };
   var homeDebug = null;
   var COLORS = ["#a99df7", "#ff92ae", "#ffad72", "#79cdb8", "#80bee8", "#f3e873", "#cab6ea", "#87d7df"];
   var WEEKDAYS = ["Domingo", "Segunda", "Terça", "Quarta", "Quinta", "Sexta", "Sábado"];
   var SHORT_WEEKDAYS = ["Dom", "Seg", "Ter", "Qua", "Qui", "Sex", "Sáb"];
-  var ENTITY_ARRAYS = ["semesters", "courses", "schedule", "assessments", "events", "tasks", "lessons", "materials", "pastExams", "questions", "quizzes", "grades", "studyBlocks", "weeklyReviews", "aiProjects", "canteenVisits"];
+  var ENTITY_ARRAYS = ["semesters", "courses", "schedule", "assessments", "events", "tasks", "lessons", "materials", "pastExams", "questions", "quizzes", "grades", "studyBlocks", "studySessions", "reviewItems", "diagnostics", "weeklyReviews", "aiProjects", "canteenVisits"];
 
   function uid(prefix) {
     return (prefix || "id") + "_" + Date.now().toString(36) + "_" + Math.random().toString(36).slice(2, 8);
@@ -518,6 +527,11 @@
 
   function clamp(value, min, max) { return Math.min(max, Math.max(min, Number(value) || 0)); }
 
+  function normalizedTargetGrade(value) {
+    var number = Number(value);
+    return Number.isFinite(number) ? clamp(number, 0, 20) : 20;
+  }
+
   function showSyncActivity(options) {
     options = options || {};
     if (!syncActivity) return;
@@ -678,7 +692,7 @@
 
   function defaultState() {
     return {
-      schemaVersion: 7,
+      schemaVersion: 9,
       meta: {
         revision: 0,
         updatedAt: "",
@@ -717,6 +731,13 @@
         studyBreakMinutes: 10,
         studyLunchStart: "13:00",
         studyLunchMinutes: 60,
+        reviewDailyGoal: 10,
+        studyConfidencePrompts: true,
+        studyReflectionEnabled: true,
+        diagnosticQuestionCount: 5,
+        studyNotificationsEnabled: false,
+        studyNotificationTypes: { contextual: true, risk: true, continuity: true },
+        studyNotificationLastShown: {},
         aiModelMode: "auto",
         aiOutput: "all",
         aiQuestionCount: 10,
@@ -749,6 +770,9 @@
       quizzes: [],
       grades: [],
       studyBlocks: [],
+      studySessions: [],
+      reviewItems: [],
+      diagnostics: [],
       weeklyReviews: [],
       aiProjects: [],
       canteenVisits: []
@@ -758,7 +782,7 @@
   function normalizeState(input) {
     var base = defaultState();
     var source = input && typeof input === "object" ? input : {};
-    base.schemaVersion = Math.max(7, Number(source.schemaVersion) || 0);
+    base.schemaVersion = Math.max(9, Number(source.schemaVersion) || 0);
     base.meta = Object.assign(base.meta, source.meta || {});
     base.meta.completedLessonQuizIds = Array.from(new Set(asArray(base.meta.completedLessonQuizIds).map(String).filter(Boolean)));
     base.meta.completedHomeworkIds = Array.from(new Set(asArray(base.meta.completedHomeworkIds).map(String).filter(Boolean)));
@@ -771,6 +795,13 @@
     base.settings.studySessionMinutes = clamp(base.settings.studySessionMinutes || 50, 20, 180);
     base.settings.studyBreakMinutes = clamp(base.settings.studyBreakMinutes || 10, 0, 60);
     base.settings.studyLunchMinutes = clamp(base.settings.studyLunchMinutes || 60, 0, 180);
+    base.settings.reviewDailyGoal = clamp(base.settings.reviewDailyGoal || 10, 3, 50);
+    base.settings.studyConfidencePrompts = base.settings.studyConfidencePrompts !== false;
+    base.settings.studyReflectionEnabled = base.settings.studyReflectionEnabled !== false;
+    base.settings.diagnosticQuestionCount = clamp(base.settings.diagnosticQuestionCount || 5, 3, 10);
+    base.settings.studyNotificationsEnabled = !!base.settings.studyNotificationsEnabled;
+    base.settings.studyNotificationTypes = Object.assign({ contextual: true, risk: true, continuity: true }, base.settings.studyNotificationTypes || {});
+    base.settings.studyNotificationLastShown = Object.assign({}, base.settings.studyNotificationLastShown || {});
     if (["auto", "fast", "quality"].indexOf(base.settings.aiModelMode) < 0) base.settings.aiModelMode = "auto";
     if (["all", "notes", "summary", "quiz", "flashcards"].indexOf(base.settings.aiOutput) < 0) base.settings.aiOutput = "all";
     base.settings.aiQuestionCount = clamp(base.settings.aiQuestionCount || 10, 5, 30);
@@ -857,6 +888,8 @@
     });
     base.quizzes = base.quizzes.map(function (quiz) {
       if (/^Quiz beOnLine · /.test(quiz.title || "")) quiz.title = String(quiz.title).replace(/^Quiz beOnLine · /, "Quiz da aula · ");
+      quiz.attempts = asArray(quiz.attempts);
+      quiz.lastAnswers = asArray(quiz.lastAnswers);
       return quiz;
     });
     base.assessments = base.assessments.map(function (assessment) {
@@ -886,7 +919,42 @@
       return quiz;
     });
     base.studyBlocks = base.studyBlocks.map(function (block) {
-      return Object.assign({ id: uid("studyblock"), semesterId: base.currentSemesterId, date: todayISO(), title: "Sessão de estudo", start: "09:00", end: "09:50", kind: "study", courseId: null, sourceType: "custom", sourceId: null, completed: false, notes: "" }, block);
+      return Object.assign({ id: uid("studyblock"), semesterId: base.currentSemesterId, date: todayISO(), title: "Sessão de estudo", start: "09:00", end: "09:50", kind: "study", courseId: null, sourceType: "custom", sourceId: null, completed: false, notes: "", goal: "", plannedMinutes: 0, steps: [] }, block, {
+        steps: asArray(block.steps).map(function (step, index) {
+          if (typeof step === "string") return { id: uid("step"), title: step, done: false };
+          return Object.assign({ id: uid("step"), title: "Passo " + (index + 1), done: false }, step || {});
+        })
+      });
+    });
+    base.studySessions = base.studySessions.map(function (session) {
+      return Object.assign({ id: uid("studysession"), semesterId: base.currentSemesterId, courseId: null, sourceType: "custom", sourceId: null, studyBlockId: null, title: "Sessão de estudo", goal: "", plannedMinutes: 25, startedAt: "", endedAt: "", actualSeconds: 0, pausedSeconds: 0, pausedAt: "", status: "completed", steps: [], reflection: null, createdAt: "" }, session, {
+        steps: asArray(session.steps).map(function (step, index) { return Object.assign({ id: uid("step"), title: "Passo " + (index + 1), done: false }, step || {}); }),
+        reflection: session.reflection && typeof session.reflection === "object" ? Object.assign({ outcome: "", reason: "", note: "", nextStep: "", reflectedAt: "", continuationBlockId: null }, session.reflection) : null
+      });
+    });
+    base.reviewItems = base.reviewItems.map(function (item) {
+      var normalized = Object.assign({ id: uid("review"), semesterId: base.currentSemesterId, courseId: null, quizId: null, lessonId: null, sourceType: "quiz", sourceKey: "", front: "", frontBlocks: [], back: "", backBlocks: [], optionBlocks: [], answerIndex: null, images: [], dueDate: todayISO(), intervalStep: 0, repetitions: 0, lapses: 0, lastResult: "", lastConfidence: 0, calibration: "", confidentErrors: 0, confidenceHistory: [], lastExplanation: "", lastDiagnosticAt: "", diagnosticMasteredAt: "", lastReviewedAt: "", createdAt: "", updatedAt: "", suspended: false }, item);
+      normalized.frontBlocks = normalizeContentBlocks(normalized.frontBlocks || normalized.front || "");
+      normalized.backBlocks = normalizeContentBlocks(normalized.backBlocks || normalized.back || "");
+      normalized.optionBlocks = asArray(normalized.optionBlocks).map(normalizeContentBlocks);
+      normalized.front = contentBlocksPlainText(normalized.frontBlocks);
+      normalized.back = contentBlocksPlainText(normalized.backBlocks);
+      normalized.images = normalizeImageRefs(normalized.images);
+      normalized.intervalStep = clamp(normalized.intervalStep || 0, 0, REVIEW_INTERVALS.length - 1);
+      normalized.repetitions = Math.max(0, Number(normalized.repetitions) || 0);
+      normalized.lapses = Math.max(0, Number(normalized.lapses) || 0);
+      normalized.lastConfidence = clamp(normalized.lastConfidence || 0, 0, 4);
+      normalized.confidentErrors = Math.max(0, Number(normalized.confidentErrors) || 0);
+      normalized.confidenceHistory = asArray(normalized.confidenceHistory).slice(-50);
+      normalized.suspended = !!normalized.suspended;
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(normalized.dueDate || "")) normalized.dueDate = todayISO();
+      return normalized;
+    });
+    base.diagnostics = base.diagnostics.map(function (record) {
+      return Object.assign({ id: uid("diagnostic"), semesterId: base.currentSemesterId, courseId: null, quizId: null, title: "Diagnóstico rápido", completedAt: "", total: 0, correct: 0, mastered: 0, fragile: 0, learning: 0, misconceptions: 0, itemIds: [], results: [] }, record, {
+        itemIds: asArray(record.itemIds).map(String).filter(Boolean),
+        results: asArray(record.results)
+      });
     });
     base.grades = base.grades.map(function (grade) {
       return Object.assign({ defenseStatus: "not-applicable", defenseType: "", defenseFinalScore: null }, grade);
@@ -970,10 +1038,13 @@
     }
     touchState();
     return DB.saveState(state).then(function () {
+      lastPersistedState = clone(state);
       if (!silent) toast("Alterações guardadas neste dispositivo.");
     }).catch(function (error) {
       console.error(error);
-      toast("Não foi possível guardar os dados.", "error");
+      if (lastPersistedState) state = normalizeState(lastPersistedState);
+      try { if (state && !onboarding) render(); } catch (_) { /* mantém o erro original */ }
+      toast("Não foi possível guardar os dados. A última versão segura foi reposta.", "error");
       throw error;
     });
   }
@@ -1327,6 +1398,26 @@
     }
   }
 
+  function enhanceInteractiveAccessibility(root) {
+    root = root || document;
+    root.querySelectorAll("button.switch").forEach(function (button) {
+      button.setAttribute("role", "switch");
+      button.setAttribute("aria-checked", button.classList.contains("is-on") ? "true" : "false");
+      if (!button.getAttribute("aria-label")) {
+        var row = button.closest(".settings-row");
+        var label = row && row.querySelector("strong");
+        button.setAttribute("aria-label", label ? label.textContent.trim() : "Alternar opção");
+      }
+    });
+    root.querySelectorAll("button.row-button").forEach(function (button) {
+      if (button.textContent.trim() || button.getAttribute("aria-label") || button.getAttribute("title")) return;
+      var owner = button.closest("article, tr, li, .list-row, .study-source-row, .task-row");
+      var title = owner && owner.querySelector("h2, h3, h4, strong");
+      var subject = title ? title.textContent.trim() : "detalhes";
+      button.setAttribute("aria-label", "Abrir " + subject);
+    });
+  }
+
   function toast(message, type) {
     var element = document.createElement("div");
     element.className = "toast" + (type ? " toast-" + type : "");
@@ -1403,15 +1494,29 @@
     return { name: name, id: null, tab: "overview" };
   }
 
-  function setRoute(name, id, tab) {
-    route = { name: name || "home", id: id || null, tab: tab || "overview" };
+  function setRoute(name, id, tab, options) {
+    options = options || {};
+    var nextRoute = { name: name || "home", id: id || null, tab: tab || "overview" };
+    var nextHash = "#" + routeHash(nextRoute);
+    var sameRoute = routeKey(nextRoute) === routeKey(route);
+    route = nextRoute;
     render();
-    history.replaceState(null, "", "#" + routeHash(route));
-    window.scrollTo({ top: 0, behavior: "smooth" });
+    if (options.replace || sameRoute || !location.hash) history.replaceState({ twentyRoute: true }, "", nextHash);
+    else history.pushState({ twentyRoute: true }, "", nextHash);
+    window.scrollTo({ top: 0, behavior: state.settings.reduceMotion ? "auto" : "smooth" });
   }
 
   function routeFromHash() {
     route = parseRouteHash(location.hash);
+    if (!location.hash) history.replaceState({ twentyRoute: true }, "", "#" + routeHash(route));
+  }
+
+  function handleHistoryNavigation() {
+    var nextRoute = parseRouteHash(location.hash);
+    if (routeKey(nextRoute) === routeKey(route)) return;
+    route = nextRoute;
+    render();
+    window.scrollTo({ top: 0, behavior: "auto" });
   }
 
   function refreshCanteenClockView() {
@@ -1504,6 +1609,7 @@
     lastRenderedRouteKey = nextRenderKey;
     if (!restoreViewFocus(focusSnapshot)) view.focus({ preventScroll: true });
     refreshIcons(document);
+    enhanceInteractiveAccessibility(document);
     hydrateLocalImages(view);
     hydrateNotebookImages(view);
     typesetMath(view);
@@ -2513,6 +2619,7 @@
     var hero = '<section class="school-now-card span-12 ' + attr(context.atmosphere.className) + ' phase-' + attr(context.phase) + '"><div class="school-now-copy"><div class="school-now-kicker"><span><i data-lucide="' + attr(context.atmosphere.icon) + '"></i>' + esc(context.atmosphere.label) + '</span>' + phaseBadge + '</div><h2>' + esc(context.title) + '</h2><p>' + esc(context.copy) + '</p><div class="school-now-actions">' + context.primary + context.secondary + '</div></div><div class="school-now-status"><span class="school-now-icon"><i data-lucide="' + attr(context.icon) + '"></i></span><strong>' + esc(context.stat) + '</strong><small>' + esc(context.statLabel) + '</small><div class="school-now-glow"></div></div></section>';
 
     return renderHomeDebugBar() + hero
+      + '<div class="home-study-next">' + renderStudyRecommendationCard(true) + '</div>'
       + '<div class="bento-grid home-school-grid" style="margin-top:15px">'
       + '<article class="card span-5 school-path-card"><div class="card-title-row"><div><p class="card-label">O teu dia</p><h3>Da aula ao fim do dia</h3><p class="card-subtitle">A Home muda o próximo passo à medida que vais avançando.</p></div><span class="metric-icon"><i data-lucide="route"></i></span></div><div class="school-steps">' + timeline + "</div></article>"
       + '<article class="card span-7 after-school-card"><div class="card-title-row"><div><p class="card-label">A seguir</p><h3>Quizzes da aula e TPC</h3><p class="card-subtitle">Primeiro verificas o que aprendeste. Depois fazes os TPCs numa sessão guiada.</p></div><div class="list-actions"><button class="button button-small" type="button" data-action="start-homework-session"><i data-lucide="play"></i>Fazer TPCs</button><button class="row-button" type="button" data-action="add-task" aria-label="Adicionar TPC"><i data-lucide="plus"></i></button></div></div><div class="list-stack after-school-list">' + afterSchoolItems + "</div></article>"
@@ -3271,6 +3378,8 @@
     if (modalRoot.querySelector("#notebookForm")) {
       try { await saveNotebook({ close: false, render: false, silent: true }); }
       catch (error) { toast(error.message || "Não foi possível guardar os apontamentos.", "error"); return false; }
+    } else if (modalHasUnsavedChanges() && !window.confirm("Sair sem guardar as alterações deste formulário?")) {
+      return false;
     }
     closeModal();
     render();
@@ -3590,7 +3699,7 @@
       var rowStart = Math.max(1, Math.floor((timeMinutes(block.start) - start) / slotSize) + 1);
       var span = Math.max(1, Math.ceil((timeMinutes(block.end) - timeMinutes(block.start)) / slotSize));
       var course = courseById(block.courseId);
-      return '<article class="study-time-block ' + studyBlockClass(block) + '" draggable="true" data-study-source-type="block" data-study-source-id="' + attr(block.id) + '" style="--study-color:' + safeColor(course && course.color, block.kind === "study" ? "#79cdb8" : "#f3e873") + ';grid-row:' + rowStart + ' / span ' + span + '"><button type="button" data-action="edit-study-block" data-id="' + attr(block.id) + '"><span><time>' + esc(block.start) + '–' + esc(block.end) + '</time><strong>' + esc(block.title) + '</strong><small>' + esc(course ? course.code || course.name : block.kind === "break" ? "Pausa" : block.kind === "lunch" ? "Almoço" : "Estudo") + '</small></span></button>' + (block.kind === "study" ? '<button class="study-block-check" type="button" data-action="toggle-study-block" data-id="' + attr(block.id) + '" aria-label="' + (block.completed ? "Reabrir" : "Concluir") + '"><i data-lucide="check"></i></button>' : '') + '</article>';
+      return '<article class="study-time-block ' + studyBlockClass(block) + '" draggable="true" data-study-source-type="block" data-study-source-id="' + attr(block.id) + '" style="--study-color:' + safeColor(course && course.color, block.kind === "study" ? "#79cdb8" : "#f3e873") + ';grid-row:' + rowStart + ' / span ' + span + '"><button type="button" data-action="edit-study-block" data-id="' + attr(block.id) + '"><span><time>' + esc(block.start) + '–' + esc(block.end) + '</time><strong>' + esc(block.title) + '</strong><small>' + esc(course ? course.code || course.name : block.kind === "break" ? "Pausa" : block.kind === "lunch" ? "Almoço" : "Estudo") + '</small></span></button>' + (block.kind === "study" ? '<button class="study-block-start" type="button" data-action="start-study-session" data-block="' + attr(block.id) + '" aria-label="Começar sessão"><i data-lucide="play"></i></button><button class="study-block-check" type="button" data-action="toggle-study-block" data-id="' + attr(block.id) + '" aria-label="' + (block.completed ? "Reabrir" : "Concluir") + '"><i data-lucide="check"></i></button>' : '') + '</article>';
     }).join("");
     var scheduledKeys = blocks.map(function (block) { return block.sourceType + ":" + block.sourceId; });
     var backlog = studyBacklog().filter(function (source) { return scheduledKeys.indexOf(source.type + ":" + source.id) < 0; });
@@ -4196,37 +4305,808 @@
     }
   }
 
-  function renderStudy() {
-    if (route.tab === "weekly") return renderWeeklyReview();
-    setHeader("Estudar", "Quizzes e revisões");
-    var quizzes = semesterItems("quizzes");
-    var questions = semesterItems("questions");
-    var upcoming = semesterItems("assessments").filter(function (item) { return !item.date || item.date >= todayISO(); }).sort(function (a, b) { return String(a.date || "9999").localeCompare(String(b.date || "9999")); });
-    var weakLessons = semesterItems("lessons").filter(function (item) { return !item.mastered; }).sort(function (a, b) {
-      var aq = state.questions.filter(function (q) { return asArray(q.lessonIds).indexOf(a.id) >= 0; }).length;
-      var bq = state.questions.filter(function (q) { return asArray(q.lessonIds).indexOf(b.id) >= 0; }).length;
-      return bq - aq;
-    });
-    var featured = upcoming[0] || null;
-    var featuredCourse = featured ? courseById(featured.courseId) : null;
-    var scopedLessons = featured ? asArray(featured.lessonIds).map(lessonById).filter(Boolean) : [];
-    var relatedQuestions = featured ? questions.filter(function (question) {
-      return asArray(question.lessonIds).some(function (id) { return asArray(featured.lessonIds).indexOf(id) >= 0; });
-    }) : questions;
-    var quizCards = quizzes.length ? quizzes.map(function (quiz) {
-      var course = courseById(quiz.courseId);
-      var lesson = lessonById(quiz.lessonId);
-      return '<article class="card span-4"><div class="card-title-row"><div><span class="badge badge-violet">' + esc(course ? course.code || course.name : "Quiz") + '</span><h3 style="margin-top:12px">' + esc(quiz.title) + '</h3><p class="card-subtitle">' + asArray(quiz.questions).length + ' perguntas · ' + esc(lesson ? lesson.title : "Revisão geral") + '</p></div><span class="metric-icon"><i data-lucide="brain"></i></span></div><button class="button button-dark" style="margin-top:20px" type="button" data-action="start-quiz" data-id="' + attr(quiz.id) + '"><i data-lucide="play"></i>Começar quiz</button></article>';
-    }).join("") : '<div class="span-12">' + emptyState("sparkles", "Ainda não criaste quizzes", "Usa o lado admin para importar manualmente as perguntas e associá-las às aulas.", "add-quiz", "Criar quiz") + "</div>";
-    var weakHtml = weakLessons.length ? weakLessons.slice(0, 5).map(function (lesson) {
-      var course = courseById(lesson.courseId);
-      var count = state.questions.filter(function (q) { return asArray(q.lessonIds).indexOf(lesson.id) >= 0; }).length;
-      return '<div class="list-row"><span class="list-icon yellow"><i data-lucide="rotate-ccw"></i></span><span class="list-content"><strong>' + esc(lesson.title) + '</strong><small>' + esc(course ? course.name : "Cadeira") + ' · ' + count + ' perguntas anteriores</small></span><button class="row-button" type="button" data-route="lesson" data-id="' + attr(lesson.id) + '"><i data-lucide="arrow-right"></i></button></div>';
-    }).join("") : emptyState("badge-check", "Sem revisões pendentes", "Todas as aulas estão marcadas como dominadas.", null);
-    var questionHtml = relatedQuestions.length ? relatedQuestions.slice(0, 6).map(function (item) { return renderQuestionCard(item, false); }).join("") : emptyState("message-circle-question", "Sem perguntas para esta matéria", "Adiciona perguntas antigas e associa-as às aulas que saem na avaliação.", "add-question", "Adicionar pergunta");
+  function normalizeConfidence(value) {
+    return clamp(Number(value) || 0, 0, 4);
+  }
 
-    var hero = featured ? '<article class="card card-violet span-12"><div class="card-title-row"><div><span class="badge badge-dark">Próxima avaliação · ' + relativeDate(featured.date) + '</span><h2 style="margin:18px 0 8px;font-size:clamp(1.8rem,4vw,3.5rem);letter-spacing:-.07em">' + esc(featured.title) + '</h2><p class="card-subtitle" style="color:rgba(24,25,31,.7)">' + esc(featuredCourse ? featuredCourse.name : "Avaliação") + ' · ' + scopedLessons.length + ' aulas na matéria · ' + relatedQuestions.length + ' perguntas anteriores</p></div><span class="hero-number" style="position:relative;right:auto;bottom:auto;font-size:7rem;color:rgba(255,255,255,.55)">20</span></div><div class="hero-actions"><button class="button button-dark" type="button" data-action="study-assessment" data-id="' + attr(featured.id) + '"><i data-lucide="play"></i>Estudar esta matéria</button><button class="button" type="button" data-action="assessment-scope" data-id="' + attr(featured.id) + '"><i data-lucide="list-tree"></i>Ver aulas incluídas</button></div></article>' : '<article class="card card-violet span-12"><div class="page-head"><div><h2>Sessão livre</h2><p>Sem avaliação marcada. Escolhe uma cadeira ou uma aula por rever.</p></div><button class="button button-dark" type="button" data-action="add-assessment">Marcar avaliação</button></div></article>';
-    return '<div class="page-head"><div><h2>Estudar com contexto.</h2><p>Matéria, slides, perguntas anteriores e quizzes no mesmo fluxo.</p></div><div class="page-actions"><button class="button" type="button" data-route="study" data-tab="weekly"><i data-lucide="clipboard-check"></i>Revisão semanal</button><button class="button" type="button" data-route="planner" data-planner-view="study-day"><i data-lucide="blocks"></i>Planear dia</button><button class="button" type="button" data-action="add-question"><i data-lucide="plus"></i>Pergunta antiga</button><button class="button button-dark" type="button" data-action="add-quiz"><i data-lucide="sparkles"></i>Novo quiz</button></div></div><div class="bento-grid">' + hero + '<article class="card span-5"><div class="card-title-row"><div><h3>Aulas por rever</h3></div><span class="badge badge-yellow">' + weakLessons.length + '</span></div><div class="list-stack">' + weakHtml + '</div></article><article class="card span-7"><div class="card-title-row"><div><p class="card-label">Perguntas de testes anteriores</p><h3>' + (featured ? "Ligadas à próxima avaliação" : "Banco geral") + '</h3></div><span class="badge badge-pink">' + relatedQuestions.length + '</span></div><div style="margin-top:14px">' + questionHtml + '</div></article>' + renderStudyHourEstimate() + '<section class="span-12 section-block"><div class="section-heading"><div><h3>Quizzes disponíveis</h3><p>Quizzes manuais e perguntas anteriores ligadas às aulas.</p></div></div><div class="bento-grid">' + quizCards + "</div></section></div>";
+  function confidenceLabel(value) {
+    return CONFIDENCE_LABELS[normalizeConfidence(value)] || "Não indicado";
+  }
+
+  function calibrationFromPerformance(correct, confidence) {
+    confidence = normalizeConfidence(confidence);
+    if (!confidence) return correct ? "correct" : "error";
+    if (correct && confidence >= 3) return "mastered";
+    if (correct) return "fragile";
+    if (confidence >= 3) return "misconception";
+    return "learning";
+  }
+
+  function calibrationLabel(value) {
+    return value === "mastered" ? "Dominado" : value === "fragile" ? "Acerto frágil" : value === "misconception" ? "Erro confiante" : value === "learning" ? "Por aprender" : value === "correct" ? "Correto" : "Em aprendizagem";
+  }
+
+  function calibrationPriority(item) {
+    if (!item) return 0;
+    if (item.calibration === "misconception") return 4;
+    if (item.calibration === "fragile") return 3;
+    if (item.lastResult === "again") return 2;
+    if (item.lastResult === "hard") return 1;
+    return 0;
+  }
+
+  function renderConfidenceScale(action, selected) {
+    selected = normalizeConfidence(selected);
+    return '<div class="confidence-scale" role="group" aria-label="Nível de confiança"><p><strong>Quão confiante estás?</strong><span>Responde antes de veres a solução.</span></p><div>' + [1, 2, 3, 4].map(function (value) {
+      return '<button type="button" class="confidence-choice ' + (selected === value ? 'is-selected' : '') + '" data-action="' + attr(action) + '" data-value="' + value + '"><strong>' + value + '</strong><span>' + esc(CONFIDENCE_LABELS[value]) + '</span></button>';
+    }).join("") + '</div></div>';
+  }
+
+  function recordReviewConfidence(item, correct, confidence, source) {
+    confidence = normalizeConfidence(confidence);
+    if (!item || !confidence) return calibrationFromPerformance(correct, confidence);
+    var calibration = calibrationFromPerformance(correct, confidence);
+    item.lastConfidence = confidence;
+    item.calibration = calibration;
+    if (calibration === "misconception") item.confidentErrors = Math.max(0, Number(item.confidentErrors) || 0) + 1;
+    item.confidenceHistory = asArray(item.confidenceHistory);
+    item.confidenceHistory.push({ at: new Date().toISOString(), confidence: confidence, correct: !!correct, calibration: calibration, source: source || "review" });
+    if (item.confidenceHistory.length > 50) item.confidenceHistory = item.confidenceHistory.slice(-50);
+    return calibration;
+  }
+
+  function ratingFromPerformance(correct, confidence) {
+    confidence = normalizeConfidence(confidence);
+    if (!correct) return "again";
+    if (confidence <= 2) return "hard";
+    return confidence >= 4 ? "easy" : "good";
+  }
+
+  function shouldAskQuizExplanation(quiz, question, index, confidence) {
+    var item = reviewItemBySourceKey(reviewQuestionKey(quiz, question, index));
+    return normalizeConfidence(confidence) >= 4 || !!(item && (item.lapses || item.confidentErrors));
+  }
+
+  function quizRuntimeQuestions(quiz) {
+    var questions = asArray(quiz && quiz.questions);
+    if (!quizRuntime || !asArray(quizRuntime.questionIndexes).length) return questions;
+    return quizRuntime.questionIndexes.map(function (index) { return questions[index]; }).filter(Boolean);
+  }
+
+  function quizRuntimeSourceIndex(position) {
+    return quizRuntime && asArray(quizRuntime.questionIndexes).length ? Number(quizRuntime.questionIndexes[position]) : position;
+  }
+
+  function reviewQuestionKey(quiz, question, index) {
+    return String(quiz.id) + ":" + String(question.id || question.sourceQuestionId || index);
+  }
+
+  function reviewItemBySourceKey(key) {
+    return state.reviewItems.find(function (item) { return item.sourceKey === key; }) || null;
+  }
+
+  function dueReviewItems(courseId) {
+    return semesterItems("reviewItems").filter(function (item) {
+      return !item.suspended && item.dueDate <= todayISO() && (!courseId || item.courseId === courseId);
+    }).sort(function (a, b) {
+      return calibrationPriority(b) - calibrationPriority(a) || String(a.dueDate).localeCompare(String(b.dueDate)) || Number(b.lapses || 0) - Number(a.lapses || 0) || String(a.createdAt || "").localeCompare(String(b.createdAt || ""));
+    });
+  }
+
+  function errorReviewItems(courseId) {
+    return semesterItems("reviewItems").filter(function (item) {
+      return !item.suspended && (Number(item.lapses || 0) > 0 || Number(item.confidentErrors || 0) > 0 || item.calibration === "fragile" || item.calibration === "misconception" || item.lastResult === "again" || item.lastResult === "hard") && (!courseId || item.courseId === courseId);
+    }).sort(function (a, b) {
+      return calibrationPriority(b) - calibrationPriority(a) || Number(b.confidentErrors || 0) - Number(a.confidentErrors || 0) || Number(b.lapses || 0) - Number(a.lapses || 0) || String(a.dueDate).localeCompare(String(b.dueDate));
+    });
+  }
+
+  function activeStudySession() {
+    return semesterItems("studySessions").filter(function (session) { return session.status === "active"; }).sort(function (a, b) {
+      return String(b.startedAt || "").localeCompare(String(a.startedAt || ""));
+    })[0] || null;
+  }
+
+  function completedStudySessions(days) {
+    var cutoff = addCalendarDays(todayISO(), -(Number(days) || 7));
+    return semesterItems("studySessions").filter(function (session) {
+      return session.status === "completed" && String(session.endedAt || session.startedAt || "").slice(0, 10) >= cutoff;
+    });
+  }
+
+  function studySessionElapsed(session, at) {
+    if (!session || !session.startedAt) return Math.max(0, Number(session && session.actualSeconds) || 0);
+    var now = at || Date.now();
+    var started = new Date(session.startedAt).getTime();
+    if (!Number.isFinite(started)) return Math.max(0, Number(session.actualSeconds) || 0);
+    var end = session.status === "completed" && session.endedAt ? new Date(session.endedAt).getTime() : now;
+    if (session.pausedAt) end -= Math.max(0, now - new Date(session.pausedAt).getTime());
+    return Math.max(0, Math.floor((end - started) / 1000) - Math.max(0, Number(session.pausedSeconds) || 0));
+  }
+
+  function studyMasterySummary() {
+    var items = semesterItems("reviewItems").filter(function (item) { return !item.suspended; });
+    var mature = items.filter(function (item) { return Number(item.intervalStep || 0) >= 3 && item.lastResult !== "again" && (!item.lastConfidence || Number(item.lastConfidence) >= 3); }).length;
+    var learning = items.filter(function (item) { return Number(item.intervalStep || 0) < 3; }).length;
+    return { total: items.length, mature: mature, learning: learning, percent: items.length ? Math.round(mature / items.length * 100) : 0 };
+  }
+
+  function reviewBackBlocks(question) {
+    var explanation = normalizeContentBlocks(question.explanationBlocks || question.explanation || question.answer || "");
+    if (explanation.length) return explanation;
+    var options = asArray(question.optionBlocks).length ? question.optionBlocks : asArray(question.options).map(normalizeContentBlocks);
+    return options[Number(question.answerIndex)] || [];
+  }
+
+  function scheduleReviewItem(item, rating, baseDate, confidence, correct, source) {
+    var step = clamp(Number(item.intervalStep) || 0, 0, REVIEW_INTERVALS.length - 1);
+    confidence = normalizeConfidence(confidence);
+    if (correct === false) rating = "again";
+    if (correct === true && confidence && confidence <= 2 && (rating === "good" || rating === "easy")) rating = rating === "easy" ? "good" : "hard";
+    if (rating === "again") {
+      step = 0;
+      item.lapses = Math.max(0, Number(item.lapses) || 0) + 1;
+    } else if (rating === "hard") {
+      step = Math.max(0, step);
+      item.repetitions = Math.max(0, Number(item.repetitions) || 0) + 1;
+    } else if (rating === "easy") {
+      step = Math.min(REVIEW_INTERVALS.length - 1, step + 2);
+      item.repetitions = Math.max(0, Number(item.repetitions) || 0) + 1;
+    } else {
+      step = Math.min(REVIEW_INTERVALS.length - 1, step + 1);
+      item.repetitions = Math.max(0, Number(item.repetitions) || 0) + 1;
+      rating = "good";
+    }
+    item.intervalStep = step;
+    item.lastResult = rating;
+    if (correct != null) recordReviewConfidence(item, !!correct, confidence, source || "review");
+    item.lastReviewedAt = new Date().toISOString();
+    item.updatedAt = item.lastReviewedAt;
+    item.dueDate = addCalendarDays(baseDate || todayISO(), REVIEW_INTERVALS[step]);
+    return rating;
+  }
+
+  function syncQuizReviewItems(quiz, answers, confidences, explanations, options) {
+    options = options || {};
+    var now = new Date().toISOString();
+    var summary = { errors: 0, fragile: 0, misconceptions: 0, mastered: 0, learning: 0, itemIds: [], results: [] };
+    var questions = options.questions || asArray(quiz.questions);
+    questions.forEach(function (question, index) {
+      var sourceIndex = options.sourceIndexes ? Number(options.sourceIndexes[index]) : index;
+      var answer = answers[index];
+      var confidence = normalizeConfidence(confidences && confidences[index]);
+      var selfCheck = question.mode === "self-check" || !asArray(question.options).length;
+      var correct = selfCheck ? answer === 1 : answer === Number(question.answerIndex);
+      var calibration = calibrationFromPerformance(correct, confidence);
+      if (!correct) summary.errors += 1;
+      if (calibration === "fragile") summary.fragile += 1;
+      if (calibration === "misconception") summary.misconceptions += 1;
+      if (calibration === "mastered") summary.mastered += 1;
+      if (calibration === "learning") summary.learning += 1;
+      var key = reviewQuestionKey(quiz, question, sourceIndex);
+      var item = reviewItemBySourceKey(key);
+      if (!item) {
+        item = {
+          id: uid("review"), semesterId: quiz.semesterId || state.currentSemesterId, courseId: quiz.courseId || null,
+          quizId: quiz.id, lessonId: quiz.lessonId || null, sourceType: "quiz", sourceKey: key,
+          front: contentBlocksPlainText(question.promptBlocks || question.prompt || "Pergunta"),
+          frontBlocks: normalizeContentBlocks(question.promptBlocks || question.prompt || "Pergunta"),
+          back: contentBlocksPlainText(reviewBackBlocks(question)), backBlocks: reviewBackBlocks(question),
+          optionBlocks: asArray(question.optionBlocks).length ? question.optionBlocks.map(normalizeContentBlocks) : asArray(question.options).map(normalizeContentBlocks),
+          answerIndex: question.answerIndex == null ? null : Number(question.answerIndex), images: normalizeImageRefs(question.images),
+          dueDate: todayISO(), intervalStep: 0, repetitions: 0, lapses: 0, lastResult: "", lastConfidence: 0, calibration: "", confidentErrors: 0, confidenceHistory: [], lastExplanation: "", lastDiagnosticAt: "", diagnosticMasteredAt: "",
+          lastReviewedAt: "", createdAt: now, updatedAt: now, suspended: false
+        };
+        state.reviewItems.push(item);
+      } else {
+        item.frontBlocks = normalizeContentBlocks(question.promptBlocks || question.prompt || item.front || "Pergunta");
+        item.backBlocks = reviewBackBlocks(question);
+        item.front = contentBlocksPlainText(item.frontBlocks);
+        item.back = contentBlocksPlainText(item.backBlocks);
+        item.optionBlocks = asArray(question.optionBlocks).length ? question.optionBlocks.map(normalizeContentBlocks) : asArray(question.options).map(normalizeContentBlocks);
+        item.answerIndex = question.answerIndex == null ? null : Number(question.answerIndex);
+        item.images = normalizeImageRefs(question.images);
+        item.suspended = false;
+      }
+      item.lastExplanation = String(explanations && explanations[index] || "").trim();
+      if (options.diagnostic) {
+        item.lastDiagnosticAt = now;
+        if (correct && confidence >= 3) {
+          recordReviewConfidence(item, true, confidence, "diagnostic");
+          item.intervalStep = 4;
+          item.lastResult = "easy";
+          item.repetitions = Math.max(0, Number(item.repetitions) || 0) + 1;
+          item.lastReviewedAt = now;
+          item.updatedAt = now;
+          item.dueDate = addCalendarDays(todayISO(), 28);
+          item.diagnosticMasteredAt = now;
+        } else {
+          scheduleReviewItem(item, ratingFromPerformance(correct, confidence), todayISO(), confidence, correct, "diagnostic");
+          item.diagnosticMasteredAt = "";
+        }
+      } else {
+        scheduleReviewItem(item, ratingFromPerformance(correct, confidence), todayISO(), confidence, correct, "quiz");
+      }
+      summary.itemIds.push(item.id);
+      summary.results.push({ itemId: item.id, sourceIndex: sourceIndex, correct: correct, confidence: confidence, calibration: calibration });
+    });
+    return summary;
+  }
+
+  function studyRecommendation() {
+    var active = activeStudySession();
+    if (active) {
+      return { kind: "continuity", icon: "play-circle", label: "Retomar sessão", title: active.title, reason: "A sessão ficou em curso. Continua exatamente onde paraste.", action: "resume-study-session", id: active.id, minutes: Math.max(1, Math.ceil((Number(active.plannedMinutes || 25) * 60 - studySessionElapsed(active)) / 60)) };
+    }
+    var misconceptions = errorReviewItems().filter(function (item) { return item.calibration === "misconception" && item.dueDate <= todayISO(); });
+    if (misconceptions.length) {
+      var misconceptionCourse = courseById(misconceptions[0].courseId);
+      return { kind: "review", icon: "shield-alert", label: "Corrigir conceção", title: misconceptions.length + " erro" + (misconceptions.length === 1 ? " confiante" : "s confiantes"), reason: (misconceptionCourse ? misconceptionCourse.name + " · " : "") + "Respondeste com confiança, mas a resposta estava errada. Estes itens têm prioridade.", action: "start-review-session", minutes: Math.min(15, Math.max(4, misconceptions.length * 2)) };
+    }
+    var due = dueReviewItems();
+    if (due.length) {
+      var firstCourse = courseById(due[0].courseId);
+      return { kind: "review", icon: "rotate-ccw", label: "Rever agora", title: due.length + " item" + (due.length === 1 ? "" : "s") + " para recuperar", reason: (firstCourse ? firstCourse.name + " · " : "") + "A revisão está marcada porque estes conteúdos já chegaram à data certa.", action: "start-review-session", minutes: Math.min(15, Math.max(4, due.length * 2)) };
+    }
+    var pendingLessons = semesterItems("lessons").filter(function (lesson) {
+      return lessonHasEnded(lesson) && !lessonIsBeOnline(lesson) && !!configuredQuizForLesson(lesson.id);
+    }).sort(function (a, b) { return String(b.date || "").localeCompare(String(a.date || "")); });
+    if (pendingLessons.length) {
+      var pendingLesson = pendingLessons[0];
+      var pendingCourse = courseById(pendingLesson.courseId);
+      return { kind: "quiz", icon: "brain", label: "Fazer mini-quiz", title: pendingLesson.title, reason: (pendingCourse ? pendingCourse.name + " · " : "") + "A aula já terminou e ainda não verificaste o que ficou na memória.", action: "do-beonline-quiz", lessonId: pendingLesson.id, minutes: 5 };
+    }
+    var diagnosticAssessment = semesterItems("assessments").filter(function (assessment) { var days = daysUntil(assessment.date); return assessment.date && days >= 0 && days <= 14; }).sort(function (a, b) { return String(a.date).localeCompare(String(b.date)); })[0];
+    if (diagnosticAssessment) {
+      var diagnosticQuiz = semesterItems("quizzes").find(function (item) { return item.courseId === diagnosticAssessment.courseId && asArray(item.questions).length >= 3; });
+      var recentDiagnostic = semesterItems("diagnostics").find(function (item) { return item.courseId === diagnosticAssessment.courseId && String(item.completedAt || "").slice(0, 10) >= addCalendarDays(todayISO(), -14); });
+      if (diagnosticQuiz && !recentDiagnostic) {
+        var diagnosticCourse = courseById(diagnosticAssessment.courseId);
+        return { kind: "diagnostic", icon: "scan-search", label: "Diagnóstico rápido", title: "Descobrir o que já dominas", reason: (diagnosticCourse ? diagnosticCourse.name + " · " : "") + relativeDate(diagnosticAssessment.date) + ". Cinco perguntas poupam revisão desnecessária.", action: "start-diagnostic", id: diagnosticQuiz.id, minutes: 3 };
+      }
+    }
+    var riskTask = semesterItems("tasks").filter(function (task) { return !task.done && task.type !== "lesson-quiz"; }).sort(function (a, b) {
+      return String(a.dueDate || "9999").localeCompare(String(b.dueDate || "9999")) || Number(b.priority === "high") - Number(a.priority === "high");
+    })[0];
+    if (riskTask) {
+      var riskCourse = courseById(riskTask.courseId);
+      return { kind: "plan", icon: "list-checks", label: "Planear e começar", title: riskTask.title, reason: (riskCourse ? riskCourse.name + " · " : "") + (riskTask.dueDate ? "Prazo " + relativeDate(riskTask.dueDate) + ". Divide a tarefa antes de começar." : "Transforma a tarefa numa sessão concreta."), action: "guided-study-plan", sourceType: "task", sourceId: riskTask.id, minutes: Number(riskTask.estimatedMinutes || state.settings.studySessionMinutes || 25) };
+    }
+    var nextAssessment = semesterItems("assessments").filter(function (item) { return !item.date || daysUntil(item.date) >= 0; }).sort(function (a, b) { return String(a.date || "9999").localeCompare(String(b.date || "9999")); })[0];
+    if (nextAssessment) {
+      var assessmentCourse = courseById(nextAssessment.courseId);
+      return { kind: "assessment", icon: assessmentIcon(nextAssessment.type), label: "Criar sessão", title: "Preparar " + nextAssessment.title, reason: (assessmentCourse ? assessmentCourse.name + " · " : "") + relativeDate(nextAssessment.date) + ". Define um objetivo pequeno e começa pelo primeiro bloco.", action: "guided-study-plan", sourceType: "assessment", sourceId: nextAssessment.id, minutes: 45 };
+    }
+    var quiz = semesterItems("quizzes").sort(function (a, b) { return Number(a.lastScore == null ? -1 : a.lastScore) - Number(b.lastScore == null ? -1 : b.lastScore); })[0];
+    if (quiz) return { kind: "quiz", icon: "sparkles", label: "Praticar", title: quiz.title, reason: "Um quiz curto mantém a recuperação ativa sem acrescentar mais organização.", action: "start-quiz", id: quiz.id, minutes: 8 };
+    return { kind: "empty", icon: "sparkles", label: "Criar quiz", title: "Prepara a primeira atividade de recuperação", reason: "Adiciona um quiz a uma aula ou cria um flashcard manual para começar o ciclo de revisão.", action: "add-quiz", minutes: 5 };
+  }
+
+  function studyRecommendationButton(item, dark) {
+    var data = ' data-action="' + attr(item.action) + '"';
+    if (item.id) data += ' data-id="' + attr(item.id) + '"';
+    if (item.lessonId) data += ' data-lesson="' + attr(item.lessonId) + '"';
+    if (item.sourceType) data += ' data-source-type="' + attr(item.sourceType) + '"';
+    if (item.sourceId) data += ' data-source-id="' + attr(item.sourceId) + '"';
+    return '<button class="button ' + (dark ? "button-dark" : "") + '" type="button"' + data + '><i data-lucide="' + attr(item.icon) + '"></i>' + esc(item.label) + '</button>';
+  }
+
+  function renderStudyRecommendationCard(compact) {
+    var item = studyRecommendation();
+    return '<article class="study-next-action ' + (compact ? "is-compact" : "") + ' kind-' + attr(item.kind) + '"><div class="study-next-icon"><i data-lucide="' + attr(item.icon) + '"></i></div><div class="study-next-copy"><p class="card-label">Próxima ação · ' + item.minutes + ' min</p><h2>' + esc(item.title) + '</h2><p>' + esc(item.reason) + '</p></div><div class="study-next-actions">' + studyRecommendationButton(item, true) + '<button class="button button-ghost" type="button" data-route="study" data-tab="overview"><i data-lucide="layout-dashboard"></i>Ver plano</button></div></article>';
+  }
+
+  function renderStudyTabs(active) {
+    var tabs = [
+      ["overview", "sparkles", "Visão geral"], ["diagnostic", "scan-search", "Diagnóstico"], ["review", "rotate-ccw", "Revisão"], ["errors", "triangle-alert", "Banco de erros"],
+      ["flashcards", "layers-3", "Flashcards"], ["history", "history", "Histórico"], ["weekly", "clipboard-check", "Semanal"], ["ai", "brain", "IA"]
+    ];
+    return '<nav class="study-tabs" aria-label="Áreas de estudo">' + tabs.map(function (tab) {
+      return '<button type="button" class="' + (active === tab[0] ? "is-active" : "") + '" data-route="study" data-tab="' + tab[0] + '"><i data-lucide="' + tab[1] + '"></i><span>' + tab[2] + '</span></button>';
+    }).join("") + '</nav>';
+  }
+
+  function studyNotifications() {
+    var notices = [];
+    var active = activeStudySession();
+    if (active && state.settings.studyNotificationTypes.continuity !== false) notices.push({ icon: "play-circle", tone: "violet", title: "Sessão por terminar", copy: active.title, action: "resume-study-session", id: active.id });
+    var due = dueReviewItems();
+    if (due.length && state.settings.studyNotificationTypes.contextual !== false) notices.push({ icon: "rotate-ccw", tone: "mint", title: due.length + " revisões disponíveis", copy: "Uma fila curta já está pronta.", action: "start-review-session" });
+    var risk = semesterItems("tasks").filter(function (task) { var days = daysUntil(task.dueDate); return !task.done && task.dueDate && days >= 0 && days <= 3; }).sort(function (a, b) { return String(a.dueDate).localeCompare(String(b.dueDate)); })[0];
+    if (risk && state.settings.studyNotificationTypes.risk !== false) notices.push({ icon: "clock-alert", tone: "orange", title: "Prazo " + relativeDate(risk.dueDate), copy: risk.title, action: "guided-study-plan", sourceType: "task", sourceId: risk.id });
+    try {
+      var context = homeContext(activeHomeNow());
+      if (context.next && context.next.startMin - nowMinutes(context.now) <= 20 && context.next.startMin > nowMinutes(context.now) && state.settings.studyNotificationTypes.contextual !== false) {
+        notices.unshift({ icon: "alarm-clock", tone: "yellow", title: "Aula em " + (context.next.startMin - nowMinutes(context.now)) + " min", copy: (context.next.course ? context.next.course.name : "Próxima aula") + (context.next.room ? " · " + context.next.room : ""), route: "lesson", routeId: context.next.lesson && context.next.lesson.id });
+      }
+    } catch (_) { /* sem horário ativo */ }
+    return notices.slice(0, 3);
+  }
+
+  function renderStudyNotificationStrip() {
+    if (!state.settings.studyNotificationsEnabled) return '';
+    var notices = studyNotifications();
+    if (!notices.length) return '';
+    return '<div class="study-notice-strip">' + notices.map(function (notice) {
+      var attrs = notice.route ? ' data-route="' + notice.route + '"' + (notice.routeId ? ' data-id="' + attr(notice.routeId) + '"' : '') : ' data-action="' + notice.action + '"' + (notice.id ? ' data-id="' + attr(notice.id) + '"' : '') + (notice.sourceType ? ' data-source-type="' + attr(notice.sourceType) + '" data-source-id="' + attr(notice.sourceId) + '"' : '');
+      return '<button type="button" class="study-notice tone-' + notice.tone + '"' + attrs + '><i data-lucide="' + notice.icon + '"></i><span><strong>' + esc(notice.title) + '</strong><small>' + esc(notice.copy) + '</small></span><i data-lucide="arrow-right"></i></button>';
+    }).join("") + '</div>';
+  }
+
+  function dailyStudyFeedback() {
+    var today = todayISO();
+    var sessions = semesterItems("studySessions").filter(function (session) { return session.status === "completed" && String(session.endedAt || session.startedAt || "").slice(0, 10) === today && session.sourceType !== "review"; });
+    if (!sessions.length) return null;
+    var planned = sessions.reduce(function (sum, session) { return sum + Number(session.plannedMinutes || 0); }, 0);
+    var actual = Math.round(sessions.reduce(function (sum, session) { return sum + Number(session.actualSeconds || 0); }, 0) / 60);
+    var totalSteps = sessions.reduce(function (sum, session) { return sum + asArray(session.steps).length; }, 0);
+    var doneSteps = sessions.reduce(function (sum, session) { return sum + asArray(session.steps).filter(function (step) { return step.done; }).length; }, 0);
+    var incomplete = sessions.filter(function (session) { return session.reflection && session.reflection.outcome && session.reflection.outcome !== "complete"; });
+    var suggestion = incomplete.length ? "Retoma apenas o passo que ficou por fazer, em vez de repetires a sessão inteira." : actual < planned * 0.75 ? "O plano ficou maior do que o tempo real. Reduz o próximo bloco em 10–15 minutos." : "O plano foi realista. Fecha o ciclo com um mini-quiz ou uma revisão curta.";
+    return { planned: planned, actual: actual, totalSteps: totalSteps, doneSteps: doneSteps, incomplete: incomplete.length, suggestion: suggestion };
+  }
+
+  function renderDailyStudyFeedback() {
+    var feedback = dailyStudyFeedback();
+    if (!feedback) return "";
+    var action = feedback.incomplete ? '<button class="button button-dark" type="button" data-action="guided-study-plan"><i data-lucide="arrow-right"></i>Planear continuação</button>' : dueReviewItems().length ? '<button class="button button-dark" type="button" data-action="start-review-session"><i data-lucide="rotate-ccw"></i>Fechar com revisão</button>' : '<button class="button button-dark" type="button" data-action="guided-study-plan"><i data-lucide="calendar-plus"></i>Planear próximo bloco</button>';
+    return '<article class="card span-12 daily-study-feedback"><div><p class="card-label">Feedback de hoje</p><h3>' + feedback.actual + ' de ' + feedback.planned + ' min realizados</h3><p>' + esc(feedback.suggestion) + '</p></div><div class="daily-study-feedback-stats"><span><strong>' + feedback.doneSteps + '/' + feedback.totalSteps + '</strong><small>passos</small></span><span><strong>' + feedback.incomplete + '</strong><small>por continuar</small></span></div>' + action + '</article>';
+  }
+
+  function renderDiagnosticPage() {
+    var quizzes = semesterItems("quizzes").filter(function (quiz) { return asArray(quiz.questions).length >= 3; });
+    var records = semesterItems("diagnostics").slice().sort(function (a, b) { return String(b.completedAt || "").localeCompare(String(a.completedAt || "")); });
+    var latest = records[0];
+    var latestHtml = latest ? '<article class="diagnostic-latest"><div><p class="card-label">Último diagnóstico</p><h3>' + esc(latest.title) + '</h3><p>' + esc(formatDate(String(latest.completedAt).slice(0, 10))) + ' · ' + latest.total + ' perguntas</p></div><div class="diagnostic-summary"><span class="is-mastered"><strong>' + latest.mastered + '</strong><small>dominados</small></span><span class="is-fragile"><strong>' + latest.fragile + '</strong><small>frágeis</small></span><span class="is-learning"><strong>' + latest.learning + '</strong><small>por aprender</small></span><span class="is-misconception"><strong>' + latest.misconceptions + '</strong><small>erros confiantes</small></span></div>' + ((latest.fragile + latest.learning + latest.misconceptions) ? '<button class="button button-dark" type="button" data-action="start-diagnostic-review" data-id="' + attr(latest.id) + '"><i data-lucide="play"></i>Rever lacunas</button>' : '') + '</article>' : '<div class="form-note"><strong>Para que serve?</strong> Um diagnóstico curto identifica matéria já dominada e evita que a Twenty te faça rever tudo por igual.</div>';
+    var list = quizzes.length ? '<div class="diagnostic-grid">' + quizzes.map(function (quiz) {
+      var course = courseById(quiz.courseId);
+      var recent = records.find(function (record) { return record.quizId === quiz.id; });
+      return '<article class="diagnostic-card"><span class="metric-icon"><i data-lucide="scan-search"></i></span><div><span class="badge" style="background:' + safeColor(course && course.color, '#eeeaff') + '">' + esc(course ? course.code || course.name : 'Quiz') + '</span><h3>' + esc(quiz.title) + '</h3><p>' + asArray(quiz.questions).length + ' perguntas disponíveis' + (recent ? ' · último ' + relativeDate(String(recent.completedAt).slice(0, 10)).toLowerCase() : '') + '</p></div><button class="button button-dark" type="button" data-action="start-diagnostic" data-id="' + attr(quiz.id) + '"><i data-lucide="play"></i>Diagnóstico de ' + Math.min(Number(state.settings.diagnosticQuestionCount || 5), asArray(quiz.questions).length) + ' perguntas</button></article>';
+    }).join("") + '</div>' : emptyState("scan-search", "Ainda sem quizzes para diagnosticar", "Cria um quiz com pelo menos três perguntas. A Twenty usa perguntas reais da cadeira, sem inventar matéria.", "add-quiz", "Criar quiz");
+    return '<div class="page-head"><div><h2>Diagnóstico rápido</h2><p>Descobre o que já sabes antes de criares um plano de revisão.</p></div><div class="page-actions"><span class="badge badge-violet">3–5 min</span></div></div>' + latestHtml + '<div class="section-heading"><div><h3>Escolher matéria</h3><p>Os itens dominados saem da fila imediata; acertos inseguros continuam em revisão.</p></div></div>' + list;
+  }
+
+  function renderStudyOverview() {
+    var due = dueReviewItems();
+    var errors = errorReviewItems();
+    var mastery = studyMasterySummary();
+    var sessions = completedStudySessions(7);
+    var studiedMinutes = Math.round(sessions.reduce(function (sum, session) { return sum + Number(session.actualSeconds || 0); }, 0) / 60);
+    var recommendation = renderStudyRecommendationCard(false);
+    var dailyFeedback = renderDailyStudyFeedback();
+    var recent = sessions.slice().sort(function (a, b) { return String(b.endedAt || "").localeCompare(String(a.endedAt || "")); }).slice(0, 4);
+    var recentHtml = recent.length ? recent.map(function (session) {
+      var course = courseById(session.courseId);
+      return '<div class="list-row"><span class="list-icon mint"><i data-lucide="check-circle-2"></i></span><span class="list-content"><strong>' + esc(session.title) + '</strong><small>' + esc(course ? course.name : "Estudo") + ' · ' + Math.max(1, Math.round(Number(session.actualSeconds || 0) / 60)) + ' min</small></span><span class="badge">' + asArray(session.steps).filter(function (step) { return step.done; }).length + '/' + asArray(session.steps).length + ' passos</span></div>';
+    }).join("") : emptyState("timer-reset", "Ainda sem sessões", "Planeia uma tarefa e começa uma sessão curta. O histórico aparece aqui.", "guided-study-plan", "Planear sessão");
+    return renderStudyNotificationStrip() + '<div class="bento-grid study-core-grid">' + recommendation + dailyFeedback
+      + '<article class="card span-3 metric-card card-mint"><div class="metric-top"><p class="card-label">Para hoje</p><span class="metric-icon"><i data-lucide="rotate-ccw"></i></span></div><div><p class="metric-value">' + due.length + '</p><p class="metric-caption">revisões disponíveis</p></div><button class="button button-small" type="button" data-route="study" data-tab="review">Abrir fila</button></article>'
+      + '<article class="card span-3 metric-card card-pink"><div class="metric-top"><p class="card-label">Banco de erros</p><span class="metric-icon"><i data-lucide="triangle-alert"></i></span></div><div><p class="metric-value">' + errors.length + '</p><p class="metric-caption">itens a reforçar</p></div><button class="button button-small" type="button" data-route="study" data-tab="errors">Ver erros</button></article>'
+      + '<article class="card span-3 metric-card card-violet"><div class="metric-top"><p class="card-label">Domínio</p><span class="metric-icon"><i data-lucide="badge-check"></i></span></div><div><p class="metric-value">' + mastery.percent + '%</p><p class="metric-caption">' + mastery.mature + ' consolidados</p></div><div class="study-mastery-bar"><span style="width:' + mastery.percent + '%"></span></div></article>'
+      + '<article class="card span-3 metric-card card-yellow"><div class="metric-top"><p class="card-label">Últimos 7 dias</p><span class="metric-icon"><i data-lucide="timer"></i></span></div><div><p class="metric-value">' + studiedMinutes + '</p><p class="metric-caption">minutos estudados</p></div><button class="button button-small" type="button" data-route="study" data-tab="history">Histórico</button></article>'
+      + '<article class="card span-7"><div class="card-title-row"><div><p class="card-label">Planeamento guiado</p><h3>Transforma intenção em passos</h3><p class="card-subtitle">Escolhe um item, define um resultado concreto e começa pelo primeiro passo.</p></div><span class="metric-icon"><i data-lucide="list-checks"></i></span></div><div class="study-plan-actions"><button class="button button-dark" type="button" data-action="guided-study-plan"><i data-lucide="wand-sparkles"></i>Planear sessão</button><button class="button" type="button" data-route="planner" data-planner-view="study-day"><i data-lucide="calendar-clock"></i>Ver dia</button></div></article>'
+      + '<article class="card span-5"><div class="card-title-row"><div><p class="card-label">Sessões recentes</p><h3>Trabalho realizado</h3></div><span class="badge badge-mint">' + sessions.length + '</span></div><div class="list-stack">' + recentHtml + '</div></article>'
+      + renderStudyHourEstimate() + '</div>';
+  }
+
+  function renderReviewPage() {
+    var due = dueReviewItems();
+    var goal = Number(state.settings.reviewDailyGoal || 10);
+    var all = semesterItems("reviewItems").filter(function (item) { return !item.suspended; });
+    var cards = due.length ? due.slice(0, 20).map(function (item) {
+      var course = courseById(item.courseId);
+      return '<article class="review-queue-card"><div><span class="badge" style="background:' + safeColor(course && course.color, "#dff7ee") + '">' + esc(course ? course.code || course.name : "Revisão") + '</span><h3>' + esc(item.front) + '</h3><p>' + (item.lapses ? item.lapses + ' falha(s) registada(s)' : 'Conteúdo em aprendizagem') + ' · ' + (item.dueDate < todayISO() ? 'atrasado ' + relativeDate(item.dueDate).toLowerCase() : 'marcado para hoje') + '</p></div><button class="button button-dark button-small" type="button" data-action="start-review-session" data-id="' + attr(item.id) + '"><i data-lucide="play"></i>Rever</button></article>';
+    }).join("") : emptyState("badge-check", "Revisões em dia", "Quando terminares quizzes ou criares flashcards, a Twenty agenda-os de forma gradual.", "add-flashcard", "Criar flashcard");
+    return '<div class="review-page-head"><div><p class="card-label">Recuperação ativa</p><h2>' + due.length + ' para hoje</h2><p>Primeiro tenta recordar. Só depois revelas a resposta e indicas a dificuldade.</p></div><div class="page-actions"><span class="badge badge-violet">Meta ' + goal + '/dia</span><button class="button" type="button" data-action="study-review-settings"><i data-lucide="sliders-horizontal"></i>Meta</button><button class="button button-dark" type="button" data-action="start-review-session" ' + (!due.length ? 'disabled' : '') + '><i data-lucide="play"></i>Começar fila</button></div></div><div class="review-progress-card"><div><strong>' + Math.min(goal, due.length) + '</strong><span>itens disponíveis de uma meta diária de ' + goal + '</span></div><div class="study-mastery-bar"><span style="width:' + Math.min(100, due.length / goal * 100) + '%"></span></div><small>' + all.length + ' itens no sistema · os intervalos usados são 1, 3, 7, 14, 28 e 60 dias, ajustados pela tua resposta.</small></div><div class="review-queue-list">' + cards + '</div>';
+  }
+
+  function renderErrorBank() {
+    var errors = errorReviewItems();
+    var grouped = {};
+    errors.forEach(function (item) { var key = item.courseId || "general"; if (!grouped[key]) grouped[key] = []; grouped[key].push(item); });
+    var content = Object.keys(grouped).length ? Object.keys(grouped).map(function (courseId) {
+      var course = courseById(courseId);
+      return '<section class="error-course-group"><div class="section-heading"><div><h3>' + esc(course ? course.name : "Revisão geral") + '</h3><p>' + grouped[courseId].length + ' conceito(s) que já falharam</p></div><button class="button button-small" type="button" data-action="start-review-session" data-errors="true" data-course="' + attr(courseId === "general" ? "" : courseId) + '"><i data-lucide="play"></i>Rever cadeira</button></div><div class="error-bank-grid">' + grouped[courseId].map(function (item) {
+        return '<article class="error-bank-card ' + (item.calibration === 'misconception' ? 'is-misconception' : item.calibration === 'fragile' ? 'is-fragile' : '') + '"><div class="error-count"><strong>' + Math.max(1, Number(item.lapses || 0)) + '</strong><span>falha' + (Number(item.lapses || 0) === 1 ? '' : 's') + '</span></div><div><span class="badge ' + (item.calibration === 'misconception' ? 'badge-pink' : item.calibration === 'fragile' ? 'badge-yellow' : '') + '">' + esc(calibrationLabel(item.calibration)) + '</span><h4>' + esc(item.front) + '</h4><p>Próxima revisão: ' + esc(relativeDate(item.dueDate)) + (item.lastConfidence ? ' · confiança ' + item.lastConfidence + '/4' : '') + '</p></div><div class="list-actions"><button class="row-button" type="button" data-action="start-review-session" data-id="' + attr(item.id) + '" aria-label="Rever agora"><i data-lucide="play"></i></button><button class="row-button" type="button" data-action="archive-review-item" data-id="' + attr(item.id) + '" aria-label="Arquivar como dominado"><i data-lucide="archive"></i></button></div></article>';
+      }).join("") + '</div></section>';
+    }).join("") : emptyState("badge-check", "Banco de erros vazio", "As perguntas falhadas aparecem aqui automaticamente depois de cada quiz.", null);
+    return '<div class="page-head"><div><h2>Banco de erros</h2><p>Não é uma lista de castigos. É a fila do que merece mais uma tentativa.</p></div><div class="page-actions"><span class="badge badge-pink">' + errors.length + ' por reforçar</span><button class="button button-dark" type="button" data-action="start-review-session" data-errors="true" ' + (!errors.length ? 'disabled' : '') + '><i data-lucide="rotate-ccw"></i>Rever erros</button></div></div>' + content;
+  }
+
+  function renderFlashcardsPage() {
+    var cards = semesterItems("reviewItems").filter(function (item) { return item.sourceType === "flashcard"; });
+    var aiProjects = semesterItems("aiProjects").filter(function (project) { return asArray(project.flashcards).length; });
+    var cardHtml = cards.length ? '<div class="flashcard-library-grid">' + cards.map(function (item) {
+      var course = courseById(item.courseId);
+      return '<article class="flashcard-library-card ' + (item.suspended ? 'is-suspended' : '') + '"><div class="flashcard-library-top"><span class="badge" style="background:' + safeColor(course && course.color, "#eeeaff") + '">' + esc(course ? course.code || course.name : "Geral") + '</span><span class="badge ' + (item.suspended ? '' : 'badge-mint') + '">' + (item.suspended ? 'Arquivado' : relativeDate(item.dueDate)) + '</span></div><h3>' + esc(item.front) + '</h3><p>' + esc(item.back) + '</p><div class="list-actions"><button class="button button-small" type="button" data-action="start-review-session" data-id="' + attr(item.id) + '"><i data-lucide="play"></i>Rever</button><button class="row-button" type="button" data-action="edit-flashcard" data-id="' + attr(item.id) + '" aria-label="Editar"><i data-lucide="pencil"></i></button><button class="row-button" type="button" data-action="archive-review-item" data-id="' + attr(item.id) + '" aria-label="' + (item.suspended ? 'Restaurar' : 'Arquivar') + '"><i data-lucide="' + (item.suspended ? 'archive-restore' : 'archive') + '"></i></button></div></article>';
+    }).join("") + '</div>' : emptyState("layers-3", "Ainda sem flashcards", "Cria cartões manualmente ou importa os que a IA gerou a partir de um PowerPoint.", "add-flashcard", "Novo flashcard");
+    var aiHtml = aiProjects.length ? '<section class="ai-import-flashcards"><div class="section-heading"><div><h3>Flashcards gerados pela IA</h3><p>Importa apenas depois de reveres o conteúdo. Todos ficam editáveis.</p></div></div><div class="list-stack">' + aiProjects.map(function (project) {
+      var course = courseById(project.courseId);
+      return '<div class="list-row"><span class="list-icon violet"><i data-lucide="presentation"></i></span><span class="list-content"><strong>' + esc(project.title) + '</strong><small>' + esc(course ? course.name : "Sem cadeira") + ' · ' + asArray(project.flashcards).length + ' cartões</small></span><button class="button button-small" type="button" data-action="import-ai-flashcards" data-id="' + attr(project.id) + '"><i data-lucide="download"></i>Importar</button></div>';
+    }).join("") + '</div></section>' : '';
+    return '<div class="page-head"><div><h2>Flashcards por cadeira</h2><p>Cartões curtos, editáveis e integrados na mesma fila de revisão.</p></div><div class="page-actions"><button class="button button-dark" type="button" data-action="add-flashcard"><i data-lucide="plus"></i>Novo flashcard</button></div></div>' + cardHtml + aiHtml;
+  }
+
+  function renderStudyHistory() {
+    var sessions = semesterItems("studySessions").filter(function (session) { return session.status === "completed"; }).sort(function (a, b) { return String(b.endedAt || "").localeCompare(String(a.endedAt || "")); });
+    var total = sessions.reduce(function (sum, session) { return sum + Number(session.actualSeconds || 0); }, 0);
+    var rows = sessions.length ? sessions.map(function (session) {
+      var course = courseById(session.courseId);
+      var stepsDone = asArray(session.steps).filter(function (step) { return step.done; }).length;
+      var reflection = session.reflection && session.reflection.outcome ? '<span class="badge ' + (session.reflection.outcome === 'complete' ? 'badge-mint' : 'badge-yellow') + '">' + esc(session.reflection.outcome === 'complete' ? 'Objetivo concluído' : 'Continuação necessária') + '</span>' : '<span class="badge">Sem reflexão</span>';
+      return '<div class="study-history-row"><time>' + esc(formatDate(String(session.endedAt || session.startedAt).slice(0, 10))) + '</time><span class="list-icon mint"><i data-lucide="timer"></i></span><div><strong>' + esc(session.title) + '</strong><small>' + esc(course ? course.name : "Estudo") + ' · ' + Math.max(1, Math.round(Number(session.actualSeconds || 0) / 60)) + '/' + Number(session.plannedMinutes || 0) + ' min · ' + stepsDone + '/' + asArray(session.steps).length + ' passos</small></div>' + reflection + '</div>';
+    }).join("") : emptyState("history", "Sem histórico de estudo", "As sessões guiadas concluídas aparecem aqui, sem pontos ou rankings artificiais.", "guided-study-plan", "Começar sessão");
+    return '<div class="page-head"><div><h2>Histórico real</h2><p>Tempo, objetivos e passos concluídos. Apenas trabalho académico com significado.</p></div><div class="page-actions"><span class="badge badge-mint">' + Math.round(total / 60) + ' min totais</span></div></div><div class="study-history-list">' + rows + '</div>';
+  }
+
+  function renderReviewRuntime() {
+    if (!reviewRuntime || !reviewRuntime.ids.length) return;
+    var item = state.reviewItems.find(function (entry) { return entry.id === reviewRuntime.ids[reviewRuntime.index]; });
+    if (!item) {
+      reviewRuntime.index += 1;
+      if (reviewRuntime.index >= reviewRuntime.ids.length) { finishReviewSession(); return; }
+      renderReviewRuntime();
+      return;
+    }
+    var course = courseById(item.courseId);
+    var progress = reviewRuntime.index + 1;
+    var reveal = !!reviewRuntime.revealed;
+    var confidence = normalizeConfidence(reviewRuntime.confidence);
+    var answerOptions = reveal && asArray(item.optionBlocks).length ? '<div class="review-answer-options">' + item.optionBlocks.map(function (option, index) {
+      return '<div class="review-answer-option ' + (index === Number(item.answerIndex) ? 'is-correct' : '') + '"><span>' + String.fromCharCode(65 + index) + '</span>' + renderQuizOptionContent(option) + '</div>';
+    }).join("") + '</div>' : '';
+    var confidencePanel = renderConfidenceScale("review-confidence", confidence);
+    var answer = reveal ? '<section class="review-revealed"><div class="calibration-preview"><span class="badge badge-violet">Confiança ' + confidence + '/4 · ' + esc(confidenceLabel(confidence)) + '</span><small>Agora compara com honestidade e escolhe o resultado.</small></div><p class="card-label">Resposta</p>' + answerOptions + (asArray(item.backBlocks).length ? '<div class="review-explanation">' + renderContentBlocks(item.backBlocks) + '</div>' : '') + '</section>' : '<div class="review-recall-prompt"><i data-lucide="brain"></i><strong>Tenta responder antes de revelar.</strong><span>Recupera a ideia da memória, indica a confiança e só depois compara.</span></div>' + confidencePanel;
+    var footer = reveal
+      ? '<footer class="modal-foot review-rating-actions"><button class="button review-again" type="button" data-action="review-rate" data-value="again"><i data-lucide="rotate-ccw"></i>Não sabia<small>1 dia</small></button><button class="button" type="button" data-action="review-rate" data-value="hard"><i data-lucide="gauge"></i>Sabia com esforço<small>' + REVIEW_INTERVALS[Math.max(0, Number(item.intervalStep || 0))] + ' d</small></button><button class="button button-dark" type="button" data-action="review-rate" data-value="good"><i data-lucide="check"></i>Sabia<small>' + REVIEW_INTERVALS[Math.min(REVIEW_INTERVALS.length - 1, Number(item.intervalStep || 0) + 1)] + ' d</small></button><button class="button" type="button" data-action="review-rate" data-value="easy"><i data-lucide="fast-forward"></i>Muito fácil<small>' + REVIEW_INTERVALS[Math.min(REVIEW_INTERVALS.length - 1, Number(item.intervalStep || 0) + 2)] + ' d</small></button></footer>'
+      : '<footer class="modal-foot"><button class="button" type="button" data-action="review-stop"><i data-lucide="x"></i>Terminar</button><button class="button button-dark" type="button" data-action="review-reveal" ' + (state.settings.studyConfidencePrompts && !confidence ? 'disabled' : '') + '><i data-lucide="eye"></i>Revelar resposta</button></footer>';
+    var body = '<div class="review-session-progress"><span>Item ' + progress + ' de ' + reviewRuntime.ids.length + '</span><div><span style="width:' + Math.round(progress / reviewRuntime.ids.length * 100) + '%"></span></div></div><div class="review-session-meta"><span class="badge" style="background:' + safeColor(course && course.color, '#eeeaff') + '">' + esc(course ? course.code || course.name : 'Revisão') + '</span><span class="badge ' + (item.calibration === 'misconception' ? 'badge-pink' : item.calibration === 'fragile' ? 'badge-yellow' : item.lapses ? 'badge-pink' : 'badge-mint') + '">' + esc(item.calibration ? calibrationLabel(item.calibration) : item.lapses ? item.lapses + ' falha(s)' : 'Em aprendizagem') + '</span></div><div class="review-session-question">' + renderContentBlocks(item.frontBlocks || item.front) + renderImageGallery(item.images, "question", { ownerId: item.id }) + '</div>' + answer;
+    openModal("Revisão ativa", body, { className: "modal-wide review-session-modal", footer: footer });
+  }
+
+  function startReviewItemsByIds(ids) {
+    ids = asArray(ids).filter(function (id) { return state.reviewItems.some(function (item) { return item.id === id && !item.suspended; }); });
+    if (!ids.length) { toast("Não existem lacunas disponíveis para rever.", "warning"); return; }
+    var limit = Math.max(1, Number(state.settings.reviewDailyGoal || 10));
+    reviewRuntime = { ids: ids.slice(0, limit), index: 0, revealed: false, confidence: 0, startedAt: Date.now(), ratings: [] };
+    renderReviewRuntime();
+  }
+
+  function startReviewSession(itemId, courseId, errorsOnly) {
+    var items;
+    if (itemId) {
+      var one = state.reviewItems.find(function (item) { return item.id === itemId; });
+      items = one ? [one] : [];
+    } else if (errorsOnly) {
+      items = errorReviewItems(courseId || "");
+    } else {
+      items = dueReviewItems(courseId || "");
+      if (!items.length && courseId) items = semesterItems("reviewItems").filter(function (item) { return !item.suspended && item.courseId === courseId; });
+    }
+    if (!items.length) { toast("Não existem itens disponíveis para rever agora.", "warning"); return; }
+    startReviewItemsByIds(items.map(function (item) { return item.id; }));
+  }
+
+  async function rateReviewItem(rating) {
+    if (!reviewRuntime) return;
+    var item = state.reviewItems.find(function (entry) { return entry.id === reviewRuntime.ids[reviewRuntime.index]; });
+    if (item) {
+      var confidence = normalizeConfidence(reviewRuntime.confidence);
+      var correct = rating !== "again";
+      var appliedRating = scheduleReviewItem(item, rating, todayISO(), confidence, correct, "review");
+      reviewRuntime.ratings.push({ id: item.id, rating: appliedRating, confidence: confidence, calibration: item.calibration });
+      await save(true);
+    }
+    reviewRuntime.index += 1;
+    reviewRuntime.revealed = false;
+    reviewRuntime.confidence = 0;
+    if (reviewRuntime.index >= reviewRuntime.ids.length) finishReviewSession();
+    else renderReviewRuntime();
+  }
+
+  function finishReviewSession() {
+    if (!reviewRuntime) return;
+    var finished = reviewRuntime;
+    reviewRuntime = null;
+    closeModal();
+    var again = finished.ratings.filter(function (item) { return item.rating === "again"; }).length;
+    var misconceptions = finished.ratings.filter(function (item) { return item.calibration === "misconception"; }).length;
+    var fragile = finished.ratings.filter(function (item) { return item.calibration === "fragile"; }).length;
+    var duration = Math.max(1, Math.round((Date.now() - finished.startedAt) / 60000));
+    state.studySessions.push({
+      id: uid("studysession"), semesterId: state.currentSemesterId, courseId: null, sourceType: "review", sourceId: null,
+      title: "Revisão espaçada", goal: "Recuperar conteúdos sem consultar", plannedMinutes: duration, startedAt: new Date(finished.startedAt).toISOString(),
+      endedAt: new Date().toISOString(), actualSeconds: Math.round((Date.now() - finished.startedAt) / 1000), pausedSeconds: 0, pausedAt: "", status: "completed",
+      steps: [{ id: uid("step"), title: finished.ratings.length + " itens revistos", done: true }], reflection: null, createdAt: new Date(finished.startedAt).toISOString()
+    });
+    save(true).catch(function (error) { console.error(error); });
+    openModal("Revisão concluída", '<div class="finish-card review-finish-card"><span class="study-finish-check"><i data-lucide="check"></i></span><p class="card-label">Recuperação ativa + calibração</p><h2>' + finished.ratings.length + ' itens revistos</h2><p>' + (misconceptions ? misconceptions + ' resposta(s) pareciam certas, mas estavam erradas. Foram colocadas no topo do Banco de Erros.' : fragile ? fragile + ' acerto(s) ainda estavam inseguros e regressam mais cedo.' : again ? again + ' voltam amanhã porque ainda precisam de reforço.' : 'Confiança e desempenho ficaram alinhados nesta sessão.') + '</p><div class="review-finish-stats"><span><strong>' + duration + '</strong><small>minutos</small></span><span><strong>' + fragile + '</strong><small>acertos frágeis</small></span><span><strong>' + misconceptions + '</strong><small>erros confiantes</small></span></div></div>', { footer: '<footer class="modal-foot"><button class="button" type="button" data-route="study" data-tab="errors"><i data-lucide="triangle-alert"></i>Banco de erros</button><button class="button button-dark" type="button" data-action="close-modal"><i data-lucide="check"></i>Concluir</button></footer>' });
+  }
+
+  function openFlashcardForm(id) {
+    var item = id ? state.reviewItems.find(function (entry) { return entry.id === id; }) : null;
+    var body = '<form id="flashcardForm" data-id="' + attr(item && item.id || '') + '"><div class="form-grid"><div class="field"><label>Cadeira</label><select name="courseId"><option value="">Geral</option>' + courseOptions(item && item.courseId || "") + '</select></div><div class="field"><label>Primeira revisão</label><select name="firstInterval"><option value="1">Amanhã</option><option value="3">Daqui a 3 dias</option><option value="7">Daqui a 7 dias</option></select></div><div class="field field-full"><label>Frente · pergunta ou conceito</label><textarea name="front" rows="3" required placeholder="O que é exclusão mútua?">' + esc(item && item.front || '') + '</textarea></div><div class="field field-full"><label>Verso · resposta curta</label><textarea name="back" rows="5" required placeholder="Explica por palavras tuas…">' + esc(item && item.back || '') + '</textarea></div></div><p class="form-note"><strong>Bom flashcard:</strong> uma pergunta concreta e uma resposta curta. Depois de guardado, entra na mesma fila adaptativa dos quizzes.</p></form>';
+    openModal(item ? "Editar flashcard" : "Novo flashcard", body, { footer: formFooter(item ? "Guardar alterações" : "Criar flashcard", "flashcardForm") });
+  }
+
+  async function handleFlashcardSubmit(event) {
+    event.preventDefault();
+    var form = event.target;
+    var data = new FormData(form);
+    var front = String(data.get("front") || "").trim();
+    var back = String(data.get("back") || "").trim();
+    if (!front || !back) { setFormError(form, "Preenche a frente e o verso do flashcard."); return; }
+    var item = form.dataset.id ? state.reviewItems.find(function (entry) { return entry.id === form.dataset.id; }) : null;
+    var now = new Date().toISOString();
+    if (!item) {
+      var first = Number(data.get("firstInterval") || 1);
+      var step = Math.max(0, REVIEW_INTERVALS.indexOf(first));
+      item = { id: uid("review"), semesterId: state.currentSemesterId, courseId: data.get("courseId") || null, quizId: null, lessonId: null, sourceType: "flashcard", sourceKey: "flashcard:" + uid("card"), front: front, frontBlocks: normalizeContentBlocks(front), back: back, backBlocks: normalizeContentBlocks(back), optionBlocks: [], answerIndex: null, images: [], dueDate: addCalendarDays(todayISO(), first), intervalStep: step, repetitions: 0, lapses: 0, lastResult: "", lastReviewedAt: "", createdAt: now, updatedAt: now, suspended: false };
+      state.reviewItems.push(item);
+    } else {
+      item.courseId = data.get("courseId") || null;
+      item.front = front; item.frontBlocks = normalizeContentBlocks(front); item.back = back; item.backBlocks = normalizeContentBlocks(back); item.updatedAt = now;
+    }
+    await save(true); closeModal(); render(); toast("Flashcard guardado e integrado na revisão.");
+  }
+
+  async function importAIFlashcards(projectId) {
+    var project = aiProjectById(projectId);
+    if (!project) return;
+    var added = 0;
+    asArray(project.flashcards).forEach(function (card, index) {
+      var key = "ai:" + project.id + ":" + index;
+      if (reviewItemBySourceKey(key)) return;
+      var now = new Date().toISOString();
+      state.reviewItems.push({ id: uid("review"), semesterId: state.currentSemesterId, courseId: project.courseId || null, quizId: project.quizId || null, lessonId: null, sourceType: "flashcard", sourceKey: key, front: String(card.front || "Conceito"), frontBlocks: normalizeContentBlocks(card.front || "Conceito"), back: String(card.back || ""), backBlocks: normalizeContentBlocks(card.back || ""), optionBlocks: [], answerIndex: null, images: [], dueDate: addCalendarDays(todayISO(), 1), intervalStep: 0, repetitions: 0, lapses: 0, lastResult: "", lastReviewedAt: "", createdAt: now, updatedAt: now, suspended: false });
+      added += 1;
+    });
+    if (!added) { toast("Estes flashcards já foram importados.", "warning"); return; }
+    await save(true); render(); toast(added + " flashcard(s) importado(s). Revê o conteúdo antes de estudar.");
+  }
+
+  function openReviewSettings() {
+    var body = '<form id="reviewSettingsForm"><div class="field"><label>Meta diária de revisão</label><input type="number" name="dailyGoal" min="3" max="50" step="1" value="' + attr(state.settings.reviewDailyGoal || 10) + '"><small>É um limite de fila, não uma obrigação nem um streak.</small></div><div class="field"><label>Perguntas no diagnóstico</label><input type="number" name="diagnosticCount" min="3" max="10" step="1" value="' + attr(state.settings.diagnosticQuestionCount || 5) + '"><small>Um diagnóstico deve ser curto o suficiente para não se tornar outro teste.</small></div><label class="settings-switch"><span><strong>Pedir confiança antes da resposta</strong><small>Permite distinguir domínio real, acertos por sorte e erros confiantes.</small></span><input type="checkbox" name="confidence" ' + (state.settings.studyConfidencePrompts ? 'checked' : '') + '></label><label class="settings-switch"><span><strong>Reflexão curta depois das sessões</strong><small>Compara planeado e realizado e ajuda a criar o próximo passo.</small></span><input type="checkbox" name="reflection" ' + (state.settings.studyReflectionEnabled ? 'checked' : '') + '></label><label class="settings-switch"><span><strong>Lembretes contextuais dentro da Twenty</strong><small>Aulas próximas, prazos de risco, revisões e sessões interrompidas. Sem lembretes vagos diários.</small></span><input type="checkbox" name="notifications" ' + (state.settings.studyNotificationsEnabled ? 'checked' : '') + '></label></form>';
+    openModal("Preferências de estudo", body, { footer: formFooter("Guardar", "reviewSettingsForm") });
+  }
+
+  async function handleReviewSettingsSubmit(event) {
+    event.preventDefault();
+    var data = new FormData(event.target);
+    state.settings.reviewDailyGoal = clamp(data.get("dailyGoal") || 10, 3, 50);
+    state.settings.diagnosticQuestionCount = clamp(data.get("diagnosticCount") || 5, 3, 10);
+    state.settings.studyConfidencePrompts = data.get("confidence") === "on";
+    state.settings.studyReflectionEnabled = data.get("reflection") === "on";
+    state.settings.studyNotificationsEnabled = data.get("notifications") === "on";
+    await save(true); closeModal(); render(); toast("Preferências de estudo guardadas.");
+  }
+
+  function guidedPlanDefaults(source) {
+    var steps = [];
+    if (source && source.type === "task") {
+      var task = state.tasks.find(function (item) { return item.id === source.id; });
+      steps = asArray(task && task.checklist).slice(0, 3);
+    }
+    if (!steps.length && source && source.type === "lesson") steps = ["Recordar os conceitos sem consultar", "Rever os pontos que faltaram", "Fazer um mini-quiz"];
+    if (!steps.length && source && source.type === "quiz") steps = ["Responder sem consultar", "Ler o feedback dos erros", "Marcar o que precisa de revisão"];
+    if (!steps.length && source && source.type === "assessment") steps = ["Escolher a matéria deste bloco", "Praticar recuperação ativa", "Registar dúvidas e próximo passo"];
+    if (!steps.length) steps = ["Definir o resultado deste bloco", "Executar a parte principal", "Fechar com uma verificação curta"];
+    while (steps.length < 3) steps.push("");
+    return steps;
+  }
+
+  function openGuidedStudyPlan(sourceType, sourceId) {
+    var backlog = studyBacklog();
+    var source = sourceType && sourceId ? studySource(sourceType, sourceId) : backlog[0] || null;
+    var options = backlog.map(function (item) { return '<option value="' + attr(item.type + ':' + item.id) + '" ' + (source && item.type === source.type && item.id === source.id ? 'selected' : '') + '>' + esc(item.title + ' · ' + item.meta) + '</option>'; }).join("");
+    if (source && !backlog.some(function (item) { return item.type === source.type && item.id === source.id; })) options = '<option value="' + attr(source.type + ':' + source.id) + '" selected>' + esc(source.title) + '</option>' + options;
+    var steps = guidedPlanDefaults(source);
+    var date = state.settings.studyPlanDate || todayISO();
+    var start = firstFreeStudyTime(date, source && source.duration || state.settings.studySessionMinutes || 25);
+    var body = '<form id="guidedStudyPlanForm"><div class="guided-plan-intro"><span class="metric-icon"><i data-lucide="list-checks"></i></span><div><h3>Um resultado pequeno e executável</h3><p>A Twenty agenda o bloco e abre um modo de foco com estes passos.</p></div></div><div class="form-grid"><div class="field field-full"><label>O que vais estudar</label><select name="sourceKey" ' + (!options ? 'disabled' : '') + '>' + (options || '<option value="custom:">Sessão livre</option>') + '</select></div><div class="field field-full"><label>Objetivo da sessão</label><input name="goal" required value="' + attr(source ? "Avançar em " + source.title : "Concluir uma parte concreta") + '" placeholder="Ex.: perceber mutex e responder a 5 perguntas"></div><div class="field"><label>Duração</label><select name="minutes"><option value="15">15 min</option><option value="25" selected>25 min</option><option value="40">40 min</option><option value="50">50 min</option><option value="75">75 min</option><option value="90">90 min</option></select></div><div class="field"><label>Data</label><input type="date" name="date" value="' + attr(date) + '"></div><div class="field"><label>Hora</label><input type="time" name="start" value="' + attr(start) + '"></div><div class="field"><label>Depois do bloco</label><select name="finishMode"><option value="quiz">Sugerir mini-quiz</option><option value="review">Abrir revisão</option><option value="none">Apenas concluir</option></select></div><div class="field field-full"><label>Passos</label><div class="guided-plan-steps"><input name="step1" value="' + attr(steps[0]) + '" placeholder="Passo 1"><input name="step2" value="' + attr(steps[1]) + '" placeholder="Passo 2"><input name="step3" value="' + attr(steps[2]) + '" placeholder="Passo 3"></div></div></div><label class="settings-switch"><span><strong>Começar agora</strong><small>Também fica registado no plano do dia.</small></span><input type="checkbox" name="startNow" checked></label></form>';
+    openModal("Planear sessão", body, { className: "modal-wide guided-plan-modal", footer: formFooter("Guardar e continuar", "guidedStudyPlanForm") });
+  }
+
+  async function handleGuidedStudyPlanSubmit(event) {
+    event.preventDefault();
+    var form = event.target;
+    var data = new FormData(form);
+    var parts = String(data.get("sourceKey") || "custom:").split(":");
+    var sourceType = parts.shift() || "custom";
+    var sourceId = parts.join(":") || null;
+    var source = sourceId ? studySource(sourceType, sourceId) : null;
+    var minutes = clamp(data.get("minutes") || 25, 10, 180);
+    var date = String(data.get("date") || todayISO());
+    var start = String(data.get("start") || firstFreeStudyTime(date, minutes));
+    var end = minutesToTime(Math.min(1439, timeMinutes(start) + minutes));
+    var goal = String(data.get("goal") || "Sessão de estudo").trim();
+    var steps = [data.get("step1"), data.get("step2"), data.get("step3")].map(function (value) { return String(value || "").trim(); }).filter(Boolean).map(function (title) { return { id: uid("step"), title: title, done: false }; });
+    var block = { id: uid("studyblock"), semesterId: state.currentSemesterId, date: date, title: source ? source.title : goal, start: start, end: end, kind: "study", courseId: source && source.courseId || null, sourceType: sourceType, sourceId: sourceId, completed: false, notes: "", goal: goal, plannedMinutes: minutes, steps: steps, finishMode: data.get("finishMode") || "quiz" };
+    state.studyBlocks.push(block);
+    await save(true);
+    closeModal(); render();
+    if (data.get("startNow") === "on") await startStudyFocusSession(sourceType, sourceId, block.id);
+    else toast("Sessão adicionada ao plano de " + formatDate(date) + ".");
+  }
+
+  function studyFocusSessionById(id) {
+    return state.studySessions.find(function (session) { return session.id === id; }) || null;
+  }
+
+  function focusSessionFromBlock(block) {
+    var source = block && block.sourceId ? studySource(block.sourceType, block.sourceId) : null;
+    return { id: uid("studysession"), semesterId: state.currentSemesterId, courseId: block && block.courseId || source && source.courseId || null, sourceType: block && block.sourceType || source && source.type || "custom", sourceId: block && block.sourceId || source && source.id || null, studyBlockId: block && block.id || null, title: block && block.title || source && source.title || "Sessão de estudo", goal: block && block.goal || "Concluir uma parte concreta", plannedMinutes: Number(block && block.plannedMinutes || source && source.duration || 25), startedAt: new Date().toISOString(), endedAt: "", actualSeconds: 0, pausedSeconds: 0, pausedAt: "", status: "active", steps: asArray(block && block.steps).map(function (step) { return Object.assign({}, step, { done: !!step.done }); }), reflection: null, finishMode: block && block.finishMode || "quiz", createdAt: new Date().toISOString() };
+  }
+
+  async function startStudyFocusSession(sourceType, sourceId, blockId) {
+    var existing = activeStudySession();
+    if (existing) { resumeStudyFocusSession(existing.id); return; }
+    var block = blockId ? state.studyBlocks.find(function (item) { return item.id === blockId; }) : null;
+    if (!block) {
+      var source = sourceType && sourceId ? studySource(sourceType, sourceId) : null;
+      if (!source) { openGuidedStudyPlan(sourceType, sourceId); return; }
+      block = newStudyBlockFromSource(source, todayISO(), minutesToTime(nowMinutes()));
+      block.goal = "Avançar em " + source.title;
+      block.plannedMinutes = Math.min(Number(source.duration || 25), 90);
+      block.steps = guidedPlanDefaults(source).filter(Boolean).map(function (title) { return { id: uid("step"), title: title, done: false }; });
+      block.finishMode = "quiz";
+      state.studyBlocks.push(block);
+    }
+    var session = focusSessionFromBlock(block);
+    state.studySessions.push(session);
+    studyFocusRuntime = { id: session.id, notifiedEnd: false };
+    await save(true);
+    renderStudyFocusModal(session);
+  }
+
+  function resumeStudyFocusSession(id) {
+    var session = studyFocusSessionById(id) || activeStudySession();
+    if (!session) { toast("A sessão já não está disponível.", "warning"); return; }
+    studyFocusRuntime = { id: session.id, notifiedEnd: false };
+    renderStudyFocusModal(session);
+  }
+
+  function updateStudyFocusClock() {
+    var session = studyFocusRuntime && studyFocusSessionById(studyFocusRuntime.id);
+    if (!session || session.status !== "active") { if (studyFocusTimer) clearInterval(studyFocusTimer); studyFocusTimer = null; return; }
+    var elapsed = studySessionElapsed(session);
+    var planned = Math.max(60, Number(session.plannedMinutes || 25) * 60);
+    var remaining = Math.max(0, planned - elapsed);
+    var clock = document.getElementById("studyFocusClock");
+    var ring = document.querySelector(".study-focus-ring");
+    if (clock) clock.textContent = formatHomeworkClock(remaining);
+    if (ring) ring.style.setProperty("--focus-progress", Math.min(100, elapsed / planned * 100) + "%");
+    var caption = document.getElementById("studyFocusCaption");
+    if (caption) caption.textContent = session.pausedAt ? "Sessão pausada" : remaining ? "restantes" : "tempo planeado concluído";
+    if (!remaining && !studyFocusRuntime.notifiedEnd) { studyFocusRuntime.notifiedEnd = true; toast("Tempo planeado atingido. Fecha o bloco ou continua sem pressão."); }
+  }
+
+  function renderStudyFocusModal(session) {
+    if (studyFocusTimer) clearInterval(studyFocusTimer);
+    var course = courseById(session.courseId);
+    var elapsed = studySessionElapsed(session);
+    var planned = Math.max(60, Number(session.plannedMinutes || 25) * 60);
+    var remaining = Math.max(0, planned - elapsed);
+    var steps = asArray(session.steps).length ? session.steps.map(function (step) {
+      return '<button class="study-focus-step ' + (step.done ? 'is-done' : '') + '" type="button" data-action="study-focus-step" data-id="' + attr(step.id) + '"><span><i data-lucide="' + (step.done ? 'check' : 'circle') + '"></i></span><strong>' + esc(step.title) + '</strong></button>';
+    }).join("") : '<p class="card-subtitle">Sem passos definidos. Mantém o objetivo visível e fecha o bloco quando terminares.</p>';
+    var body = '<div class="study-focus-shell"><div class="study-focus-copy"><span class="badge badge-violet">' + esc(course ? course.name : "Sessão de estudo") + '</span><p class="card-label">Objetivo</p><h2>' + esc(session.goal || session.title) + '</h2><p>' + esc(session.title) + '</p><div class="study-focus-steps">' + steps + '</div><p class="study-focus-note"><i data-lucide="shield-check"></i>A Twenty não recompensa tempo de ecrã. Termina quando o objetivo estiver concluído.</p></div><div class="study-focus-time"><div class="study-focus-ring" style="--focus-progress:' + Math.min(100, elapsed / planned * 100) + '%"><strong id="studyFocusClock">' + formatHomeworkClock(remaining) + '</strong><small id="studyFocusCaption">' + (session.pausedAt ? 'Sessão pausada' : remaining ? 'restantes' : 'tempo planeado concluído') + '</small></div><span>' + session.plannedMinutes + ' min planeados</span></div></div>';
+    var footer = '<footer class="modal-foot study-focus-actions"><button class="button" type="button" data-action="study-focus-hide"><i data-lucide="minimize-2"></i>Continuar em fundo</button><button class="button" type="button" data-action="' + (session.pausedAt ? 'study-focus-resume' : 'study-focus-pause') + '"><i data-lucide="' + (session.pausedAt ? 'play' : 'pause') + '"></i>' + (session.pausedAt ? 'Continuar' : 'Pausar') + '</button><button class="button button-dark" type="button" data-action="study-focus-finish"><i data-lucide="check"></i>Terminar sessão</button></footer>';
+    openModal("Modo de foco", body, { className: "modal-wide study-focus-modal", footer: footer });
+    studyFocusTimer = setInterval(updateStudyFocusClock, 1000);
+  }
+
+  async function pauseStudyFocusSession() {
+    var session = studyFocusRuntime && studyFocusSessionById(studyFocusRuntime.id);
+    if (!session || session.pausedAt) return;
+    session.pausedAt = new Date().toISOString();
+    await save(true); renderStudyFocusModal(session);
+  }
+
+  async function resumeStudyFocusTimer() {
+    var session = studyFocusRuntime && studyFocusSessionById(studyFocusRuntime.id);
+    if (!session) return;
+    if (session.pausedAt) {
+      session.pausedSeconds = Math.max(0, Number(session.pausedSeconds) || 0) + Math.max(0, Math.round((Date.now() - new Date(session.pausedAt).getTime()) / 1000));
+      session.pausedAt = "";
+      await save(true);
+    }
+    renderStudyFocusModal(session);
+  }
+
+  async function toggleStudyFocusStep(stepId) {
+    var session = studyFocusRuntime && studyFocusSessionById(studyFocusRuntime.id);
+    if (!session) return;
+    var step = asArray(session.steps).find(function (item) { return item.id === stepId; });
+    if (step) step.done = !step.done;
+    await save(true); renderStudyFocusModal(session);
+  }
+
+  function suggestedQuizForSession(session) {
+    if (!session) return null;
+    if (session.sourceType === "quiz") return state.quizzes.find(function (quiz) { return quiz.id === session.sourceId; }) || null;
+    if (session.sourceType === "lesson") return configuredQuizForLesson(session.sourceId);
+    var quizzes = semesterItems("quizzes").filter(function (quiz) { return !session.courseId || quiz.courseId === session.courseId; }).sort(function (a, b) {
+      return Number(a.lastScore == null ? -1 : a.lastScore) - Number(b.lastScore == null ? -1 : b.lastScore);
+    });
+    return quizzes[0] || null;
+  }
+
+  function studyReflectionOutcomeLabel(outcome) {
+    return outcome === "complete" ? "Consegui tudo" : outcome === "partial" ? "Fiz parcialmente" : outcome === "not-started" ? "Não consegui avançar" : outcome === "changed" ? "O objetivo mudou" : "Sem reflexão";
+  }
+
+  function openStudyReflection(session) {
+    if (!session) return;
+    pendingStudyReflectionSessionId = session.id;
+    var stepsDone = asArray(session.steps).filter(function (step) { return step.done; }).length;
+    var incomplete = stepsDone < asArray(session.steps).length;
+    var body = '<form id="studyReflectionForm" data-id="' + attr(session.id) + '"><div class="reflection-intro"><p class="card-label">20 segundos</p><h3>O que aconteceu neste bloco?</h3><p>Isto serve para ajustar o próximo plano, não para te avaliar.</p></div><div class="reflection-outcomes"><label><input type="radio" name="outcome" value="complete" ' + (!incomplete ? 'checked' : '') + '><span><i data-lucide="check-circle-2"></i><strong>Consegui tudo</strong></span></label><label><input type="radio" name="outcome" value="partial" ' + (incomplete ? 'checked' : '') + '><span><i data-lucide="circle-dashed"></i><strong>Fiz parcialmente</strong></span></label><label><input type="radio" name="outcome" value="not-started"><span><i data-lucide="pause-circle"></i><strong>Não consegui avançar</strong></span></label><label><input type="radio" name="outcome" value="changed"><span><i data-lucide="shuffle"></i><strong>O objetivo mudou</strong></span></label></div><div class="form-grid"><div class="field"><label>O que dificultou?</label><select name="reason"><option value="">Não se aplica</option><option value="more-time">Precisava de mais tempo</option><option value="harder">A matéria era mais difícil</option><option value="interrupted">Fui interrompido</option><option value="focus">Perdi a concentração</option><option value="too-large">O objetivo era demasiado grande</option><option value="other">Outro motivo</option></select></div><div class="field"><label>Próximo passo</label><input name="nextStep" value="' + attr(incomplete ? "Concluir o passo que ficou por fazer" : "Verificar a aprendizagem com um mini-quiz") + '"></div><div class="field field-full"><label>Nota opcional</label><textarea name="note" rows="2" placeholder="Uma frase curta, apenas se ajudar."></textarea></div></div><label class="settings-switch"><span><strong>Agendar continuação amanhã</strong><small>A Twenty usa apenas os passos que ficaram incompletos.</small></span><input type="checkbox" name="scheduleContinuation" ' + (incomplete ? 'checked' : '') + '></label></form>';
+    openModal("Reflexão da sessão", body, { className: "modal-wide study-reflection-modal", footer: '<footer class="modal-foot"><button class="button" type="button" data-action="skip-study-reflection" data-id="' + attr(session.id) + '">Agora não</button><button class="button button-dark" type="submit" form="studyReflectionForm"><i data-lucide="arrow-right"></i>Guardar próximo passo</button></footer>' });
+  }
+
+  function showStudySessionFinish(session) {
+    if (!session) return;
+    var quiz = suggestedQuizForSession(session);
+    var due = dueReviewItems(session.courseId || "");
+    var stepsDone = asArray(session.steps).filter(function (step) { return step.done; }).length;
+    var nextAction = session.finishMode === "review" && due.length ? '<button class="button button-dark" type="button" data-action="start-review-session" data-course="' + attr(session.courseId || '') + '"><i data-lucide="rotate-ccw"></i>Fazer revisão</button>' : session.finishMode !== "none" && quiz ? '<button class="button button-dark" type="button" data-action="start-quiz" data-id="' + attr(quiz.id) + '"><i data-lucide="brain"></i>Mini-quiz</button>' : '<button class="button button-dark" type="button" data-action="close-modal"><i data-lucide="check"></i>Concluir</button>';
+    var reflectionCopy = session.reflection && session.reflection.outcome ? '<div class="reflection-result"><span class="badge ' + (session.reflection.outcome === 'complete' ? 'badge-mint' : 'badge-yellow') + '">' + esc(studyReflectionOutcomeLabel(session.reflection.outcome)) + '</span><p>' + esc(session.reflection.nextStep || '') + '</p></div>' : '';
+    openModal("Sessão concluída", '<div class="finish-card study-session-finish"><span class="study-finish-check"><i data-lucide="check"></i></span><p class="card-label">Planeado versus realizado</p><h2>' + esc(session.title) + '</h2><p>' + esc(session.goal) + '</p><div class="review-finish-stats"><span><strong>' + Math.max(1, Math.round(session.actualSeconds / 60)) + '/' + Number(session.plannedMinutes || 0) + '</strong><small>minutos</small></span><span><strong>' + stepsDone + '/' + asArray(session.steps).length + '</strong><small>passos</small></span><span><strong>' + due.length + '</strong><small>revisões</small></span></div>' + reflectionCopy + '<p class="study-focus-note"><i data-lucide="arrow-right"></i>O próximo passo serve para verificar aprendizagem, não para prolongar tempo dentro da app.</p></div>', { footer: '<footer class="modal-foot"><button class="button" type="button" data-action="close-modal">Agora não</button>' + nextAction + '</footer>' });
+  }
+
+  async function handleStudyReflectionSubmit(event) {
+    event.preventDefault();
+    var form = event.target;
+    var session = studyFocusSessionById(form.dataset.id || pendingStudyReflectionSessionId);
+    if (!session) { closeModal(); return; }
+    var data = new FormData(form);
+    var outcome = String(data.get("outcome") || "partial");
+    var reflection = { outcome: outcome, reason: String(data.get("reason") || ""), note: String(data.get("note") || "").trim(), nextStep: String(data.get("nextStep") || "").trim(), reflectedAt: new Date().toISOString(), continuationBlockId: null };
+    if (data.get("scheduleContinuation") === "on" && outcome !== "complete") {
+      var remainingSteps = asArray(session.steps).filter(function (step) { return !step.done; }).map(function (step) { return { id: uid("step"), title: step.title, done: false }; });
+      if (!remainingSteps.length) remainingSteps = [{ id: uid("step"), title: reflection.nextStep || "Retomar a sessão", done: false }];
+      var minutes = clamp(Math.max(15, Number(session.plannedMinutes || 25) - Math.round(Number(session.actualSeconds || 0) / 60)), 15, 90);
+      var date = addCalendarDays(todayISO(), 1);
+      var start = firstFreeStudyTime(date, minutes);
+      var block = { id: uid("studyblock"), semesterId: state.currentSemesterId, date: date, title: "Continuar · " + session.title, start: start, end: minutesToTime(Math.min(1439, timeMinutes(start) + minutes)), kind: "study", courseId: session.courseId || null, sourceType: session.sourceType || "custom", sourceId: session.sourceId || null, completed: false, notes: "", goal: reflection.nextStep || session.goal, plannedMinutes: minutes, steps: remainingSteps, finishMode: session.finishMode || "quiz" };
+      state.studyBlocks.push(block);
+      reflection.continuationBlockId = block.id;
+    }
+    session.reflection = reflection;
+    pendingStudyReflectionSessionId = null;
+    await save(true);
+    closeModal(); render();
+    showStudySessionFinish(session);
+  }
+
+  async function finishStudyFocusSession() {
+    var session = studyFocusRuntime && studyFocusSessionById(studyFocusRuntime.id);
+    if (!session) return;
+    var now = new Date();
+    if (session.pausedAt) session.pausedSeconds = Math.max(0, Number(session.pausedSeconds) || 0) + Math.max(0, Math.round((now.getTime() - new Date(session.pausedAt).getTime()) / 1000));
+    session.pausedAt = "";
+    session.actualSeconds = studySessionElapsed(session, now.getTime());
+    session.endedAt = now.toISOString();
+    session.status = "completed";
+    var block = session.studyBlockId && state.studyBlocks.find(function (item) { return item.id === session.studyBlockId; });
+    if (block) block.completed = true;
+    if (studyFocusTimer) clearInterval(studyFocusTimer);
+    studyFocusTimer = null;
+    studyFocusRuntime = null;
+    await save(true);
+    closeModal(); render();
+    if (state.settings.studyReflectionEnabled) openStudyReflection(session);
+    else showStudySessionFinish(session);
+  }
+
+  function renderStudy() {
+    var tab = route.tab || "overview";
+    if (tab === "weekly") return renderWeeklyReview();
+    if (tab === "ai") return renderStudyAI();
+    setHeader("Estudar", "Recuperar, planear e rever");
+    var content = tab === "diagnostic" ? renderDiagnosticPage() : tab === "review" ? renderReviewPage() : tab === "errors" ? renderErrorBank() : tab === "flashcards" ? renderFlashcardsPage() : tab === "history" ? renderStudyHistory() : renderStudyOverview();
+    return '<div class="study-core-shell"><div class="page-head study-core-head"><div><h2>Estudar com ação concreta.</h2><p>Próxima ação → sessão → confiança → reflexão → revisão marcada.</p></div><div class="page-actions"><button class="button" type="button" data-action="guided-study-plan"><i data-lucide="list-checks"></i>Planear</button><button class="button button-dark" type="button" data-action="start-review-session" ' + (!dueReviewItems().length ? 'disabled' : '') + '><i data-lucide="rotate-ccw"></i>Rever agora</button></div></div>' + renderStudyTabs(tab) + '<section class="study-tab-content">' + content + '</section></div>';
   }
 
   function gradeSimulatorAssessmentFields(courseId) {
@@ -4280,7 +5160,7 @@
     }).join("");
     var best = courses.map(function (course) { return { course: course, avg: courseAverage(course).value }; }).filter(function (item) { return item.avg != null; }).sort(function (a, b) { return b.avg - a.avg; })[0];
     var known = courses.filter(function (course) { return courseAverage(course).value != null; }).length;
-    return '<div class="page-head"><div><h2>Média e desempenho</h2><p>A média global é ponderada pelos ECTS. Cada cadeira segue o método de avaliação e as regras configuradas.</p></div><div class="page-actions"><button class="button" type="button" data-action="grade-simulator"><i data-lucide="calculator"></i>Simular notas</button><button class="button" type="button" onclick="window.print()"><i data-lucide="printer"></i>Imprimir</button><button class="button button-dark" type="button" data-action="add-grade"><i data-lucide="plus"></i>Adicionar nota</button></div></div><div class="bento-grid"><article class="card card-pink span-5 target-card"><div class="target-copy"><p class="card-label">Média ECTS atual</p><h3 style="font-size:3.4rem">' + (ects.value == null ? "—" : round(ects.value, 2)) + '</h3><p>' + (ects.value == null ? "Adiciona as primeiras notas para iniciar o cálculo." : "Calculada com " + ects.ects + " ECTS que já têm avaliação.") + '</p></div><div class="progress-ring" style="--progress:' + (ects.value == null ? 0 : clamp(ects.value / 20 * 100, 0, 100)) + '%"><strong>' + (ects.value == null ? "0" : Math.round(ects.value / 20 * 100)) + '%</strong></div></article><article class="card card-yellow span-3 metric-card"><div class="metric-top"><p class="card-label">ECTS inscritos</p><span class="metric-icon"><i data-lucide="graduation-cap"></i></span></div><div><p class="metric-value">' + totalEcts + '</p><p class="metric-caption">' + ects.ects + ' já entram na média</p></div></article><article class="card card-mint span-4 metric-card"><div class="metric-top"><p class="card-label">Melhor cadeira</p><span class="metric-icon"><i data-lucide="trophy"></i></span></div><div><p class="metric-value" style="font-size:2.35rem">' + (best ? round(best.avg, 1) : "—") + '</p><p class="metric-caption">' + (best ? esc(best.course.name) : "Ainda sem notas") + '</p></div></article><article class="card span-12"><div class="card-title-row"><div><p class="card-label">Resumo do semestre</p><h3>' + known + ' de ' + courses.length + ' cadeiras com notas</h3></div><span class="badge badge-violet">Meta ' + (Number(state.profile.targetGrade) || 20) + '/20</span></div><div style="overflow:auto;margin-top:13px">' + (courses.length ? '<table class="grade-table"><thead><tr><th>Cadeira</th><th>ECTS</th><th>Avaliado</th><th>Média</th><th></th></tr></thead><tbody>' + courseRows + "</tbody></table>" : emptyState("graduation-cap", "Sem cadeiras", "Configura o semestre para começar o cálculo.", "new-semester", "Criar semestre")) + '</div></article></div>';
+    return '<div class="page-head"><div><h2>Média e desempenho</h2><p>A média global é ponderada pelos ECTS. Cada cadeira segue o método de avaliação e as regras configuradas.</p></div><div class="page-actions"><button class="button" type="button" data-action="grade-simulator"><i data-lucide="calculator"></i>Simular notas</button><button class="button" type="button" onclick="window.print()"><i data-lucide="printer"></i>Imprimir</button><button class="button button-dark" type="button" data-action="add-grade"><i data-lucide="plus"></i>Adicionar nota</button></div></div><div class="bento-grid"><article class="card card-pink span-5 target-card"><div class="target-copy"><p class="card-label">Média ECTS atual</p><h3 style="font-size:3.4rem">' + (ects.value == null ? "—" : round(ects.value, 2)) + '</h3><p>' + (ects.value == null ? "Adiciona as primeiras notas para iniciar o cálculo." : "Calculada com " + ects.ects + " ECTS que já têm avaliação.") + '</p></div><div class="progress-ring" style="--progress:' + (ects.value == null ? 0 : clamp(ects.value / 20 * 100, 0, 100)) + '%"><strong>' + (ects.value == null ? "0" : Math.round(ects.value / 20 * 100)) + '%</strong></div></article><article class="card card-yellow span-3 metric-card"><div class="metric-top"><p class="card-label">ECTS inscritos</p><span class="metric-icon"><i data-lucide="graduation-cap"></i></span></div><div><p class="metric-value">' + totalEcts + '</p><p class="metric-caption">' + ects.ects + ' já entram na média</p></div></article><article class="card card-mint span-4 metric-card"><div class="metric-top"><p class="card-label">Melhor cadeira</p><span class="metric-icon"><i data-lucide="trophy"></i></span></div><div><p class="metric-value" style="font-size:2.35rem">' + (best ? round(best.avg, 1) : "—") + '</p><p class="metric-caption">' + (best ? esc(best.course.name) : "Ainda sem notas") + '</p></div></article><article class="card span-12"><div class="card-title-row"><div><p class="card-label">Resumo do semestre</p><h3>' + known + ' de ' + courses.length + ' cadeiras com notas</h3></div><span class="badge badge-violet">Meta ' + normalizedTargetGrade(state.profile.targetGrade) + '/20</span></div><div style="overflow:auto;margin-top:13px">' + (courses.length ? '<table class="grade-table"><thead><tr><th>Cadeira</th><th>ECTS</th><th>Avaliado</th><th>Média</th><th></th></tr></thead><tbody>' + courseRows + "</tbody></table>" : emptyState("graduation-cap", "Sem cadeiras", "Configura o semestre para começar o cálculo.", "new-semester", "Criar semestre")) + '</div></article></div>';
   }
 
   function canteenPortugalParts(date) {
@@ -4898,31 +5778,44 @@
     return words.some(function (word) { return note.indexOf(word) >= 0; });
   }
 
-  function canteenChefNoteValidate(value, dayContext, recommendedDish) {
-    var text = canteenChefNoteSanitize(value, "");
-    var lower = text.toLowerCase();
-    if (!text) throw new Error("A IA local não devolveu uma Chef’s Note válida.");
-    if (/bom dia a todos|boa tarde a todos|olá a todos|espero que gostes|espero que gostem|pessoal|malta/.test(lower)) {
-      throw new Error("A Chef’s Note veio escrita para um grupo ou como uma saudação genérica.");
-    }
-    if (/\bparece(?:-me)?\b|\bexcelente\b|\bótim[oa]s?\b|\baproveita\b/.test(lower)) {
-      throw new Error("A Chef’s Note soou a publicidade ou crítica de restaurante.");
-    }
-    if (!/\b(eu|preparei|servia|guardava|escolhia|ia)\b/.test(lower)) {
-      throw new Error("A Chef’s Note não soou a uma mensagem pessoal do Chef.");
-    }
-    if (recommendedDish && !canteenChefNoteMentionsDish(text, recommendedDish)) {
-      throw new Error("A Chef’s Note não mencionou claramente o prato escolhido.");
-    }
+  function canteenChefNoteHasFirstPerson(value) {
+    var lower = cleanText(value || "").toLowerCase();
+    return /\b(eu|preparei|preparei-te|cozinhei|fiz|escolhi|servi|sirvo|guardei|reservei|pensei|quis|trouxe|montei|combinei|acompanhei|deixei|apostei|servia|guardava|escolhia|ia)\b/.test(lower);
+  }
+
+  function canteenChefNoteValidateFacts(value, dayContext) {
+    var lower = cleanText(value || "").toLowerCase();
     var hasAssessmentWords = /\b(teste|testes|exame|exames|avaliação|avaliações|prova|provas|apresentação|apresentações)\b/.test(lower);
     var hasGoodLuck = /\bboa sorte\b/.test(lower);
     var hasUpcoming = !!(dayContext && dayContext.nextAssessmentAfterLunch);
     var hasCompleted = !!(dayContext && dayContext.latestCompletedAssessmentToday);
-    if (!hasUpcoming && hasGoodLuck) throw new Error("A IA desejou boa sorte sem existir uma avaliação confirmada depois do almoço.");
+    if (!hasUpcoming && hasGoodLuck) throw new Error("A IA desejou boa sorte sem existir uma avaliação confirmada depois da refeição.");
     if (!hasUpcoming && !hasCompleted && hasAssessmentWords) throw new Error("A IA inventou uma avaliação que não existe nos dados.");
     if (/último teste|última avaliação|último exame/.test(lower) && !(dayContext && dayContext.lastAssessmentOfAcademicPeriod)) {
       throw new Error("A IA afirmou que era a última avaliação sem confirmação nos dados.");
     }
+  }
+
+  function canteenChefNoteRepair(value, recommendedDish) {
+    var text = canteenChefNoteSanitize(value, "")
+      .replace(/^\s*(?:chef(?:’|'|´)?s note|nota do chef)\s*[:\-–—]*\s*/i, "")
+      .replace(/^\s*(?:bom dia a todos|boa tarde a todos|olá a todos|pessoal|malta)\s*[,!.:\-–—]*\s*/i, "")
+      .trim();
+    var dish = cleanText(recommendedDish || "");
+    var needsDish = dish && !canteenChefNoteMentionsDish(text, dish);
+    var needsVoice = !canteenChefNoteHasFirstPerson(text);
+    if (needsDish || needsVoice) {
+      var intro = "Hoje preparei-te " + canteenDishWithArticle(dish || "prato do dia") + ".";
+      text = intro + (text ? " " + text : "");
+    }
+    return canteenChefNoteSanitize(text, "");
+  }
+
+  function canteenChefNoteValidate(value, dayContext, recommendedDish) {
+    var streamed = canteenStreamingChefNote(value);
+    var text = canteenChefNoteRepair(streamed || value, recommendedDish);
+    if (!text) throw new Error("A IA local não devolveu uma Chef’s Note válida.");
+    canteenChefNoteValidateFacts(text, dayContext);
     return text;
   }
 
@@ -5043,18 +5936,14 @@
   }
 
   function canteenStreamingChefNoteAllowed(value, dayContext) {
-    var lower = cleanText(value || "").toLowerCase();
-    if (!lower) return false;
-    if (/bom dia a todos|boa tarde a todos|olá a todos|espero que gostes|espero que gostem|pessoal|malta/.test(lower)) return false;
-    if (/\bparece(?:-me)?\b|\bexcelente\b|\bótim[oa]s?\b|\baproveita\b/.test(lower)) return false;
-    var hasAssessmentWords = /\b(teste|testes|exame|exames|avaliação|avaliações|prova|provas|apresentação|apresentações)\b/.test(lower);
-    var hasGoodLuck = /\bboa sorte\b/.test(lower);
-    var hasUpcoming = !!(dayContext && dayContext.nextAssessmentAfterLunch);
-    var hasCompleted = !!(dayContext && dayContext.latestCompletedAssessmentToday);
-    if (!hasUpcoming && hasGoodLuck) return false;
-    if (!hasUpcoming && !hasCompleted && hasAssessmentWords) return false;
-    if (/último teste|última avaliação|último exame/.test(lower) && !(dayContext && dayContext.lastAssessmentOfAcademicPeriod)) return false;
-    return true;
+    var text = cleanText(value || "");
+    if (!text) return false;
+    try {
+      canteenChefNoteValidateFacts(text, dayContext);
+      return true;
+    } catch (_) {
+      return false;
+    }
   }
 
   function updateCanteenAIStreamingNote(value, dayContext) {
@@ -5296,7 +6185,8 @@
         rawNote = await session.prompt(notePrompt);
       }
       canteenAISessionUses += 2;
-      var chefNote = canteenChefNoteValidate(rawNote, dayContext, selected.officialName);
+      var visibleFinalNote = canteenStreamingChefNote(rawNote) || rawNote;
+      var chefNote = canteenChefNoteValidate(visibleFinalNote, dayContext, selected.officialName);
       var result = normalizeCanteenAIData({
         chefNote: chefNote,
         recommendedDish: selected.officialName,
@@ -5433,7 +6323,7 @@
         var partialNote = canteenStreamingChefNote(canteenAIState.streamText || "");
         var partialContext = canteenPersonalContext(requestedDate || todayISO());
         var recovered = false;
-        if (partialNote.length >= 24 && canteenStreamingChefNoteAllowed(partialNote, partialContext)) {
+        if (partialNote.length >= 10 && canteenStreamingChefNoteAllowed(partialNote, partialContext)) {
           try {
             partialData = Object.assign({}, partialData, {
               chefNote: canteenChefNoteValidate(partialNote, partialContext, partialData.recommendedDish || ""),
@@ -5443,7 +6333,7 @@
           } catch (_) { recovered = false; }
         }
         canteenAIState = recovered
-          ? { key: key, status: "ready", availability: "available", source: "built-in-ai", data: partialData, error: "A geração terminou cedo, mas a nota válida foi preservada.", progress: 100, streamText: "" }
+          ? { key: key, status: "ready", availability: "available", source: "built-in-ai", data: partialData, error: "A geração foi interrompida, mas a nota que já tinhas visto foi preservada.", progress: 100, streamText: "" }
           : { key: key, status: "error", availability: "error", source: partialData.generatedBy === "built-in-ai" ? "built-in-ai" : "rules", data: partialData, error: error && error.message || "A IA local não conseguiu escrever a nota.", progress: null, streamText: "" };
       } finally {
         canteenAIPromise = null;
@@ -6074,7 +6964,7 @@
     var syncCard = '<article id="gitSyncCard" class="card settings-card card-violet" aria-busy="' + (syncInfo.state === "syncing" ? "true" : "false") + '"><div class="card-title-row"><div><p class="card-label">Git como base de dados</p><h3 id="gitSyncTitle">' + esc(syncDisplay.title) + '</h3><p id="gitSyncDetail" class="card-subtitle">' + esc(syncDisplay.detail) + '</p></div><span class="metric-icon"><i data-lucide="git-commit-horizontal"></i></span></div><div class="settings-row"><div><strong id="gitSyncSummary">' + esc(syncVersionSummary) + '</strong><small>Fusão por campos · fila offline · histórico em commits.</small></div><span id="gitSyncBadge" class="badge ' + syncDisplay.badgeClass + '">' + esc(syncVersionBadge) + '</span></div>' + syncProgress + '<div class="list-actions"><button class="button button-small" type="button" data-action="configure-git-sync"><i data-lucide="settings-2"></i>Configurar</button><button class="button button-dark button-small" type="button" data-action="sync-now"><i data-lucide="refresh-cw"></i>Sincronizar agora</button>' + forceControls + (syncInfo.configured ? '<button class="button button-small" type="button" data-action="disable-git-sync"><i data-lucide="pause"></i>Pausar</button>' : '') + '</div></article>';
     var debugSnapshot = homeDebugSnapshot();
     var debugCard = '<article class="card settings-card debug-admin-card"><div class="card-title-row"><div><p class="card-label">Ferramentas de desenvolvimento</p><h3>Laboratório da Home</h3><p class="card-subtitle">Simula manhã, aulas coladas, TPC e Report Card sem esperar pela hora real.</p></div><span class="metric-icon"><i data-lucide="flask-conical"></i></span></div><div class="settings-row"><div><strong>' + esc(debugSnapshot.label) + '</strong><small>' + esc(debugSnapshot.time) + ' · motor: ' + esc(debugSnapshot.phase) + '</small></div><span class="badge ' + (homeDebug && homeDebug.active ? "badge-yellow" : "badge-mint") + '">' + (homeDebug && homeDebug.active ? "Simulação ativa" : "Dados reais") + '</span></div><div class="list-actions"><button class="button button-dark button-small" type="button" data-action="debug-start-tutorial"><i data-lucide="play"></i>Tutorial do dia</button><button class="button button-small" type="button" data-action="debug-open-lab"><i data-lucide="bug"></i>Abrir debug</button>' + (homeDebug && homeDebug.active ? '<button class="button button-danger button-small" type="button" data-action="debug-exit"><i data-lucide="x"></i>Sair</button>' : '') + '</div></article>';
-    var profileCard = '<article class="card settings-card"><div class="card-title-row"><div><p class="card-label">Perfil académico</p><h3>' + esc(state.profile.name || "Estudante") + '</h3><p class="card-subtitle">' + esc(state.profile.degree || "Curso por configurar") + (state.profile.institution ? " · " + esc(state.profile.institution) : "") + '</p></div><span class="metric-icon"><i data-lucide="user-round"></i></span></div><div class="settings-row"><div><strong>Meta académica</strong><small>Usada nos indicadores de desempenho.</small></div><span class="badge badge-yellow">' + (Number(state.profile.targetGrade) || 20) + '/20</span></div><button class="button button-small" type="button" data-action="edit-profile"><i data-lucide="pencil"></i>Editar perfil</button></article>';
+    var profileCard = '<article class="card settings-card"><div class="card-title-row"><div><p class="card-label">Perfil académico</p><h3>' + esc(state.profile.name || "Estudante") + '</h3><p class="card-subtitle">' + esc(state.profile.degree || "Curso por configurar") + (state.profile.institution ? " · " + esc(state.profile.institution) : "") + '</p></div><span class="metric-icon"><i data-lucide="user-round"></i></span></div><div class="settings-row"><div><strong>Meta académica</strong><small>Usada nos indicadores de desempenho.</small></div><span class="badge badge-yellow">' + normalizedTargetGrade(state.profile.targetGrade) + '/20</span></div><button class="button button-small" type="button" data-action="edit-profile"><i data-lucide="pencil"></i>Editar perfil</button></article>';
     var semesterCard = '<article class="card settings-card card-violet"><div class="card-title-row"><div><p class="card-label">Semestre ativo</p><h3>' + esc(semester ? semester.name : "Nenhum") + '</h3><p class="card-subtitle">' + esc(semester ? semester.academicYear : "Cria o próximo semestre") + '</p></div><span class="metric-icon"><i data-lucide="calendar-range"></i></span></div><div class="settings-row"><div><strong>' + activeCourses().length + ' cadeiras</strong><small>' + archived + ' semestre(s) no arquivo.</small></div><span class="badge badge-dark">' + activeCourses().reduce(function (sum, course) { return sum + (Number(course.ects) || 0); }, 0) + ' ECTS</span></div><div class="list-actions"><button class="button button-small" type="button" data-action="new-semester"><i data-lucide="calendar-plus"></i>Novo</button>' + (semester ? '<button class="button button-danger button-small" type="button" data-action="archive-semester"><i data-lucide="archive"></i>Arquivar</button>' : "") + '</div></article>';
     var quickCard = '<article class="card settings-card card-dark span-12"><div class="card-title-row"><div><p class="card-label">Criação rápida</p><h3>Adicionar conteúdo</h3><p class="card-subtitle">Atalhos para o que normalmente configuras no início da semana.</p></div><span class="metric-icon"><i data-lucide="wand-sparkles"></i></span></div><div class="quick-grid"><button type="button" data-action="create-lesson"><i data-lucide="presentation"></i>Aula</button><button type="button" data-action="add-material"><i data-lucide="file-up"></i>Material</button><button type="button" data-action="add-question"><i data-lucide="message-circle-question"></i>Pergunta</button><button type="button" data-action="add-quiz"><i data-lucide="circle-check-big"></i>Quiz</button><button type="button" data-action="add-grade"><i data-lucide="chart-no-axes-combined"></i>Nota</button><button type="button" data-action="add-assessment"><i data-lucide="file-pen-line"></i>Avaliação</button></div></article>';
     var jsonCard = '<article class="card settings-card"><div class="card-title-row"><div><p class="card-label">Ficheiro local</p><h3>academic-data.json</h3><p class="card-subtitle">Importação e exportação manual, separada do Git.</p></div><span class="metric-icon"><i data-lucide="braces"></i></span></div><div class="settings-row"><div><strong>Última verificação</strong><small>' + esc(lastCheck) + ' · revisão local ' + (Number(state.meta.revision) || 0) + '</small></div><button class="switch ' + (state.settings.jsonSync ? "is-on" : "") + '" type="button" data-action="toggle-json-sync" aria-label="Ativar sincronização JSON"><span></span></button></div><div class="list-actions"><button class="button button-small" type="button" data-action="reload-json"><i data-lucide="refresh-cw"></i>Reler</button><button class="button button-small" type="button" data-action="export-json"><i data-lucide="download"></i>Exportar</button><button class="button button-small" type="button" data-action="import-json"><i data-lucide="upload"></i>Importar</button></div></article>';
@@ -6144,34 +7034,108 @@
     return round(bytes / Math.pow(1024, index), index ? 1 : 0) + " " + units[index];
   }
 
+  function modalEditableForm() {
+    return modalRoot.querySelector("#entityForm, #pastQuestionForm, #lessonBuilderForm, #aiGeneratorForm, #lessonAIForm");
+  }
+
+  function modalFormFingerprint() {
+    var form = modalEditableForm();
+    if (!form) return "";
+    return JSON.stringify(Array.from(form.querySelectorAll("input, select, textarea, [contenteditable='true']")).map(function (field) {
+      var key = field.name || field.id || field.getAttribute("data-role") || field.tagName;
+      if (field.matches("[contenteditable='true']")) return [key, field.innerHTML];
+      if (field.type === "checkbox" || field.type === "radio") return [key, !!field.checked];
+      if (field.type === "file") return [key, Array.from(field.files || []).map(function (file) { return [file.name, file.size, file.lastModified]; })];
+      if (field.tagName === "SELECT" && field.multiple) return [key, Array.from(field.selectedOptions).map(function (option) { return option.value; })];
+      return [key, field.value];
+    }));
+  }
+
+  function modalHasUnsavedChanges() {
+    return !!modalEditableForm() && modalFormFingerprint() !== modalInitialFingerprint;
+  }
+
+  function setModalBackgroundInert(active) {
+    [app, document.getElementById("mobileNav")].forEach(function (node) {
+      if (!node) return;
+      if (active) {
+        node.setAttribute("aria-hidden", "true");
+        try { node.inert = true; } catch (_) { /* fallback pelo focus trap */ }
+      } else {
+        node.removeAttribute("aria-hidden");
+        try { node.inert = false; } catch (_) { /* fallback pelo focus trap */ }
+      }
+    });
+  }
+
+  function modalFocusableElements() {
+    var modal = modalRoot.querySelector(".modal");
+    if (!modal) return [];
+    return Array.from(modal.querySelectorAll('a[href], button:not([disabled]), input:not([disabled]):not([type="hidden"]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"]), [contenteditable="true"]')).filter(function (node) {
+      return node.getAttribute("aria-hidden") !== "true" && (node.offsetWidth || node.offsetHeight || node.getClientRects().length);
+    });
+  }
+
+  function trapModalFocus(event) {
+    if (event.key !== "Tab") return false;
+    var focusable = modalFocusableElements();
+    if (!focusable.length) return false;
+    var first = focusable[0];
+    var last = focusable[focusable.length - 1];
+    if (event.shiftKey && (document.activeElement === first || !modalRoot.contains(document.activeElement))) {
+      event.preventDefault();
+      last.focus();
+      return true;
+    }
+    if (!event.shiftKey && (document.activeElement === last || !modalRoot.contains(document.activeElement))) {
+      event.preventDefault();
+      first.focus();
+      return true;
+    }
+    return false;
+  }
+
   function openModal(title, body, options) {
     options = options || {};
-    closeModal();
+    if (modalRoot.innerHTML) closeModal({ restoreFocus: false });
+    var activeBeforeModal = document.activeElement;
+    if (activeBeforeModal && !modalRoot.contains(activeBeforeModal)) modalReturnFocus = activeBeforeModal;
     modalRoot.innerHTML = '<div class="modal-layer" role="presentation"><section class="modal ' + (options.className || "") + '" role="dialog" aria-modal="true" aria-labelledby="modalTitle"><header class="modal-head"><h2 id="modalTitle">' + esc(title) + '</h2><button class="modal-close" type="button" data-action="close-modal" aria-label="Fechar"><i data-lucide="x"></i></button></header><div class="modal-body">' + body + "</div>" + (options.footer || "") + "</section></div>";
     document.body.style.overflow = "hidden";
+    setModalBackgroundInert(true);
     refreshIcons(modalRoot);
+    enhanceInteractiveAccessibility(modalRoot);
     hydrateLocalImages(modalRoot);
     hydrateNotebookImages(modalRoot);
     enhanceNotebookStickers(modalRoot);
     typesetMath(modalRoot);
-    var first = modalRoot.querySelector("input:not([type=hidden]), select, textarea, button");
+    modalInitialFingerprint = modalFormFingerprint();
+    var first = modalRoot.querySelector("input:not([type=hidden]):not([disabled]), select:not([disabled]), textarea:not([disabled]), button:not([disabled])");
     if (first) setTimeout(function () { first.focus(); }, 30);
   }
 
-  function closeModal() {
+  function closeModal(options) {
+    options = options || {};
+    var returnFocus = modalReturnFocus;
     if (activeObjectUrl) {
       URL.revokeObjectURL(activeObjectUrl);
       activeObjectUrl = null;
     }
     modalRoot.innerHTML = "";
+    modalInitialFingerprint = "";
+    modalReturnFocus = null;
+    setModalBackgroundInert(false);
     revokeImageObjectUrls();
     hydrateLocalImages(view);
     hydrateNotebookImages(view);
     if (!onboarding) document.body.style.overflow = "";
+    if (options.restoreFocus !== false && returnFocus && returnFocus.isConnected && typeof returnFocus.focus === "function") {
+      setTimeout(function () { try { returnFocus.focus({ preventScroll: true }); } catch (_) { returnFocus.focus(); } }, 0);
+    }
   }
 
-  function formFooter(label) {
-    return '<footer class="modal-foot"><button class="button" type="button" data-action="close-modal">Cancelar</button><button class="button button-dark" type="submit" form="entityForm"><i data-lucide="check"></i>' + esc(label || "Guardar") + "</button></footer>";
+  function formFooter(label, formId) {
+    return '<footer class="modal-foot"><button class="button" type="button" data-action="close-modal">Cancelar</button><button class="button button-dark" type="submit" form="' + attr(formId || "entityForm") + '"><i data-lucide="check"></i>' + esc(label || "Guardar") + "</button></footer>";
   }
 
   function courseOptions(selected, includeArchived) {
@@ -6568,7 +7532,7 @@
       title = "Dados pessoais";
       profilePhotoDraft = state.profile.photoDataUrl || "";
       var profilePhoto = profilePhotoDraft ? '<img src="' + attr(profilePhotoDraft) + '" alt="Pré-visualização da fotografia">' : '<span>' + esc(initials(state.profile.name || "Twenty")) + '</span>';
-      body = '<form id="entityForm" data-type="profile"><div class="profile-editor-layout"><section class="profile-photo-editor"><div id="profilePhotoPreview" class="profile-photo-preview">' + profilePhoto + '</div><label class="profile-photo-button"><i data-lucide="camera"></i><span>Escolher fotografia</span><input id="profilePhotoInput" type="file" accept="image/jpeg,image/png,image/webp" hidden></label><button class="profile-photo-remove" type="button" data-action="profile-remove-photo">Remover fotografia</button><small>A Twenty reduz a imagem antes de a guardar.</small></section><div class="form-grid"><div class="field field-full"><label>Nome completo</label><input name="name" required value="' + attr(state.profile.name) + '"></div><div class="field"><label>Instituição</label><input name="institution" value="' + attr(state.profile.institution || "NOVA FCT") + '"></div><div class="field"><label>Curso</label><input name="degree" value="' + attr(state.profile.degree || "Engenharia Informática") + '"></div><div class="field"><label>Número de estudante</label><input name="studentNumber" inputmode="numeric" value="' + attr(state.profile.studentNumber || "") + '" placeholder="Ex.: 65432"></div><div class="field"><label>Ano letivo</label><input name="academicYear" value="' + attr(state.profile.academicYear || "2026/2027") + '" placeholder="2026/2027"></div><div class="field"><label>Válido até</label><input name="validUntil" value="' + attr(state.profile.validUntil || "") + '" placeholder="09/2027"></div><div class="field"><label>Data de nascimento</label><input name="birthDate" type="date" value="' + attr(state.profile.birthDate || "") + '"></div><div class="field"><label>Pagamento preferido</label><select name="paymentMethod"><option value="campus" ' + (state.profile.paymentMethod !== "other" ? "selected" : "") + '>Cartão Campus</option><option value="other" ' + (state.profile.paymentMethod === "other" ? "selected" : "") + '>Outro</option></select></div><div class="field"><label>Meta académica (0–20)</label><input name="targetGrade" type="number" min="0" max="20" step="0.1" value="' + attr(state.profile.targetGrade || 20) + '"></div></div></div></form>';
+      body = '<form id="entityForm" data-type="profile"><div class="profile-editor-layout"><section class="profile-photo-editor"><div id="profilePhotoPreview" class="profile-photo-preview">' + profilePhoto + '</div><label class="profile-photo-button"><i data-lucide="camera"></i><span>Escolher fotografia</span><input id="profilePhotoInput" type="file" accept="image/jpeg,image/png,image/webp" hidden></label><button class="profile-photo-remove" type="button" data-action="profile-remove-photo">Remover fotografia</button><small>A Twenty reduz a imagem antes de a guardar.</small></section><div class="form-grid"><div class="field field-full"><label>Nome completo</label><input name="name" required value="' + attr(state.profile.name) + '"></div><div class="field"><label>Instituição</label><input name="institution" value="' + attr(state.profile.institution || "NOVA FCT") + '"></div><div class="field"><label>Curso</label><input name="degree" value="' + attr(state.profile.degree || "Engenharia Informática") + '"></div><div class="field"><label>Número de estudante</label><input name="studentNumber" inputmode="numeric" value="' + attr(state.profile.studentNumber || "") + '" placeholder="Ex.: 65432"></div><div class="field"><label>Ano letivo</label><input name="academicYear" value="' + attr(state.profile.academicYear || "2026/2027") + '" placeholder="2026/2027"></div><div class="field"><label>Válido até</label><input name="validUntil" value="' + attr(state.profile.validUntil || "") + '" placeholder="09/2027"></div><div class="field"><label>Data de nascimento</label><input name="birthDate" type="date" value="' + attr(state.profile.birthDate || "") + '"></div><div class="field"><label>Pagamento preferido</label><select name="paymentMethod"><option value="campus" ' + (state.profile.paymentMethod !== "other" ? "selected" : "") + '>Cartão Campus</option><option value="other" ' + (state.profile.paymentMethod === "other" ? "selected" : "") + '>Outro</option></select></div><div class="field"><label>Meta académica (0–20)</label><input name="targetGrade" type="number" min="0" max="20" step="0.1" value="' + attr(normalizedTargetGrade(state.profile.targetGrade)) + '"></div></div></div></form>';
     } else if (type === "lesson-notes") {
       var notesLesson = lessonById(preset.id);
       title = "Apontamentos da aula";
@@ -6618,7 +7582,7 @@
     var available = pastQuestionsForLesson(quiz.lessonId).filter(function (question) { return used.indexOf(question.id) < 0; });
     var lesson = lessonById(quiz.lessonId);
     var body = '<form id="pastQuestionForm" data-quiz-id="' + attr(quiz.id) + '"><p class="onboarding-copy" style="margin-top:0">' + esc(lesson ? lesson.title : "Aula") + ' · escolhe as perguntas reais que queres juntar ao quiz.</p><div class="past-question-picker">' + (available.length ? renderPastQuestionChoices(available, "pastQuestionIds") : '<div class="past-question-empty"><i data-lucide="check-check"></i><span>Todas as perguntas anteriores desta aula já estão no quiz.</span></div>') + '</div></form>';
-    openModal("Adicionar perguntas anteriores", body, { footer: available.length ? formFooter("Adicionar selecionadas") : '<footer class="modal-foot"><button class="button" type="button" data-action="close-modal">Fechar</button></footer>' });
+    openModal("Adicionar perguntas anteriores", body, { footer: available.length ? formFooter("Adicionar selecionadas", "pastQuestionForm") : '<footer class="modal-foot"><button class="button" type="button" data-action="close-modal">Fechar</button></footer>' });
   }
 
   async function handlePastQuestionSubmit(event) {
@@ -6953,9 +7917,13 @@
         });
       } else if (type === "task") {
         var taskLessonId = data.get("lessonId") || null;
+        var taskLesson = taskLessonId ? lessonById(taskLessonId) : null;
         var taskTypeValue = data.get("taskType") || "homework";
+        var taskTitle = String(data.get("title") || "").trim();
+        if (!taskTitle) throw new Error("Escreve o título da tarefa.");
+        if (taskLessonId && !taskLesson) throw new Error("A aula associada já não existe.");
         if (taskLessonId && (taskTypeValue === "homework" || taskTypeValue === "tpc") && homeworkForLesson(taskLessonId)) throw new Error("Esta aula já tem um TPC configurado.");
-        state.tasks.push({ id: uid("task"), semesterId: state.currentSemesterId, courseId: data.get("courseId") || null, lessonId: taskLessonId, title: String(data.get("title") || "").trim(), type: taskTypeValue, dueDate: data.get("dueDate") || "", dueTime: data.get("dueTime") || "", priority: data.get("priority") || "normal", done: false, createdAt: new Date().toISOString() });
+        state.tasks.push({ id: uid("task"), semesterId: state.currentSemesterId, courseId: taskLesson ? taskLesson.courseId : (data.get("courseId") || null), lessonId: taskLessonId, title: taskTitle, type: taskTypeValue, dueDate: data.get("dueDate") || "", dueTime: data.get("dueTime") || "", priority: data.get("priority") || "normal", done: false, createdAt: new Date().toISOString() });
       } else if (type === "assessment") {
         var assessmentCourse = courseById(data.get("courseId"));
         if (!assessmentCourse) throw new Error("Escolhe uma cadeira.");
@@ -7166,7 +8134,7 @@
         state.profile.birthDate = String(data.get("birthDate") || "").trim();
         state.profile.photoDataUrl = profilePhotoDraft || "";
         state.profile.paymentMethod = data.get("paymentMethod") === "other" ? "other" : "campus";
-        state.profile.targetGrade = clamp(data.get("targetGrade"), 0, 20) || 20;
+        state.profile.targetGrade = normalizedTargetGrade(data.get("targetGrade"));
       } else if (type === "lesson-notes") {
         var lessonNotes = lessonById(id);
         if (!lessonNotes) throw new Error("Aula não encontrada.");
@@ -7214,7 +8182,7 @@
           name: state.profile.name || "",
           institution: state.profile.institution || "",
           degree: state.profile.degree || "",
-          targetGrade: Number(state.profile.targetGrade) || 20
+          targetGrade: normalizedTargetGrade(state.profile.targetGrade)
         },
         semester: { name: dates.name, academicYear: academicYearFor(), startDate: dates.startDate, endDate: dates.endDate },
         courses: [{ tempId: uid("draftcourse"), name: "", code: "", ects: 6, color: COLORS[0], lessonTypes: ["T", "TP"], evaluation: "Testes | 60 | test\nProjeto | 40 | project\nExame | 0 | exam", examReplacesTests: true }],
@@ -7320,7 +8288,7 @@
         toast("Preenche o nome, semestre e ano letivo.", "warning");
         return false;
       }
-      onboarding.draft.profile = { name: String(data.get("name")).trim(), institution: String(data.get("institution") || "").trim(), degree: String(data.get("degree") || "").trim(), targetGrade: clamp(data.get("targetGrade"), 0, 20) || 20 };
+      onboarding.draft.profile = { name: String(data.get("name")).trim(), institution: String(data.get("institution") || "").trim(), degree: String(data.get("degree") || "").trim(), targetGrade: normalizedTargetGrade(data.get("targetGrade")) };
       onboarding.draft.semester = { name: String(data.get("semesterName")).trim(), academicYear: String(data.get("academicYear")).trim(), startDate: data.get("startDate") || "", endDate: data.get("endDate") || "" };
     } else if (step === 2) {
       var courseRows = Array.from(form.querySelectorAll(".setup-row"));
@@ -7516,6 +8484,15 @@
     }
   }
 
+  function diagnosticQuestionIndexes(quiz) {
+    var count = Math.min(clamp(state.settings.diagnosticQuestionCount || 5, 3, 10), asArray(quiz.questions).length);
+    return asArray(quiz.questions).map(function (question, index) {
+      var item = reviewItemBySourceKey(reviewQuestionKey(quiz, question, index));
+      var priority = item ? calibrationPriority(item) * 100 + Number(item.lapses || 0) * 10 + Number(item.confidentErrors || 0) * 20 : 0;
+      return { index: index, priority: priority };
+    }).sort(function (a, b) { return b.priority - a.priority || a.index - b.index; }).slice(0, count).map(function (entry) { return entry.index; });
+  }
+
   function startQuiz(id) {
     var quiz = state.quizzes.find(function (item) { return item.id === id; });
     if (!quiz || !asArray(quiz.questions).length) { toast("Este quiz ainda não tem perguntas.", "warning"); return; }
@@ -7523,61 +8500,101 @@
       viewLessonQuiz(quiz.lessonId);
       return;
     }
-    quizRuntime = { quizId: id, index: 0, answers: [], selected: null, revealed: false };
+    quizRuntime = { quizId: id, mode: "quiz", questionIndexes: [], index: 0, answers: [], confidences: [], explanations: [], selected: null, confidence: 0, revealed: false };
     renderQuizQuestion();
+  }
+
+  function startDiagnostic(id) {
+    var quiz = state.quizzes.find(function (item) { return item.id === id; });
+    if (!quiz || asArray(quiz.questions).length < 3) { toast("O diagnóstico precisa de pelo menos três perguntas reais.", "warning"); return; }
+    quizRuntime = { quizId: id, mode: "diagnostic", questionIndexes: diagnosticQuestionIndexes(quiz), index: 0, answers: [], confidences: [], explanations: [], selected: null, confidence: 0, revealed: false };
+    renderQuizQuestion();
+  }
+
+  function captureQuizExplanation() {
+    if (!quizRuntime) return;
+    var input = document.getElementById("quizReason");
+    if (input) quizRuntime.explanations[quizRuntime.index] = String(input.value || "").trim();
   }
 
   function renderQuizQuestion() {
     var quiz = state.quizzes.find(function (item) { return quizRuntime && item.id === quizRuntime.quizId; });
     if (!quiz) return;
-    var questions = asArray(quiz.questions);
+    var questions = quizRuntimeQuestions(quiz);
     if (quizRuntime.index >= questions.length) { finishQuiz(quiz); return; }
     var question = questions[quizRuntime.index];
+    var sourceIndex = quizRuntimeSourceIndex(quizRuntime.index);
     var selected = quizRuntime.selected;
-    var progress = '<div class="quiz-progress"><span style="width:' + ((quizRuntime.index + 1) / questions.length * 100) + '%"></span></div><p class="card-label" style="margin-top:14px">Pergunta ' + (quizRuntime.index + 1) + ' de ' + questions.length + '</p>';
+    var confidence = normalizeConfidence(quizRuntime.confidence);
+    var progress = '<div class="quiz-progress"><span style="width:' + ((quizRuntime.index + 1) / questions.length * 100) + '%"></span></div><p class="card-label" style="margin-top:14px">' + (quizRuntime.mode === "diagnostic" ? "Diagnóstico" : "Pergunta") + ' ' + (quizRuntime.index + 1) + ' de ' + questions.length + '</p>';
     var body;
     var footer;
+    var reason = shouldAskQuizExplanation(quiz, question, sourceIndex, confidence) ? '<div class="quiz-reason"><label for="quizReason">Porque escolheste esta resposta? <small>Opcional · uma frase</small></label><textarea id="quizReason" rows="2" placeholder="Explica o teu raciocínio…">' + esc(quizRuntime.explanations[quizRuntime.index] || "") + '</textarea></div>' : '';
     if (question.mode === "self-check" || !asArray(question.options).length) {
       var source = [question.assessmentLabel, question.academicYear].filter(Boolean).join(" · ") || "Pergunta de teste anterior";
       body = progress + '<div class="self-check-source"><span class="badge badge-pink"><i data-lucide="history"></i>Pergunta anterior</span><small>' + esc(source) + '</small></div><h3 class="quiz-question">' + esc(question.prompt) + '</h3>' + renderImageGallery(question.images, "question", { ownerId: question.sourceQuestionId || "" });
       if (quizRuntime.revealed) {
-        body += '<div class="self-check-answer"><p class="card-label">Resposta guardada</p><div>' + nl2br(question.answer || "A resposta ainda não foi adicionada.") + '</div>' + renderImageGallery(question.images, "solution", { ownerId: question.sourceQuestionId || "" }) + (question.explanation || normalizeImageRefs(question.images).some(function (image) { return image.role === "explanation"; }) ? '<div class="self-check-explanation"><strong>Explicação:</strong> ' + nl2br(question.explanation || "") + renderImageGallery(question.images, "explanation", { ownerId: question.sourceQuestionId || "" }) + '</div>' : '') + '</div><p class="self-check-prompt">Compara a tua resposta com a solução guardada e regista se precisas de rever.</p>';
-        footer = '<footer class="modal-foot self-check-actions"><button class="button" type="button" data-action="close-modal">Sair</button><button class="button" type="button" data-action="quiz-self-rate" data-value="0"><i data-lucide="rotate-ccw"></i>Preciso rever</button><button class="button button-dark" type="button" data-action="quiz-self-rate" data-value="1"><i data-lucide="check"></i>Sabia</button></footer>';
+        body += '<div class="calibration-preview"><span class="badge badge-violet">Confiança ' + confidence + '/4 · ' + esc(confidenceLabel(confidence)) + '</span></div><div class="self-check-answer"><p class="card-label">Resposta guardada</p><div>' + nl2br(question.answer || "A resposta ainda não foi adicionada.") + '</div>' + renderImageGallery(question.images, "solution", { ownerId: question.sourceQuestionId || "" }) + (question.explanation || normalizeImageRefs(question.images).some(function (image) { return image.role === "explanation"; }) ? '<div class="self-check-explanation"><strong>Explicação:</strong> ' + nl2br(question.explanation || "") + renderImageGallery(question.images, "explanation", { ownerId: question.sourceQuestionId || "" }) + '</div>' : '') + '</div><p class="self-check-prompt">Compara a tua resposta com a solução guardada e regista se realmente sabias.</p>' + reason;
+        footer = '<footer class="modal-foot self-check-actions"><button class="button" type="button" data-action="close-modal">Sair</button><button class="button" type="button" data-action="quiz-self-rate" data-value="0"><i data-lucide="rotate-ccw"></i>Não sabia</button><button class="button button-dark" type="button" data-action="quiz-self-rate" data-value="1"><i data-lucide="check"></i>Sabia</button></footer>';
       } else {
-        body += '<div class="form-note self-check-note"><strong>Responde primeiro sem consultar os apontamentos.</strong><br>Quando estiveres pronta, revela a solução que guardaste na pergunta original.</div>';
-        footer = '<footer class="modal-foot"><button class="button" type="button" data-action="close-modal">Sair</button><button class="button button-dark" type="button" data-action="quiz-reveal"><i data-lucide="eye"></i>Revelar resposta</button></footer>';
+        body += '<div class="form-note self-check-note"><strong>Responde primeiro sem consultar os apontamentos.</strong><br>Indica a confiança antes de revelar a solução.</div>' + renderConfidenceScale("quiz-confidence", confidence);
+        footer = '<footer class="modal-foot"><button class="button" type="button" data-action="close-modal">Sair</button><button class="button button-dark" type="button" data-action="quiz-reveal" ' + (state.settings.studyConfidencePrompts && !confidence ? "disabled" : "") + '><i data-lucide="eye"></i>Revelar resposta</button></footer>';
       }
     } else {
       var quizOptions = asArray(question.optionBlocks).length ? question.optionBlocks : asArray(question.options);
       body = progress + '<div class="quiz-question">' + renderContentBlocks(question.promptBlocks || question.prompt) + '</div>' + renderImageGallery(question.images, "question", { ownerId: question.sourceQuestionId || "" }) + '<div class="quiz-options">' + quizOptions.map(function (option, index) {
         return '<button class="quiz-option ' + (selected === index ? "is-selected" : "") + '" type="button" data-action="quiz-answer" data-index="' + index + '"><span>' + String.fromCharCode(65 + index) + '</span>' + renderQuizOptionContent(option) + "</button>";
-      }).join("") + '</div><div id="quizFeedback"></div>';
-      footer = '<footer class="modal-foot"><button class="button" type="button" data-action="close-modal">Sair</button><button class="button button-dark" type="button" data-action="quiz-next" ' + (selected == null ? "disabled" : "") + '>' + (quizRuntime.index === questions.length - 1 ? "Terminar" : "Seguinte") + '<i data-lucide="arrow-right"></i></button></footer>';
+      }).join("") + '</div>' + (selected == null ? '<div class="form-note"><strong>Escolhe primeiro uma resposta.</strong> A confiança só aparece depois para não influenciar a escolha.</div>' : renderConfidenceScale("quiz-confidence", confidence) + reason) + '<div id="quizFeedback"></div>';
+      footer = '<footer class="modal-foot"><button class="button" type="button" data-action="close-modal">Sair</button><button class="button button-dark" type="button" data-action="quiz-next" ' + (selected == null || (state.settings.studyConfidencePrompts && !confidence) ? "disabled" : "") + '>' + (quizRuntime.index === questions.length - 1 ? "Terminar" : "Seguinte") + '<i data-lucide="arrow-right"></i></button></footer>';
     }
-    openModal(quiz.title, body, { footer: footer });
+    openModal((quizRuntime.mode === "diagnostic" ? "Diagnóstico · " : "") + quiz.title, body, { footer: footer });
+  }
+
+  async function finishDiagnostic(quiz, questions, sourceIndexes, answers, confidences, explanations) {
+    var completedAt = new Date().toISOString();
+    var summary = syncQuizReviewItems(quiz, answers, confidences, explanations, { diagnostic: true, questions: questions, sourceIndexes: sourceIndexes });
+    var correct = summary.mastered + summary.fragile;
+    var record = { id: uid("diagnostic"), semesterId: quiz.semesterId || state.currentSemesterId, courseId: quiz.courseId || null, quizId: quiz.id, title: quiz.title, completedAt: completedAt, total: questions.length, correct: correct, mastered: summary.mastered, fragile: summary.fragile, learning: summary.learning, misconceptions: summary.misconceptions, itemIds: summary.itemIds, results: summary.results };
+    state.diagnostics.push(record);
+    if (state.diagnostics.length > 100) state.diagnostics = state.diagnostics.slice(-100);
+    await save(true);
+    quizRuntime = null;
+    render();
+    var gaps = summary.fragile + summary.learning + summary.misconceptions;
+    openModal("Diagnóstico concluído", '<div class="finish-card diagnostic-finish"><span class="study-finish-check"><i data-lucide="scan-search"></i></span><p class="card-label">Plano personalizado sem IA</p><h2>' + summary.mastered + ' de ' + questions.length + ' claramente dominados</h2><p>' + (gaps ? 'A Twenty retirou os itens dominados da fila imediata e manteve ' + gaps + ' lacuna(s) para revisão.' : 'Todos os itens ficaram fora da fila imediata. Voltam apenas numa revisão futura de manutenção.') + '</p><div class="diagnostic-summary"><span class="is-mastered"><strong>' + summary.mastered + '</strong><small>dominados</small></span><span class="is-fragile"><strong>' + summary.fragile + '</strong><small>acertos frágeis</small></span><span class="is-learning"><strong>' + summary.learning + '</strong><small>por aprender</small></span><span class="is-misconception"><strong>' + summary.misconceptions + '</strong><small>erros confiantes</small></span></div></div>', { footer: '<footer class="modal-foot"><button class="button" type="button" data-route="study" data-tab="diagnostic">Fechar</button>' + (gaps ? '<button class="button button-dark" type="button" data-action="start-diagnostic-review" data-id="' + attr(record.id) + '"><i data-lucide="play"></i>Rever só as lacunas</button>' : '') + '</footer>' });
   }
 
   async function finishQuiz(quiz) {
-    var questions = asArray(quiz.questions);
-    var correct = quizRuntime.answers.reduce(function (sum, answer, index) {
+    var questions = quizRuntimeQuestions(quiz);
+    var sourceIndexes = questions.map(function (_, index) { return quizRuntimeSourceIndex(index); });
+    var answers = asArray(quizRuntime.answers).slice();
+    var confidences = asArray(quizRuntime.confidences).slice();
+    var explanations = asArray(quizRuntime.explanations).slice();
+    if (quizRuntime.mode === "diagnostic") { await finishDiagnostic(quiz, questions, sourceIndexes, answers, confidences, explanations); return; }
+    var correct = answers.reduce(function (sum, answer, index) {
       var question = questions[index] || {};
       if (question.mode === "self-check" || !asArray(question.options).length) return sum + (answer === 1 ? 1 : 0);
       return sum + (answer === Number(question.answerIndex) ? 1 : 0);
     }, 0);
     var score = Math.round(correct / questions.length * 100);
+    var completedAt = new Date().toISOString();
+    var reviewSummary = syncQuizReviewItems(quiz, answers, confidences, explanations, { questions: questions, sourceIndexes: sourceIndexes });
     quiz.lastScore = score;
+    quiz.lastAnswers = answers;
     quiz.completedOnce = true;
-    quiz.lastCompletedAt = new Date().toISOString();
+    quiz.lastCompletedAt = completedAt;
+    quiz.attempts = asArray(quiz.attempts);
+    quiz.attempts.push({ id: uid("attempt"), completedAt: completedAt, score: score, answers: answers, confidences: confidences, explanations: explanations, correct: correct, total: questions.length, reviewErrors: reviewSummary.errors, fragile: reviewSummary.fragile, misconceptions: reviewSummary.misconceptions });
+    if (quiz.attempts.length > 30) quiz.attempts = quiz.attempts.slice(-30);
     if (quiz.lessonId) completeLessonBeOnline(quiz.lessonId);
     ensureBeOnlineTasks();
     await save(true);
     quizRuntime = null;
     render();
     var closesLesson = !!quiz.lessonId;
-    var resultCopy = closesLesson
-      ? (score === 100 ? "Aula acompanhada. Mantiveste-te em linha e sem matéria acumulada." : score >= 70 ? "Aula acompanhada. Anota o que falhou e esclarece as dúvidas cedo." : "Aula acompanhada, mas merece revisão: volta aos slides e leva as dúvidas ao professor.")
-      : (score === 100 ? "Excelente domínio deste quiz." : score >= 70 ? "Bom caminho. Revê os itens que falharam." : "Volta aos materiais e tenta novamente.");
-    openModal(closesLesson ? "Aula revista" : "Quiz concluído", '<div class="finish-card" style="text-align:center"><span class="badge badge-dark"><i data-lucide="' + (closesLesson ? "book-check" : "sparkles") + '"></i>' + (closesLesson ? "Aula acompanhada" : "Resultado") + '</span><h2 style="margin:17px 0 3px;font-size:4rem;letter-spacing:-.08em">' + score + '%</h2><p class="card-subtitle">' + correct + ' de ' + questions.length + ' itens dominados</p><div class="progress-ring" style="--progress:' + score + '%;margin:23px auto"><strong>' + score + '%</strong></div><p style="font-size:.7rem;font-weight:700;color:var(--muted)">' + resultCopy + '</p><button class="button button-dark" type="button" data-action="close-modal"><i data-lucide="check"></i>Fechar</button></div>');
+    var resultCopy = reviewSummary.misconceptions ? reviewSummary.misconceptions + ' erro(s) foram respondidos com confiança e ficaram no topo do Banco de Erros.' : reviewSummary.fragile ? reviewSummary.fragile + ' acerto(s) estavam inseguros e regressam mais cedo.' : closesLesson ? (score === 100 ? "Aula acompanhada. Mantiveste-te em linha e sem matéria acumulada." : score >= 70 ? "Aula acompanhada. Os erros já entraram na revisão para não se perderem." : "Aula acompanhada, mas merece reforço. A Twenty marcou os itens falhados para revisão.") : (score === 100 ? "Excelente domínio deste quiz." : score >= 70 ? "Bom caminho. Os itens falhados já estão no Banco de erros." : "Os erros foram transformados numa fila curta de revisão.");
+    var reviewButton = reviewSummary.errors || reviewSummary.fragile ? '<button class="button button-dark" type="button" data-route="study" data-tab="errors"><i data-lucide="triangle-alert"></i>Rever ' + (reviewSummary.errors + reviewSummary.fragile) + ' item' + ((reviewSummary.errors + reviewSummary.fragile) === 1 ? '' : 's') + '</button>' : '<button class="button button-dark" type="button" data-route="study" data-tab="review"><i data-lucide="rotate-ccw"></i>Ver próxima revisão</button>';
+    openModal(closesLesson ? "Aula revista" : "Quiz concluído", '<div class="finish-card quiz-learning-finish"><span class="badge badge-dark"><i data-lucide="' + (closesLesson ? "book-check" : "sparkles") + '"></i>' + (closesLesson ? "Aula acompanhada" : "Resultado") + '</span><h2>' + score + '%</h2><p class="card-subtitle">' + correct + ' de ' + questions.length + ' respostas corretas</p><div class="progress-ring" style="--progress:' + score + '%"><strong>' + score + '%</strong></div><p>' + resultCopy + '</p><div class="quiz-review-summary"><span><strong>' + reviewSummary.errors + '</strong><small>erros</small></span><span><strong>' + reviewSummary.fragile + '</strong><small>acertos frágeis</small></span><span><strong>' + reviewSummary.misconceptions + '</strong><small>erros confiantes</small></span></div></div>', { footer: '<footer class="modal-foot"><button class="button" type="button" data-action="close-modal">Fechar</button>' + reviewButton + '</footer>' });
   }
 
   function showAssessmentScope(id) {
@@ -7774,25 +8791,28 @@
     var linkedPastQuestions = kind === "pastExams" ? state.questions.filter(function (question) { return question.pastExamId === id; }) : [];
     var confirmation = linkedPastQuestions.length ? "Remover este teste anterior e as " + linkedPastQuestions.length + " pergunta(s) associadas?" : "Remover este item? Esta ação não pode ser desfeita.";
     if (!window.confirm(confirmation)) return;
-    if (kind === "materials" && item.remoteFile && item.remoteFile.path && Sync && Sync.getStatus().configured) {
-      setManualSyncActivity("A apagar o material…", "A remover também o ficheiro do repositório privado.", 25, true);
-      try { await Sync.deleteFile(item.remoteFile); } catch (error) { finishManualSyncActivity(false); toast(error.message || "Não foi possível apagar o ficheiro remoto.", "error"); return; }
-    }
-    if (kind === "materials" && item.blobId) await DB.deleteFile(item.blobId);
+    var remoteFileToDelete = kind === "materials" && item.remoteFile && item.remoteFile.path ? item.remoteFile : null;
+    var blobIdsToDelete = [];
+    if (kind === "materials" && item.blobId) blobIdsToDelete.push(item.blobId);
     var imageOwners = kind === "questions" || kind === "events" ? [item] : linkedPastQuestions;
-    for (var ownerIndex = 0; ownerIndex < imageOwners.length; ownerIndex += 1) {
-      var ownerImages = normalizeImageRefs(imageOwners[ownerIndex].images);
-      for (var imageIndex = 0; imageIndex < ownerImages.length; imageIndex += 1) {
-        if (ownerImages[imageIndex].blobId) await DB.deleteFile(ownerImages[imageIndex].blobId);
-      }
-    }
+    imageOwners.forEach(function (owner) {
+      normalizeImageRefs(owner.images).forEach(function (image) { if (image.blobId) blobIdsToDelete.push(image.blobId); });
+    });
     if (kind === "pastExams") state.questions = state.questions.filter(function (question) { return question.pastExamId !== id; });
     state[kind] = state[kind].filter(function (entry) { return entry.id !== id; });
     await save(true);
-    if (kind === "materials" && manualSyncActivity) finishManualSyncActivity(true);
+    var cleanupWarnings = [];
+    if (remoteFileToDelete && Sync && Sync.getStatus().configured) {
+      setManualSyncActivity("A apagar o material…", "Os dados já estão seguros; falta limpar o ficheiro remoto.", 55, true);
+      try { await Sync.deleteFile(remoteFileToDelete); } catch (error) { cleanupWarnings.push("o ficheiro remoto"); }
+    }
+    for (var blobIndex = 0; blobIndex < blobIdsToDelete.length; blobIndex += 1) {
+      try { await DB.deleteFile(blobIdsToDelete[blobIndex]); } catch (_) { cleanupWarnings.push("um ficheiro local"); }
+    }
+    if (kind === "materials" && manualSyncActivity) finishManualSyncActivity(!cleanupWarnings.length);
     closeModal();
     render();
-    toast("Item removido.");
+    toast(cleanupWarnings.length ? "Item removido. Ficou um ficheiro órfão para limpar mais tarde." : "Item removido.", cleanupWarnings.length ? "warning" : undefined);
   }
 
   function addQuickReview(courseId, lessonId) {
@@ -8009,16 +9029,18 @@
     if (!action) return;
     if (action === "close-modal") {
       if (quizRuntime) quizRuntime = null;
+      if (reviewRuntime) reviewRuntime = null;
+      pendingStudyReflectionSessionId = null;
       await closeModalSavingNotebook();
       if (onboarding) renderOnboarding();
     } else if (action === "view-report-card") {
       closeModal();
-      setRoute("home");
+      setRoute("grades");
       setTimeout(function () {
-        var card = document.querySelector(".daily-report-card");
+        var card = document.querySelector(".target-card");
         if (!card) return;
         card.classList.add("is-highlighted");
-        card.scrollIntoView({ behavior: "smooth", block: "center" });
+        card.scrollIntoView({ behavior: state.settings.reduceMotion ? "auto" : "smooth", block: "center" });
         setTimeout(function () { card.classList.remove("is-highlighted"); }, 1800);
       }, 80);
     } else if (action === "quick-add") {
@@ -8197,6 +9219,61 @@
       openEntityForm("study-planner-settings", {});
     } else if (action === "weekly-review") {
       openEntityForm("weekly-review", {});
+    } else if (action === "guided-study-plan") {
+      openGuidedStudyPlan(button.dataset.sourceType || "", button.dataset.sourceId || "");
+    } else if (action === "start-study-session") {
+      await startStudyFocusSession(button.dataset.sourceType || "", button.dataset.sourceId || "", button.dataset.block || button.dataset.id || "");
+    } else if (action === "resume-study-session") {
+      resumeStudyFocusSession(button.dataset.id || "");
+    } else if (action === "study-focus-step") {
+      await toggleStudyFocusStep(button.dataset.id || "");
+    } else if (action === "study-focus-hide") {
+      closeModal();
+      render();
+      toast("A sessão continua ativa. Podes retomá-la na área Estudar.");
+    } else if (action === "study-focus-pause") {
+      await pauseStudyFocusSession();
+    } else if (action === "study-focus-resume") {
+      await resumeStudyFocusTimer();
+    } else if (action === "study-focus-finish") {
+      await finishStudyFocusSession();
+    } else if (action === "skip-study-reflection") {
+      var skippedReflectionSession = studyFocusSessionById(button.dataset.id || pendingStudyReflectionSessionId);
+      pendingStudyReflectionSessionId = null;
+      closeModal();
+      showStudySessionFinish(skippedReflectionSession);
+    } else if (action === "start-review-session") {
+      startReviewSession(button.dataset.id || "", button.dataset.course || "", button.dataset.errors === "true");
+    } else if (action === "start-diagnostic") {
+      startDiagnostic(button.dataset.id || "");
+    } else if (action === "start-diagnostic-review") {
+      var diagnosticRecord = state.diagnostics.find(function (item) { return item.id === button.dataset.id; });
+      if (diagnosticRecord) {
+        closeModal();
+        var gapIds = asArray(diagnosticRecord.results).filter(function (result) { return result.calibration !== "mastered"; }).map(function (result) { return result.itemId; });
+        startReviewItemsByIds(gapIds);
+      }
+    } else if (action === "review-confidence") {
+      if (reviewRuntime) { reviewRuntime.confidence = normalizeConfidence(button.dataset.value); renderReviewRuntime(); }
+    } else if (action === "review-reveal") {
+      if (reviewRuntime && (!state.settings.studyConfidencePrompts || reviewRuntime.confidence)) { reviewRuntime.revealed = true; renderReviewRuntime(); }
+    } else if (action === "review-rate") {
+      await rateReviewItem(button.dataset.value || "good");
+    } else if (action === "review-stop") {
+      reviewRuntime = null;
+      closeModal();
+      toast("Revisão interrompida. Os itens ainda não avaliados continuam na fila.");
+    } else if (action === "add-flashcard") {
+      openFlashcardForm("");
+    } else if (action === "edit-flashcard") {
+      openFlashcardForm(button.dataset.id || "");
+    } else if (action === "import-ai-flashcards") {
+      await importAIFlashcards(button.dataset.id || "");
+    } else if (action === "archive-review-item") {
+      var archiveReview = state.reviewItems.find(function (item) { return item.id === button.dataset.id; });
+      if (archiveReview) { archiveReview.suspended = !archiveReview.suspended; await save(true); render(); toast(archiveReview.suspended ? "Item arquivado." : "Item restaurado para a revisão."); }
+    } else if (action === "study-review-settings") {
+      openReviewSettings();
     } else if (action === "auto-fill-study-day") {
       await autoFillStudyDay();
     } else if (action === "copy-study-day") {
@@ -8306,19 +9383,24 @@
       });
       if (pendingOnline.length) await doLessonQuiz(pendingOnline[0].id);
     } else if (action === "quiz-answer") {
-      if (quizRuntime) { quizRuntime.selected = Number(button.dataset.index); renderQuizQuestion(); }
+      if (quizRuntime) { captureQuizExplanation(); quizRuntime.selected = Number(button.dataset.index); quizRuntime.confidence = 0; renderQuizQuestion(); }
+    } else if (action === "quiz-confidence") {
+      if (quizRuntime) { captureQuizExplanation(); quizRuntime.confidence = normalizeConfidence(button.dataset.value); renderQuizQuestion(); }
     } else if (action === "quiz-reveal") {
-      if (quizRuntime) { quizRuntime.revealed = true; renderQuizQuestion(); }
+      if (quizRuntime && (!state.settings.studyConfidencePrompts || quizRuntime.confidence)) { quizRuntime.revealed = true; renderQuizQuestion(); }
     } else if (action === "quiz-self-rate") {
       if (quizRuntime) {
+        captureQuizExplanation();
         quizRuntime.answers.push(Number(button.dataset.value) === 1 ? 1 : 0);
+        quizRuntime.confidences.push(normalizeConfidence(quizRuntime.confidence));
         quizRuntime.selected = null;
+        quizRuntime.confidence = 0;
         quizRuntime.revealed = false;
         quizRuntime.index += 1;
         renderQuizQuestion();
       }
     } else if (action === "quiz-next") {
-      if (quizRuntime && quizRuntime.selected != null) { quizRuntime.answers.push(quizRuntime.selected); quizRuntime.selected = null; quizRuntime.revealed = false; quizRuntime.index += 1; renderQuizQuestion(); }
+      if (quizRuntime && quizRuntime.selected != null && (!state.settings.studyConfidencePrompts || quizRuntime.confidence)) { captureQuizExplanation(); quizRuntime.answers.push(quizRuntime.selected); quizRuntime.confidences.push(normalizeConfidence(quizRuntime.confidence)); quizRuntime.selected = null; quizRuntime.confidence = 0; quizRuntime.revealed = false; quizRuntime.index += 1; renderQuizQuestion(); }
     } else if (action === "assessment-scope" || action === "study-assessment") {
       showAssessmentScope(button.dataset.id);
     } else if (action === "show-event") {
@@ -8638,7 +9720,20 @@
     var actionButton = event.target.closest("[data-action]");
     if (actionButton) {
       event.preventDefault();
-      handleAction(actionButton).catch(function (error) { console.error(error); toast("Ocorreu um erro: " + error.message, "error"); });
+      if (actionButton.dataset.actionPending === "true") return;
+      actionButton.dataset.actionPending = "true";
+      actionButton.setAttribute("aria-busy", "true");
+      try {
+        await handleAction(actionButton);
+      } catch (error) {
+        console.error(error);
+        toast("Ocorreu um erro: " + error.message, "error");
+      } finally {
+        if (actionButton.isConnected) {
+          delete actionButton.dataset.actionPending;
+          actionButton.removeAttribute("aria-busy");
+        }
+      }
       return;
     }
     var routeButton = event.target.closest('button[data-route], a[data-route], [role="button"][data-route]');
@@ -8698,6 +9793,7 @@
       }
       if (ensureBeOnlineTasks()) await save(true);
       routeFromHash();
+      lastPersistedState = clone(state);
       app.setAttribute("aria-busy", "false");
       render();
       clearInterval(beOnlineTimer);
@@ -8709,7 +9805,7 @@
       }, 60000);
       if (!state.profile.onboardingComplete || !state.currentSemesterId || !activeCourses().length) startOnboarding(state.semesters.length ? "new-semester" : "first");
       if ("serviceWorker" in navigator && location.protocol !== "file:") {
-        navigator.serviceWorker.register("sw.js?v=28.2-settings-interaction-fix", { updateViaCache: "none" }).then(function () {
+        navigator.serviceWorker.register("sw.js?v=31.0-adaptive-confidence", { updateViaCache: "none" }).then(function () {
           if (Sync && Sync.getStatus().configured) Sync.startAutoSync();
         }).catch(function () {
           if (Sync && Sync.getStatus().configured) Sync.startAutoSync();
@@ -8867,6 +9963,7 @@
     handleNotebookPaste(event, editor);
   });
   modalRoot.addEventListener("keydown", function (event) {
+    if (trapModalFocus(event)) return;
     var editor = event.target.closest("#notebookEditor");
     if (!editor || event.key !== "Enter" || event.shiftKey) return;
     var selection = window.getSelection();
@@ -8920,6 +10017,14 @@
   modalRoot.addEventListener("submit", function (event) {
     if (event.target.id === "pastQuestionForm") {
       handlePastQuestionSubmit(event).catch(function (error) { console.error(error); setFormError(event.target, "Não foi possível guardar as perguntas."); });
+    } else if (event.target.id === "flashcardForm") {
+      handleFlashcardSubmit(event).catch(function (error) { console.error(error); setFormError(event.target, "Não foi possível guardar o flashcard."); });
+    } else if (event.target.id === "guidedStudyPlanForm") {
+      handleGuidedStudyPlanSubmit(event).catch(function (error) { console.error(error); setFormError(event.target, "Não foi possível criar a sessão."); });
+    } else if (event.target.id === "reviewSettingsForm") {
+      handleReviewSettingsSubmit(event).catch(function (error) { console.error(error); setFormError(event.target, "Não foi possível guardar as preferências."); });
+    } else if (event.target.id === "studyReflectionForm") {
+      handleStudyReflectionSubmit(event).catch(function (error) { console.error(error); setFormError(event.target, "Não foi possível guardar a reflexão."); });
     } else {
       handleEntitySubmit(event);
     }
@@ -8959,6 +10064,12 @@
           event.target.value = "";
         }
       })();
+      return;
+    }
+    var taskForm = event.target.closest('#entityForm[data-type="task"]');
+    if (taskForm && event.target.matches('[name="lessonId"]')) {
+      var linkedTaskLesson = lessonById(event.target.value);
+      if (linkedTaskLesson && taskForm.elements.courseId) taskForm.elements.courseId.value = linkedTaskLesson.courseId;
       return;
     }
     var builderForm = event.target.closest("#lessonBuilderForm");
@@ -9052,12 +10163,14 @@
     if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k") { event.preventDefault(); searchInput.focus(); searchInput.select(); }
     if (event.key === "Escape") {
       if (guidedTour) stopGuidedTour(true);
+      else if (reviewRuntime) { reviewRuntime = null; closeModal(); }
       else if (!onboarding) await closeModalSavingNotebook();
       searchResults.hidden = true;
     }
     if ((event.key === "Enter" || event.key === " ") && event.target.matches('.course-card[role="button"]')) { event.preventDefault(); setRoute("course", event.target.dataset.id); }
   });
-  window.addEventListener("hashchange", function () { routeFromHash(); render(); });
+  window.addEventListener("popstate", handleHistoryNavigation);
+  window.addEventListener("hashchange", handleHistoryNavigation);
   window.addEventListener("focus", function () {
     clearTimeout(externalCheckTimer);
     externalCheckTimer = setTimeout(function () {
@@ -9079,6 +10192,7 @@
     if (!event.detail || !event.detail.state || !state) return;
     state = normalizeState(event.detail.state);
     DB.saveState(state, { skipSync: true }).then(function () {
+      lastPersistedState = clone(state);
       if (Sync) Sync.adoptRemoteState(state);
       if (!onboarding) render();
       if (event.detail.conflicts && event.detail.conflicts.length) {
