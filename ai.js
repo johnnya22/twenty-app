@@ -137,6 +137,83 @@
     return module.default || module;
   }
 
+  function findZipEnd(view) {
+    var minimum = Math.max(0, view.byteLength - 65557);
+    for (var offset = view.byteLength - 22; offset >= minimum; offset -= 1) {
+      if (view.getUint32(offset, true) === 0x06054b50) return offset;
+    }
+    return -1;
+  }
+
+  async function inflateZipEntry(bytes, method) {
+    if (method === 0) return bytes;
+    if (method !== 8) throw new Error("O PowerPoint usa um método de compressão não suportado.");
+    if (typeof DecompressionStream !== "function") throw new Error("NATIVE_ZIP_UNAVAILABLE");
+    var stream = new Blob([bytes]).stream().pipeThrough(new DecompressionStream("deflate-raw"));
+    return new Uint8Array(await new Response(stream).arrayBuffer());
+  }
+
+  async function readPptxSlidesNative(file) {
+    var buffer = await file.arrayBuffer();
+    var bytes = new Uint8Array(buffer);
+    var view = new DataView(buffer);
+    var endOffset = findZipEnd(view);
+    if (endOffset < 0) throw new Error("Este ficheiro não parece ser um PowerPoint válido.");
+    var entries = view.getUint16(endOffset + 10, true);
+    var directoryOffset = view.getUint32(endOffset + 16, true);
+    var decoder = new TextDecoder("utf-8");
+    var result = [];
+    var cursor = directoryOffset;
+
+    for (var index = 0; index < entries; index += 1) {
+      if (cursor + 46 > view.byteLength || view.getUint32(cursor, true) !== 0x02014b50) {
+        throw new Error("O índice interno deste PowerPoint está danificado.");
+      }
+      var flags = view.getUint16(cursor + 8, true);
+      var method = view.getUint16(cursor + 10, true);
+      var compressedSize = view.getUint32(cursor + 20, true);
+      var fileNameLength = view.getUint16(cursor + 28, true);
+      var extraLength = view.getUint16(cursor + 30, true);
+      var commentLength = view.getUint16(cursor + 32, true);
+      var localOffset = view.getUint32(cursor + 42, true);
+      var nameStart = cursor + 46;
+      var name = decoder.decode(bytes.slice(nameStart, nameStart + fileNameLength));
+
+      if (/^ppt\/slides\/slide\d+\.xml$/i.test(name)) {
+        if (flags & 1) throw new Error("Este PowerPoint está protegido por palavra-passe.");
+        if (localOffset + 30 > view.byteLength || view.getUint32(localOffset, true) !== 0x04034b50) {
+          throw new Error("Um dos slides está danificado.");
+        }
+        var localNameLength = view.getUint16(localOffset + 26, true);
+        var localExtraLength = view.getUint16(localOffset + 28, true);
+        var dataStart = localOffset + 30 + localNameLength + localExtraLength;
+        var dataEnd = dataStart + compressedSize;
+        if (dataEnd > bytes.length) throw new Error("Um dos slides está incompleto.");
+        var inflated = await inflateZipEntry(bytes.slice(dataStart, dataEnd), method);
+        result.push({ path: name, xml: decoder.decode(inflated) });
+      }
+      cursor += 46 + fileNameLength + extraLength + commentLength;
+    }
+    result.sort(function (a, b) { return slideNumber(a.path) - slideNumber(b.path); });
+    return result;
+  }
+
+  async function readPptxSlides(file) {
+    try {
+      return await readPptxSlidesNative(file);
+    } catch (error) {
+      if (String(error && error.message) !== "NATIVE_ZIP_UNAVAILABLE") throw error;
+      var JSZip = await loadJSZip();
+      var zip = await JSZip.loadAsync(await file.arrayBuffer());
+      var paths = Object.keys(zip.files)
+        .filter(function (path) { return /^ppt\/slides\/slide\d+\.xml$/i.test(path); })
+        .sort(function (a, b) { return slideNumber(a) - slideNumber(b); });
+      return Promise.all(paths.map(async function (path) {
+        return { path: path, xml: await zip.file(path).async("string") };
+      }));
+    }
+  }
+
   function slideNumber(path) {
     var match = String(path).match(/slide(\d+)\.xml$/i);
     return match ? Number(match[1]) : Number.MAX_SAFE_INTEGER;
@@ -164,24 +241,20 @@
     if (!/\.pptx$/i.test(file.name || "")) throw new Error("A Twenty lê ficheiros .pptx. O formato antigo .ppt não é suportado.");
     if (file.size > 25 * 1024 * 1024) throw new Error("Este PowerPoint tem mais de 25 MB. Comprime imagens/vídeos ou divide a apresentação antes de a sincronizar.");
     if (onProgress) onProgress({ progress: 2, text: "A abrir o PowerPoint…" });
-    var JSZip = await loadJSZip();
-    var zip = await JSZip.loadAsync(await file.arrayBuffer());
-    var paths = Object.keys(zip.files)
-      .filter(function (path) { return /^ppt\/slides\/slide\d+\.xml$/i.test(path); })
-      .sort(function (a, b) { return slideNumber(a) - slideNumber(b); });
-    if (!paths.length) throw new Error("Não encontrei slides dentro deste ficheiro.");
+    var slideEntries = await readPptxSlides(file);
+    if (!slideEntries.length) throw new Error("Não encontrei slides dentro deste ficheiro.");
 
     var slides = [];
-    for (var index = 0; index < paths.length; index += 1) {
-      var xml = await zip.file(paths[index]).async("string");
+    for (var index = 0; index < slideEntries.length; index += 1) {
+      var xml = slideEntries[index].xml;
       var paragraphs = xmlParagraphs(xml);
-      var number = slideNumber(paths[index]);
+      var number = slideNumber(slideEntries[index].path);
       var title = cleanText(paragraphs[0] || "Slide " + number).slice(0, 180);
       var text = cleanText(paragraphs.join("\n")).slice(0, 6000);
       slides.push({ number: number, title: title, text: text });
       if (onProgress) onProgress({
         progress: 5 + Math.round(((index + 1) / paths.length) * 25),
-        text: "A extrair o slide " + (index + 1) + " de " + paths.length + "…"
+        text: "A extrair o slide " + (index + 1) + " de " + slideEntries.length + "…"
       });
     }
     var withText = slides.filter(function (slide) { return slide.text; });
@@ -323,25 +396,92 @@
     return "com dificuldade variada e adequada ao conteúdo";
   }
 
+  function normalizeGeneratedGameType(value) {
+    value = cleanText(value || "").toLowerCase();
+    if (["formula", "short-answer", "write", "written", "type-answer"].indexOf(value) >= 0) return "type-answer";
+    if (["spot-error", "find-error", "incorrect", "error"].indexOf(value) >= 0) return "spot-error";
+    if (["order", "ordering", "sort"].indexOf(value) >= 0) return "order";
+    if (["match", "matching", "pairs"].indexOf(value) >= 0) return "match";
+    if (["memory", "sequence"].indexOf(value) >= 0) return "memory";
+    return "choice";
+  }
+
   function normalizeQuiz(data, count) {
     var questions = Array.isArray(data && data.questions) ? data.questions : [];
     return questions.slice(0, count).map(function (question, index) {
-      var options = Array.isArray(question.options) ? question.options.map(cleanText).filter(Boolean).slice(0, 4) : [];
-      while (options.length < 4) options.push("Opção " + (options.length + 1));
-      var correctIndex = Number(question.correctIndex);
-      if (!Number.isInteger(correctIndex) || correctIndex < 0 || correctIndex >= options.length) correctIndex = 0;
-      return {
+      question = question && typeof question === "object" ? question : {};
+      var gameType = normalizeGeneratedGameType(question.gameType || question.mode);
+      var normalized = {
         id: uid("aiq"),
-        mode: "multiple-choice",
+        mode: gameType === "choice" ? "multiple-choice" : gameType,
+        gameType: gameType,
         prompt: cleanText(question.question || question.prompt || "Pergunta " + (index + 1)),
-        options: options,
-        answerIndex: correctIndex,
         explanation: cleanText(question.explanation || ""),
         sourceSlides: Array.isArray(question.sourceSlides) ? question.sourceSlides.map(Number).filter(Number.isFinite) : [],
         difficulty: ["easy", "medium", "hard"].indexOf(question.difficulty) >= 0 ? question.difficulty : "medium",
-        images: []
+        images: [],
+        options: [],
+        answerIndex: null,
+        answerText: "",
+        acceptedAnswers: [],
+        orderItems: [],
+        correctOrder: [],
+        matchPairs: [],
+        sequence: []
       };
-    });
+      if (gameType === "type-answer") {
+        normalized.answerText = cleanText(question.answerText || question.answer || "");
+        normalized.acceptedAnswers = Array.isArray(question.acceptedAnswers) ? question.acceptedAnswers.map(cleanText).filter(Boolean).slice(0, 8) : [];
+        if (normalized.answerText && normalized.acceptedAnswers.indexOf(normalized.answerText) < 0) normalized.acceptedAnswers.unshift(normalized.answerText);
+        if (!normalized.acceptedAnswers.length) return null;
+        return normalized;
+      }
+      if (gameType === "order") {
+        normalized.correctOrder = Array.isArray(question.correctOrder) ? question.correctOrder.map(cleanText).filter(Boolean).slice(0, 8) : [];
+        normalized.orderItems = Array.isArray(question.orderItems) ? question.orderItems.map(cleanText).filter(Boolean).slice(0, 8) : normalized.correctOrder.slice();
+        if (normalized.correctOrder.length < 2) return null;
+        return normalized;
+      }
+      if (gameType === "match") {
+        normalized.matchPairs = Array.isArray(question.matchPairs) ? question.matchPairs.map(function (pair) {
+          if (Array.isArray(pair)) return { left: cleanText(pair[0]), right: cleanText(pair[1]) };
+          return { left: cleanText(pair && pair.left), right: cleanText(pair && pair.right) };
+        }).filter(function (pair) { return pair.left && pair.right; }).slice(0, 6) : [];
+        if (normalized.matchPairs.length < 2) return null;
+        return normalized;
+      }
+      if (gameType === "memory") {
+        normalized.sequence = Array.isArray(question.sequence) ? question.sequence.map(cleanText).filter(Boolean).slice(0, 8) : [];
+        if (normalized.sequence.length < 3) return null;
+        return normalized;
+      }
+      var options = Array.isArray(question.options) ? question.options.map(cleanText).filter(Boolean).slice(0, 4) : [];
+      while (options.length < 4) options.push("Opção " + (options.length + 1));
+      var correctIndex = Number(question.correctIndex != null ? question.correctIndex : question.answerIndex);
+      if (!Number.isInteger(correctIndex) || correctIndex < 0 || correctIndex >= options.length) correctIndex = 0;
+      normalized.options = options;
+      normalized.answerIndex = correctIndex;
+      return normalized;
+    }).filter(Boolean);
+  }
+
+  function normalizeLessonPlan(data, source) {
+    data = data && typeof data === "object" ? data : {};
+    var homework = data.homework && typeof data.homework === "object" ? data.homework : {};
+    var fallbackTitle = cleanText(source && source.fileName || "Nova aula").replace(/\.pptx$/i, "");
+    return {
+      title: cleanText(data.title || fallbackTitle || "Nova aula"),
+      description: cleanText(data.description || data.summary || ""),
+      objectives: Array.isArray(data.objectives) ? data.objectives.map(cleanText).filter(Boolean).slice(0, 6) : [],
+      quizTitle: cleanText(data.quizTitle || ("Quiz da aula · " + (data.title || fallbackTitle || "Nova aula"))),
+      homework: {
+        title: cleanText(homework.title || ("TPC · " + (data.title || fallbackTitle || "Nova aula"))),
+        instructions: cleanText(homework.instructions || homework.description || ""),
+        estimatedMinutes: Math.max(10, Math.min(180, Number(homework.estimatedMinutes) || 30)),
+        steps: Array.isArray(homework.steps) ? homework.steps.map(cleanText).filter(Boolean).slice(0, 6) : [],
+        dueInDays: Math.max(0, Math.min(30, Number(homework.dueInDays) || 3))
+      }
+    };
   }
 
   function normalizeFlashcards(data) {
@@ -392,14 +532,15 @@
     digests = await reduceDigests(activeModelId, digests, onProgress);
     var material = JSON.stringify(digests);
     var output = options.output || "all";
-    var wantsNotes = output === "all" || output === "notes" || output === "summary";
-    var wantsQuiz = output === "all" || output === "quiz";
+    var wantsNotes = output === "all" || output === "notes" || output === "summary" || output === "lesson";
+    var wantsQuiz = output === "all" || output === "quiz" || output === "lesson";
     var wantsCards = output === "all" || output === "flashcards";
     var actualModel = runtime.modelId || activeModelId;
     var notes = null;
     var summary = "";
     var questions = [];
     var flashcards = [];
+    var lessonPlan = null;
 
     if (wantsNotes) {
       if (onProgress) onProgress({ kind: "generation", progress: 72, text: output === "summary" ? "A criar o resumo…" : "A organizar os apontamentos…" });
@@ -415,10 +556,11 @@
     if (wantsQuiz) {
       if (onProgress) onProgress({ kind: "generation", progress: 82, text: "A criar " + (options.questionCount || 10) + " perguntas…" });
       var count = Math.max(5, Math.min(30, Number(options.questionCount) || 10));
+      var lessonQuiz = output === "lesson";
       var quizResponse = await completeJSON(activeModelId, [
-        { role: "system", content: "És um professor universitário a criar um quiz fiel aos slides. Português de Portugal. Não uses conhecimento externo. Cada pergunta tem exatamente quatro opções plausíveis e uma só correta." },
-        { role: "user", content: "Cria " + count + " perguntas " + difficultyInstruction(options.difficulty) + ". Responde apenas JSON: {\"questions\":[{\"question\":\"...\",\"options\":[\"A\",\"B\",\"C\",\"D\"],\"correctIndex\":0,\"explanation\":\"...\",\"sourceSlides\":[1],\"difficulty\":\"easy|medium|hard\"}]}. Evita perguntas repetidas.\n\nMATÉRIA:\n" + material }
-      ], { maxTokens: Math.min(1500, 360 + count * 62), seed: 202 }, onProgress);
+        { role: "system", content: lessonQuiz ? "És um professor universitário a criar um Quiz-Aula curto e variado, fiel aos slides e em português de Portugal. Usa apenas a matéria fornecida. Mistura atividades adequadas ao conteúdo: choice, spot-error, type-answer, order, match ou memory. Não inventes." : "És um professor universitário a criar um quiz fiel aos slides. Português de Portugal. Não uses conhecimento externo. Cada pergunta tem exatamente quatro opções plausíveis e uma só correta." },
+        { role: "user", content: lessonQuiz ? ("Cria " + count + " perguntas " + difficultyInstruction(options.difficulty) + ". Responde apenas JSON no formato {\"questions\":[{\"gameType\":\"choice|spot-error|type-answer|order|match|memory\",\"question\":\"...\",\"options\":[\"A\",\"B\",\"C\",\"D\"],\"correctIndex\":0,\"answerText\":\"...\",\"acceptedAnswers\":[\"...\"],\"orderItems\":[\"...\"],\"correctOrder\":[\"...\"],\"matchPairs\":[{\"left\":\"...\",\"right\":\"...\"}],\"sequence\":[\"...\"],\"explanation\":\"...\",\"sourceSlides\":[1],\"difficulty\":\"easy|medium|hard\"}]}. Preenche apenas os campos necessários para cada gameType. Usa pelo menos dois tipos diferentes, mas evita memória quando o conteúdo não tiver uma sequência natural.\n\nMATÉRIA:\n" + material) : ("Cria " + count + " perguntas " + difficultyInstruction(options.difficulty) + ". Responde apenas JSON: {\"questions\":[{\"question\":\"...\",\"options\":[\"A\",\"B\",\"C\",\"D\"],\"correctIndex\":0,\"explanation\":\"...\",\"sourceSlides\":[1],\"difficulty\":\"easy|medium|hard\"}]}. Evita perguntas repetidas.\n\nMATÉRIA:\n" + material) }
+      ], { maxTokens: Math.min(1800, 420 + count * 88), seed: 202 }, onProgress);
       questions = normalizeQuiz(quizResponse.data || {}, count);
       actualModel = quizResponse.modelId || actualModel;
     }
@@ -434,6 +576,17 @@
       actualModel = cardResponse.modelId || actualModel;
     }
 
+
+    if (output === "lesson") {
+      if (onProgress) onProgress({ kind: "generation", progress: 94, text: "A preparar a aula e o TPC…" });
+      var lessonResponse = await completeJSON(activeModelId, [
+        { role: "system", content: "És um assistente académico universitário. Analisa apenas os slides fornecidos e cria uma proposta prática de aula em português de Portugal. Não inventes tópicos, datas, professores nem requisitos que não estejam na matéria." },
+        { role: "user", content: "Cria os metadados da aula e um TPC curto que ajude a aplicar ou consolidar a matéria. O título deve ser específico e curto. A descrição deve explicar em 2 ou 3 frases o que é abordado. Responde apenas JSON: {\"title\":\"...\",\"description\":\"...\",\"objectives\":[\"...\"],\"quizTitle\":\"Quiz da aula · ...\",\"homework\":{\"title\":\"TPC · ...\",\"instructions\":\"...\",\"estimatedMinutes\":30,\"steps\":[\"...\"],\"dueInDays\":3}}. O TPC deve ser realizável apenas com o conteúdo dos slides, com 2 a 5 passos e sem fingir que será enviado ao professor.\n\nMATÉRIA:\n" + material }
+      ], { maxTokens: 760, seed: 404 }, onProgress);
+      lessonPlan = normalizeLessonPlan(lessonResponse.data || {}, source);
+      actualModel = lessonResponse.modelId || actualModel;
+    }
+
     if (onProgress) onProgress({ kind: "done", progress: 100, text: "Conteúdo criado e pronto a guardar." });
     return {
       id: uid("aiproject"),
@@ -446,6 +599,7 @@
       notes: notes,
       flashcards: flashcards,
       quizQuestions: questions,
+      lessonPlan: lessonPlan,
       output: output,
       difficulty: options.difficulty || "auto",
       questionCount: Number(options.questionCount) || 10,

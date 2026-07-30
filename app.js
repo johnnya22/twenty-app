@@ -33,6 +33,8 @@
   var aiDraft = null;
   var aiBusy = false;
   var aiTransferRequest = null;
+  var lessonSlideImportContext = null;
+  var lessonSlideDraft = null;
   var aiProgress = { active: false, progress: null, title: "", detail: "" };
   var CANTEEN_API_URL = "https://sas.unl.pt/wp-json/wp/v2/pages/326?_fields=acf,link";
   var CANTEEN_INFO_API_URL = "https://sas.unl.pt/wp-json/wp/v2/pages/309?_fields=acf,link,modified";
@@ -942,7 +944,7 @@
       return Object.assign({ id: uid("semester"), name: "Semestre", academicYear: academicYearFor(), startDate: "", endDate: "", archived: false }, semester);
     });
     base.lessons = base.lessons.map(function (lesson) {
-      var normalized = Object.assign({ notes: "", notesHtml: "", notesPaper: "lined", notesFont: "app", aiNotes: [], mastered: false }, lesson, { aiNotes: asArray(lesson.aiNotes) });
+      var normalized = Object.assign({ description: "", notes: "", notesHtml: "", notesPaper: "lined", notesFont: "app", aiNotes: [], mastered: false }, lesson, { aiNotes: asArray(lesson.aiNotes) });
       if (!normalized.notesHtml && normalized.notes) normalized.notesHtml = '<p>' + nl2br(normalized.notes) + '</p>';
       if (["lined", "grid", "blank"].indexOf(normalized.notesPaper) < 0) normalized.notesPaper = "lined";
       normalized.notesHtml = sanitizeNotebookHTML(normalized.notesHtml || "");
@@ -2976,7 +2978,7 @@
     var hero = '<section class="card course-hero" style="--course-color:' + safeColor(course.color) + '"><div class="course-hero-copy"><span class="badge badge-dark">' + esc(course.code || "Cadeira") + '</span><h2>' + esc(course.name) + '</h2><p>' + (Number(course.ects) || 0) + ' ECTS · ' + asArray(course.lessonTypes).map(lessonTypeLabel).join(" · ") + (archived ? " · Semestre arquivado" : "") + '</p></div><div class="course-score"><strong>' + (average.value == null ? "—" : round(average.value, 1)) + '</strong><span>' + (average.value == null ? "sem notas" : "média atual / 20") + "</span></div></section>";
     var controls = courseTabs(course, tab || "overview");
     var content = renderCourseTab(course, tab || "overview", archived);
-    return '<div class="page-head"><div><button class="button button-ghost button-small" type="button" data-route="courses"><i data-lucide="arrow-left"></i>Cadeiras</button></div><div class="page-actions">' + (!archived ? '<button class="button" type="button" data-action="edit-course" data-id="' + attr(course.id) + '"><i data-lucide="settings-2"></i>Configurar</button><button class="button button-dark" type="button" data-action="create-lesson" data-course="' + attr(course.id) + '"><i data-lucide="plus"></i>Nova aula</button>' : '<span class="badge badge-dark"><i data-lucide="archive"></i>Arquivo</span>') + "</div></div>" + hero + controls + content;
+    return '<div class="page-head"><div><button class="button button-ghost button-small" type="button" data-route="courses"><i data-lucide="arrow-left"></i>Cadeiras</button></div><div class="page-actions">' + (!archived ? '<button class="button" type="button" data-action="edit-course" data-id="' + attr(course.id) + '"><i data-lucide="settings-2"></i>Configurar</button><button class="button" type="button" data-action="create-lesson" data-course="' + attr(course.id) + '"><i data-lucide="plus"></i>Nova aula</button><button class="button button-dark" type="button" data-action="create-lesson-from-slides" data-course="' + attr(course.id) + '"><i data-lucide="wand-sparkles"></i>Criar com slides</button>' : '<span class="badge badge-dark"><i data-lucide="archive"></i>Arquivo</span>') + "</div></div>" + hero + controls + content;
   }
 
   function lessonTypeLabel(type) {
@@ -3056,7 +3058,7 @@
     var content = Object.keys(groups).map(function (key) {
       return '<section class="section-block"><div class="section-heading"><div><h3>' + esc(key) + '</h3><p>' + groups[key].length + ' aula(s)</p></div></div><div class="list-stack">' + groups[key].map(renderLessonRow).join("") + "</div></section>";
     }).join("");
-    return '<div class="page-head"><div><h2>Todas as aulas</h2><p>Abre uma aula para ver os slides, quiz, matéria, perguntas anteriores e apontamentos no mesmo sítio.</p></div>' + (!archived ? '<div class="page-actions"><button class="button button-dark" type="button" data-action="create-lesson" data-course="' + attr(course.id) + '"><i data-lucide="plus"></i>Nova aula</button></div>' : "") + '</div>' + (lessons.length ? content : emptyState("presentation", "Ainda não há aulas", "Cria uma aula associada a um período do horário.", "create-lesson", "Criar primeira aula"));
+    return '<div class="page-head"><div><h2>Todas as aulas</h2><p>Abre uma aula para ver os slides, quiz, matéria, perguntas anteriores e apontamentos no mesmo sítio.</p></div>' + (!archived ? '<div class="page-actions"><button class="button" type="button" data-action="create-lesson" data-course="' + attr(course.id) + '"><i data-lucide="plus"></i>Nova aula</button><button class="button button-dark" type="button" data-action="create-lesson-from-slides" data-course="' + attr(course.id) + '"><i data-lucide="wand-sparkles"></i>Criar com slides</button></div>' : "") + '</div>' + (lessons.length ? content : emptyState("presentation", "Ainda não há aulas", "Cria uma aula associada a um período do horário.", "create-lesson", "Criar primeira aula"));
   }
 
   function materialYearBadge(material, course) {
@@ -3709,7 +3711,7 @@
       ? '<div class="lesson-configured-card"><span class="list-icon orange"><i data-lucide="notebook-pen"></i></span><div><strong>' + esc(homework.title) + '</strong><small>' + (homework.estimatedMinutes || 30) + ' min · ' + (homework.done ? 'concluído' : 'por fazer') + ' · conteúdo fechado</small></div><div class="list-actions"><button class="button ' + (homework.done ? 'button-dark' : 'button') + ' button-small" type="button" data-action="view-lesson-homework" data-id="' + attr(homework.id) + '"><i data-lucide="eye"></i>Ver</button>' + (homework.done ? '' : '<button class="button button-dark button-small" type="button" data-action="start-homework-session" data-task="' + attr(homework.id) + '"><i data-lucide="play"></i>Fazer</button>') + '</div></div>'
       : '<div class="lesson-unconfigured"><span class="metric-icon"><i data-lucide="notebook-pen"></i></span><div><strong>TPC ainda não configurado</strong><small>O TPC é separado do quiz e pensado para fazer em casa.</small></div><button class="button button-dark button-small" type="button" data-action="configure-lesson-content" data-kind="homework" data-lesson="' + attr(lesson.id) + '"><i data-lucide="wand-sparkles"></i>✅ Configurar TPC</button></div>';
     var quizStatusCard = onlineComplete ? '' : '<article class="card span-12 beonline-lesson-card"><div class="beonline-lesson-copy"><span class="badge ' + (quiz && lessonEnded ? 'badge-danger' : 'badge-violet') + '">' + (quiz && lessonEnded ? 'Quiz pendente' : quiz ? 'Quiz preparado' : 'Sem quiz') + '</span><h3>Quiz da aula</h3><p>' + esc(quiz && lessonEnded ? 'O quiz está pronto para fazer.' : quiz ? 'Quando a aula estiver a terminar, a Home pode sugerir este quiz.' : 'O quiz só aparece na Home depois de o configurares.') + '</p></div></article>';
-    return '<div class="page-head"><div><button class="button button-ghost button-small" type="button" data-route="course" data-id="' + attr(lesson.courseId) + '"><i data-lucide="arrow-left"></i>' + esc(course ? course.code || course.name : "Cadeira") + '</button><h2 style="margin-top:11px">' + esc(lesson.title) + '</h2><p>' + formatLongDate(lesson.date) + (lesson.start ? ' · ' + esc(lesson.start) + '–' + esc(lesson.end || '') : '') + ' · ' + esc(lessonTypeLabel(lesson.type)) + (lesson.room ? ' · ' + esc(lesson.room) : '') + '</p></div><div class="page-actions">' + (!archived ? '<button class="button" type="button" data-action="edit-lesson" data-id="' + attr(lesson.id) + '"><i data-lucide="pencil"></i>Editar aula</button><button class="button ' + (lesson.mastered ? 'button-yellow' : 'button-dark') + '" type="button" data-action="toggle-mastery" data-id="' + attr(lesson.id) + '"><i data-lucide="badge-check"></i>' + (lesson.mastered ? 'Dominada' : 'Marcar dominada') + '</button>' : '') + '</div></div><div class="bento-grid"><article class="card course-hero span-12" style="--course-color:' + safeColor(course && course.color) + ';min-height:220px"><div class="course-hero-copy"><span class="badge badge-dark">' + esc(lesson.type || 'Aula') + '</span><h2>' + esc(lesson.title) + '</h2><p>' + esc(lesson.topics || 'Adiciona os tópicos dados nesta aula.') + '</p></div><div class="course-score"><strong>' + (lesson.mastered ? '✓' : questions.length) + '</strong><span>' + (lesson.mastered ? 'matéria dominada' : 'perguntas antigas') + '</span></div></article>' + quizStatusCard + '<article class="card span-12"><div class="card-title-row"><div><h3>Slides e PDFs</h3><p class="card-subtitle">Os ficheiros são enviados para o Git e ficam disponíveis nos teus dispositivos.</p></div>' + (!archived ? '<button class="button button-small" type="button" data-action="add-material" data-course="' + attr(lesson.courseId) + '" data-lesson="' + attr(lesson.id) + '"><i data-lucide="file-up"></i>Carregar</button>' : '') + '</div><div style="margin-top:15px">' + materialsHtml + '</div></article><article class="card span-7"><div class="card-title-row"><div><h3>Perguntas de anos anteriores</h3></div><div class="list-actions">' + (!archived ? '<button class="button button-small" type="button" data-action="add-question" data-course="' + attr(lesson.courseId) + '" data-lesson="' + attr(lesson.id) + '"><i data-lucide="plus"></i>Pergunta</button>' : '') + '</div></div><div style="margin-top:15px">' + questionsHtml + '</div></article><article class="card span-5 lesson-config-card"><div class="card-title-row"><div><h3>✅ Quiz da aula</h3><p class="card-subtitle">Um por aula. Depois de criado, fica em visualização.</p></div></div>' + quizHtml + '</article><article class="card span-12 lesson-config-card"><div class="card-title-row"><div><h3>✅ TPC da aula</h3><p class="card-subtitle">Aplicação e prática para fazer em casa, separada do quiz.</p></div></div>' + homeworkHtml + '</article><article class="card span-12 notebook-card"><div class="card-title-row"><div><h3>Apontamentos</h3><p class="card-subtitle">Escreve como num caderno ou gera conteúdo com um prompt estruturado.</p></div><div class="list-actions">' + (!archived ? '<button class="button button-small" type="button" data-action="configure-lesson-content" data-kind="notes" data-lesson="' + attr(lesson.id) + '"><i data-lucide="wand-sparkles"></i>Gerar por prompt</button><button class="button button-dark button-small" type="button" data-action="open-notebook-editor" data-lesson="' + attr(lesson.id) + '"><i data-lucide="pencil"></i>Escrever</button>' : '') + '</div></div><div style="margin-top:15px">' + renderNotebookPage(lesson, false) + '</div><div class="notebook-meta"><span><i data-lucide="notebook"></i>' + esc(notebookPaperLabel(lesson.notesPaper)) + '</span><button class="button button-small" type="button" data-action="course-tab" data-id="' + attr(lesson.courseId) + '" data-tab="notebook"><i data-lucide="library-big"></i>Ver caderno da cadeira</button></div></article></div>';
+    return '<div class="page-head"><div><button class="button button-ghost button-small" type="button" data-route="course" data-id="' + attr(lesson.courseId) + '"><i data-lucide="arrow-left"></i>' + esc(course ? course.code || course.name : "Cadeira") + '</button><h2 style="margin-top:11px">' + esc(lesson.title) + '</h2><p>' + formatLongDate(lesson.date) + (lesson.start ? ' · ' + esc(lesson.start) + '–' + esc(lesson.end || '') : '') + ' · ' + esc(lessonTypeLabel(lesson.type)) + (lesson.room ? ' · ' + esc(lesson.room) : '') + '</p></div><div class="page-actions">' + (!archived ? '<button class="button" type="button" data-action="edit-lesson" data-id="' + attr(lesson.id) + '"><i data-lucide="pencil"></i>Editar aula</button><button class="button ' + (lesson.mastered ? 'button-yellow' : 'button-dark') + '" type="button" data-action="toggle-mastery" data-id="' + attr(lesson.id) + '"><i data-lucide="badge-check"></i>' + (lesson.mastered ? 'Dominada' : 'Marcar dominada') + '</button>' : '') + '</div></div><div class="bento-grid"><article class="card course-hero span-12" style="--course-color:' + safeColor(course && course.color) + ';min-height:220px"><div class="course-hero-copy"><span class="badge badge-dark">' + esc(lesson.type || 'Aula') + '</span><h2>' + esc(lesson.title) + '</h2><p>' + esc(lesson.description || lesson.topics || 'Adiciona os tópicos dados nesta aula.') + '</p></div><div class="course-score"><strong>' + (lesson.mastered ? '✓' : questions.length) + '</strong><span>' + (lesson.mastered ? 'matéria dominada' : 'perguntas antigas') + '</span></div></article>' + quizStatusCard + '<article class="card span-12"><div class="card-title-row"><div><h3>Slides e PDFs</h3><p class="card-subtitle">Os ficheiros são enviados para o Git e ficam disponíveis nos teus dispositivos.</p></div>' + (!archived ? '<button class="button button-small" type="button" data-action="add-material" data-course="' + attr(lesson.courseId) + '" data-lesson="' + attr(lesson.id) + '"><i data-lucide="file-up"></i>Carregar</button>' : '') + '</div><div style="margin-top:15px">' + materialsHtml + '</div></article><article class="card span-7"><div class="card-title-row"><div><h3>Perguntas de anos anteriores</h3></div><div class="list-actions">' + (!archived ? '<button class="button button-small" type="button" data-action="add-question" data-course="' + attr(lesson.courseId) + '" data-lesson="' + attr(lesson.id) + '"><i data-lucide="plus"></i>Pergunta</button>' : '') + '</div></div><div style="margin-top:15px">' + questionsHtml + '</div></article><article class="card span-5 lesson-config-card"><div class="card-title-row"><div><h3>✅ Quiz da aula</h3><p class="card-subtitle">Um por aula. Depois de criado, fica em visualização.</p></div></div>' + quizHtml + '</article><article class="card span-12 lesson-config-card"><div class="card-title-row"><div><h3>✅ TPC da aula</h3><p class="card-subtitle">Aplicação e prática para fazer em casa, separada do quiz.</p></div></div>' + homeworkHtml + '</article><article class="card span-12 notebook-card"><div class="card-title-row"><div><h3>Apontamentos</h3><p class="card-subtitle">Escreve como num caderno ou gera conteúdo com um prompt estruturado.</p></div><div class="list-actions">' + (!archived ? '<button class="button button-small" type="button" data-action="configure-lesson-content" data-kind="notes" data-lesson="' + attr(lesson.id) + '"><i data-lucide="wand-sparkles"></i>Gerar por prompt</button><button class="button button-dark button-small" type="button" data-action="open-notebook-editor" data-lesson="' + attr(lesson.id) + '"><i data-lucide="pencil"></i>Escrever</button>' : '') + '</div></div><div style="margin-top:15px">' + renderNotebookPage(lesson, false) + '</div><div class="notebook-meta"><span><i data-lucide="notebook"></i>' + esc(notebookPaperLabel(lesson.notesPaper)) + '</span><button class="button button-small" type="button" data-action="course-tab" data-id="' + attr(lesson.courseId) + '" data-tab="notebook"><i data-lucide="library-big"></i>Ver caderno da cadeira</button></div></article></div>';
   }
 
   function plannerModeControl(active) {
@@ -4428,6 +4430,294 @@
     var projectHtml = projects.length ? projects.map(renderAIProjectCard).join("") : '<div class="span-12">' + emptyState("brain", "Ainda não tens projetos de IA", "Envia um PowerPoint para o Git e cria apontamentos, quizzes e flashcards sem API.", "ai-pick-pptx", "Escolher PowerPoint") + '</div>';
 
     return '<div class="page-head"><div><button class="button button-ghost button-small" type="button" data-route="study" data-tab="practice"><i data-lucide="arrow-left"></i>Praticar</button><h2 style="margin-top:11px">Transforma slides em estudo.</h2><p>Apontamentos, resumo, quiz e flashcards gerados localmente no browser.</p></div><div class="page-actions">' + modelWarning + '<button class="button" type="button" data-action="ai-pick-pptx"><i data-lucide="file-plus-2"></i>Importar .pptx</button></div></div><div class="bento-grid ai-page"><article class="card card-violet span-12 ai-hero"><div><p class="card-label">Twenty AI · offline depois do download</p><h2>Dos slides para o modo estudo.</h2><p>' + esc(supportCopy) + '</p></div><div class="ai-hero-model"><span>Recomendado neste dispositivo</span><strong>' + esc(recommendation.label) + '</strong><small>' + esc(recommendation.size || "") + '</small></div></article>' + renderAIProgress() + '<article class="card span-7 ai-generator-card"><div class="card-title-row"><div><p class="card-label">1 · Importar</p><h3>PowerPoint</h3><p class="card-subtitle">A Twenty extrai o texto e envia o .pptx para a pasta data/files do repositório privado.</p></div><span class="metric-icon"><i data-lucide="presentation"></i></span></div>' + draftHtml + '<form id="aiGeneratorForm" class="form-grid ai-generator-form"><div class="field"><label>Cadeira</label><select name="courseId"><option value="">Sem cadeira específica</option>' + courseOptions(courseValue) + '</select></div><div class="field"><label>Modelo</label><select name="modelMode"><option value="auto" ' + (modelValue === "auto" ? 'selected' : '') + '>Automático · recomendado</option><option value="fast" ' + (modelValue === "fast" ? 'selected' : '') + '>Rápido · Qwen 0.5B</option><option value="quality" ' + (modelValue === "quality" ? 'selected' : '') + '>Qualidade · Qwen 1.5B</option></select></div><div class="field"><label>O que criar</label><select name="output"><option value="all" ' + (outputValue === "all" ? 'selected' : '') + '>Tudo</option><option value="notes" ' + (outputValue === "notes" ? 'selected' : '') + '>Apontamentos completos</option><option value="summary" ' + (outputValue === "summary" ? 'selected' : '') + '>Resumo rápido</option><option value="quiz" ' + (outputValue === "quiz" ? 'selected' : '') + '>Quiz</option><option value="flashcards" ' + (outputValue === "flashcards" ? 'selected' : '') + '>Flashcards</option></select></div><div class="field"><label>Dificuldade</label><select name="difficulty"><option value="auto" ' + (difficultyValue === "auto" ? 'selected' : '') + '>Automática</option><option value="easy" ' + (difficultyValue === "easy" ? 'selected' : '') + '>Fácil</option><option value="medium" ' + (difficultyValue === "medium" ? 'selected' : '') + '>Média</option><option value="hard" ' + (difficultyValue === "hard" ? 'selected' : '') + '>Difícil</option></select></div><div class="field field-full"><label>Número de perguntas / flashcards</label><div class="ai-range-row"><input name="questionCount" type="range" min="5" max="30" step="5" value="' + questionValue + '" data-role="ai-question-range"><output id="aiQuestionCountOutput">' + questionValue + '</output></div></div></form><button class="button button-dark ai-generate-button" type="button" data-action="ai-generate" ' + (!aiDraft || aiBusy || !supported ? 'disabled' : '') + '><i data-lucide="sparkles"></i>' + (aiBusy ? 'A gerar…' : 'Gerar material de estudo') + '</button><p class="form-note"><strong>Primeira utilização:</strong> o modelo pode ocupar centenas de MB. Depois fica em cache neste dispositivo. Slides compostos apenas por imagens ainda não têm OCR.</p></article><article class="card span-5 ai-device-card"><div class="card-title-row"><div><p class="card-label">Como funciona</p><h3>Privado por defeito</h3></div><span class="metric-icon"><i data-lucide="shield-check"></i></span></div><div class="ai-steps"><div><span>1</span><p><strong>Extrai texto</strong><small>JSZip abre o .pptx no browser.</small></p></div><div><span>2</span><p><strong>Gera localmente</strong><small>WebLLM usa a GPU com WebGPU.</small></p></div><div><span>3</span><p><strong>Guarda na Twenty</strong><small>PowerPoint, apontamentos e quiz sincronizam com o Git; o modelo continua local.</small></p></div></div><div class="form-note"><strong>Modelo recomendado:</strong> ' + esc(recommendation.label) + ' (' + esc(recommendation.size || "tamanho variável") + '). Podes escolher manualmente antes de gerar.</div></article><section class="span-12 section-block"><div class="section-heading"><div><h3>Apresentações sincronizadas</h3><p>Os PowerPoints aparecem em todos os teus dispositivos; os resultados da IA ficam associados ao mesmo ficheiro.</p></div><span class="badge badge-violet">' + projects.length + '</span></div><div class="bento-grid">' + projectHtml + '</div></section></div>';
+  }
+
+
+  function beginLessonFromSlides(courseId) {
+    var course = courseById(courseId);
+    if (!course) { toast("Escolhe uma cadeira válida.", "warning"); return; }
+    if (!AI || !AI.extractPptx || !AI.generateStudyPack) { toast("A IA local ainda não está disponível neste browser.", "warning"); return; }
+    if (AI.supportsWebGPU && !AI.supportsWebGPU()) {
+      toast("Para analisar os slides, abre a Twenty no Chrome atualizado com WebGPU.", "warning");
+      return;
+    }
+    lessonSlideImportContext = { courseId: course.id };
+    if (pptxInput) {
+      pptxInput.value = "";
+      pptxInput.click();
+    }
+  }
+
+  function lessonSlideSchedulePreset(courseId) {
+    var next = getNextClass(new Date(), { courseId: courseId, unprepared: true });
+    if (next && next.schedule) {
+      return {
+        scheduleId: next.schedule.id,
+        date: next.dateISO,
+        start: next.schedule.start || "",
+        end: next.schedule.end || "",
+        room: next.schedule.room || "",
+        type: next.schedule.type || "T"
+      };
+    }
+    var entry = semesterItems("schedule").find(function (item) { return item.courseId === courseId; });
+    return {
+      scheduleId: entry ? entry.id : null,
+      date: todayISO(),
+      start: entry && entry.start || "",
+      end: entry && entry.end || "",
+      room: entry && entry.room || "",
+      type: entry && entry.type || "T"
+    };
+  }
+
+  function lessonSlideQuestionPreview(question, index) {
+    var label = classGameLabel(question);
+    return '<div class="lesson-slide-question"><span>' + (index + 1) + '</span><div><strong>' + esc(question.prompt || "Pergunta") + '</strong><small>' + esc(label) + (asArray(question.sourceSlides).length ? ' · slide ' + esc(question.sourceSlides.join(", ")) : '') + '</small></div></div>';
+  }
+
+  function openLessonFromSlidesReview() {
+    var draft = lessonSlideDraft;
+    if (!draft) return;
+    var course = courseById(draft.courseId);
+    if (!course) return;
+    var plan = draft.generated.lessonPlan || {};
+    var homework = plan.homework || {};
+    var notes = draft.generated.notes || null;
+    var questions = asArray(draft.generated.quizQuestions);
+    var preset = draft.preset || lessonSlideSchedulePreset(course.id);
+    var dueDate = addCalendarDays(preset.date || todayISO(), homework.dueInDays == null ? 3 : homework.dueInDays);
+    var objectives = asArray(plan.objectives);
+    var objectiveHtml = objectives.length ? '<ul class="lesson-slide-objectives">' + objectives.map(function (item) { return '<li>' + esc(item) + '</li>'; }).join("") + '</ul>' : '<p class="form-note">A IA não identificou objetivos separados; podes ajustar a descrição antes de criar.</p>';
+    var questionPreview = questions.length ? questions.slice(0, 4).map(lessonSlideQuestionPreview).join("") + (questions.length > 4 ? '<small class="lesson-slide-more">+' + (questions.length - 4) + ' perguntas no Quiz-Aula</small>' : '') : '<p class="form-note">Não foram geradas perguntas válidas. Podes criar a aula sem quiz.</p>';
+    var syncCopy = draft.remoteFile ? 'Sincronizado no Git e guardado localmente.' : 'Guardado neste dispositivo. Poderás sincronizá-lo mais tarde.';
+    var body = '<form id="lessonFromSlidesForm" class="lesson-from-slides-form" data-course="' + attr(course.id) + '">'
+      + '<section class="lesson-slide-source"><span class="metric-icon"><i data-lucide="presentation"></i></span><div><p class="card-label">PowerPoint analisado</p><h3>' + esc(draft.fileName) + '</h3><small>' + Number(draft.extracted.slideCount || 0) + ' slides · ' + esc(syncCopy) + '</small></div><span class="badge badge-violet"><i data-lucide="sparkles"></i>IA local</span></section>'
+      + '<div class="lesson-slide-review-grid"><section class="lesson-slide-review-main"><div class="section-heading"><div><h3>1 · Aula</h3><p>Revê o que a IA percebeu antes de guardar.</p></div></div><div class="form-grid"><div class="field field-full"><label>Título da aula</label><input name="title" required maxlength="100" value="' + attr(plan.title || draft.fileName.replace(/\.pptx$/i, "")) + '"></div><div class="field field-full"><label>Descrição</label><textarea name="description" rows="4" required>' + esc(plan.description || (notes && notes.overview) || "") + '</textarea></div><div class="field"><label>Data</label><input name="date" type="date" required value="' + attr(preset.date || todayISO()) + '"></div><div class="field"><label>Tipo</label><select name="type"><option value="T" ' + (preset.type === "T" ? "selected" : "") + '>Teórica</option><option value="TP" ' + (preset.type === "TP" ? "selected" : "") + '>Teórico-prática</option><option value="P" ' + (preset.type === "P" ? "selected" : "") + '>Prática</option><option value="LAB" ' + (preset.type === "LAB" ? "selected" : "") + '>Laboratório</option><option value="OT" ' + (preset.type === "OT" ? "selected" : "") + '>Orientação</option></select></div><div class="field"><label>Início</label><input name="start" type="time" value="' + attr(preset.start || "") + '"></div><div class="field"><label>Fim</label><input name="end" type="time" value="' + attr(preset.end || "") + '"></div><div class="field field-full"><label>Sala</label><input name="room" maxlength="80" value="' + attr(preset.room || "") + '"></div></div><div class="lesson-slide-objective-card"><strong>Objetivos identificados</strong>' + objectiveHtml + '</div></section>'
+      + '<aside class="lesson-slide-review-side"><section class="lesson-slide-option is-enabled"><label class="lesson-slide-toggle"><input type="checkbox" name="includeQuiz" ' + (questions.length ? "checked" : "") + '><span><strong>Criar Quiz-Aula</strong><small>' + questions.length + ' perguntas · minijogos adaptados ao conteúdo</small></span></label><div class="field"><label>Título do quiz</label><input name="quizTitle" maxlength="120" value="' + attr(plan.quizTitle || ("Quiz da aula · " + (plan.title || "Nova aula"))) + '"></div><div class="lesson-slide-question-list">' + questionPreview + '</div></section><section class="lesson-slide-option is-enabled"><label class="lesson-slide-toggle"><input type="checkbox" name="includeHomework" checked><span><strong>Criar TPC</strong><small>Fica ligado à aula e entra nas mailboxes.</small></span></label><div class="field"><label>Título do TPC</label><input name="homeworkTitle" maxlength="120" value="' + attr(homework.title || ("TPC · " + (plan.title || "Nova aula"))) + '"></div><div class="field"><label>Instruções</label><textarea name="homeworkInstructions" rows="4">' + esc(homework.instructions || "") + '</textarea></div><div class="form-grid"><div class="field"><label>Prazo</label><input name="homeworkDueDate" type="date" value="' + attr(dueDate) + '"></div><div class="field"><label>Tempo estimado</label><input name="homeworkMinutes" type="number" min="5" max="240" step="5" value="' + attr(homework.estimatedMinutes || 30) + '"></div></div><div class="field"><label>Passos · um por linha</label><textarea name="homeworkSteps" rows="4">' + esc(asArray(homework.steps).join("\n")) + '</textarea></div></section></aside></div><div class="form-error" hidden></div></form>';
+    var footer = '<footer class="modal-foot"><button class="button" type="button" data-action="cancel-lesson-from-slides">Cancelar</button><button class="button button-dark" type="button" data-action="confirm-lesson-from-slides"><i data-lucide="sparkles"></i>Criar aula completa</button></footer>';
+    openModal("Criar aula a partir dos slides", body, { className: "modal-lesson-from-slides", footer: footer });
+  }
+
+  async function handleLessonFromSlidesFile(file) {
+    var context = lessonSlideImportContext;
+    lessonSlideImportContext = null;
+    if (!file || !context || !AI) return;
+    var course = courseById(context.courseId);
+    if (!course) return;
+    if (!/\.pptx$/i.test(file.name || "")) { toast("Escolhe um ficheiro PowerPoint .pptx.", "warning"); return; }
+    if (file.size > 25 * 1024 * 1024) { toast("O PowerPoint tem mais de 25 MB.", "warning"); return; }
+    aiBusy = true;
+    var temporaryBlobId = null;
+    var temporaryRemoteFile = null;
+    setManualSyncActivity("A abrir os slides…", "A Twenty está a extrair o texto do PowerPoint.", 3, true);
+    try {
+      var extracted = await AI.extractPptx(file, function (report) {
+        setManualSyncActivity("A analisar os slides…", report.text || "A ler o PowerPoint.", Math.min(24, Number(report.progress) || 5), true);
+      });
+      var hasText = asArray(extracted.slides).some(function (slide) { return String(slide.text || "").trim().length > 20; });
+      if (!hasText) throw new Error("Não encontrei texto selecionável nos slides. PowerPoints compostos apenas por imagens ainda precisam de OCR.");
+      var materialId = uid("material");
+      var blobId = await DB.putFile(file, { courseId: course.id, lessonId: null, source: "lesson-from-slides" });
+      temporaryBlobId = blobId;
+      var remoteFile = null;
+      if (Sync && Sync.getStatus().configured && navigator.onLine) {
+        try {
+          setManualSyncActivity("A guardar os slides…", "A enviar uma cópia para o repositório privado.", 25, true);
+          remoteFile = await Sync.uploadFile(file, {
+            id: materialId,
+            name: file.name,
+            onProgress: function (report) {
+              var progress = report.progress == null ? null : 25 + Math.round(report.progress * 0.22);
+              setManualSyncActivity("A guardar os slides…", report.total ? formatBytes(report.loaded) + " de " + formatBytes(report.total) : "A enviar o PowerPoint…", progress, true);
+            },
+            onReady: function (request) { aiTransferRequest = request; }
+          });
+          temporaryRemoteFile = remoteFile;
+          aiTransferRequest = null;
+        } catch (uploadError) {
+          console.warn("Lesson slides upload deferred:", uploadError);
+          remoteFile = null;
+        }
+      }
+      setManualSyncActivity("A criar a aula com IA…", "A preparar título, descrição, Quiz-Aula e TPC.", 49, true);
+      var generated = await AI.generateStudyPack(extracted, {
+        output: "lesson",
+        modelMode: state.settings.aiModelMode || "auto",
+        difficulty: state.settings.aiDifficulty || "auto",
+        questionCount: Math.max(5, Math.min(10, Number(state.settings.aiQuestionCount) || 5))
+      }, function (report) {
+        var progress = report.progress == null ? null : 49 + Math.round(Number(report.progress || 0) * 0.48);
+        setManualSyncActivity(report.kind === "model" ? "A preparar a IA local…" : "A construir a aula…", report.text || "A analisar a matéria.", progress, true);
+      });
+      lessonSlideDraft = {
+        courseId: course.id,
+        materialId: materialId,
+        blobId: blobId,
+        remoteFile: remoteFile,
+        fileName: file.name,
+        fileSize: file.size,
+        mimeType: file.type || "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+        extracted: extracted,
+        generated: generated,
+        preset: lessonSlideSchedulePreset(course.id)
+      };
+      temporaryBlobId = null;
+      temporaryRemoteFile = null;
+      aiBusy = false;
+      finishManualSyncActivity(true);
+      openLessonFromSlidesReview();
+    } catch (error) {
+      if (temporaryBlobId) { try { await DB.deleteFile(temporaryBlobId); } catch (_) {} }
+      if (temporaryRemoteFile && Sync && Sync.deleteFile) { try { await Sync.deleteFile(temporaryRemoteFile); } catch (_) {} }
+      aiBusy = false;
+      finishManualSyncActivity(false);
+      toast(error.message || "Não foi possível criar a aula a partir dos slides.", "error");
+    } finally {
+      if (pptxInput) pptxInput.value = "";
+    }
+  }
+
+  async function cancelLessonFromSlides() {
+    var draft = lessonSlideDraft;
+    lessonSlideDraft = null;
+    closeModal();
+    if (draft && draft.blobId) { try { await DB.deleteFile(draft.blobId); } catch (_) {} }
+    if (draft && draft.remoteFile && Sync && Sync.deleteFile) { try { await Sync.deleteFile(draft.remoteFile); } catch (_) {} }
+    toast("Criação da aula cancelada.", "warning");
+  }
+
+  async function confirmLessonFromSlides() {
+    var form = modalRoot.querySelector("#lessonFromSlidesForm");
+    var draft = lessonSlideDraft;
+    if (!form || !draft) return;
+    var errorBox = form.querySelector(".form-error");
+    var title = String(form.elements.title.value || "").trim();
+    var description = String(form.elements.description.value || "").trim();
+    if (!title || !description || !form.elements.date.value) {
+      if (errorBox) { errorBox.hidden = false; errorBox.textContent = "Preenche o título, a descrição e a data da aula."; }
+      return;
+    }
+    var confirmButton = modalRoot.querySelector('[data-action="confirm-lesson-from-slides"]');
+    if (confirmButton) confirmButton.disabled = true;
+    var lessonId = uid("lesson");
+    var now = new Date().toISOString();
+    var notes = draft.generated.notes || null;
+    var lessonDate = form.elements.date.value;
+    var lessonStart = form.elements.start.value || "";
+    var lessonType = form.elements.type.value || "T";
+    var matchedSchedule = semesterItems("schedule").find(function (entry) {
+      return entry.courseId === draft.courseId && String(entry.type || "") === String(lessonType) && Number(entry.weekday) === (localDate(lessonDate) || new Date()).getDay() && (!lessonStart || entry.start === lessonStart);
+    }) || null;
+    if (matchedSchedule) {
+      var duplicate = semesterItems("lessons").find(function (item) { return item.date === lessonDate && lessonMatchesSchedule(item, matchedSchedule); });
+      if (duplicate) {
+        if (confirmButton) confirmButton.disabled = false;
+        if (errorBox) { errorBox.hidden = false; errorBox.textContent = "Esse período já está ligado à aula “" + duplicate.title + "”."; }
+        return;
+      }
+    }
+    var lesson = {
+      id: lessonId,
+      semesterId: state.currentSemesterId,
+      courseId: draft.courseId,
+      scheduleId: matchedSchedule ? matchedSchedule.id : null,
+      date: lessonDate,
+      start: lessonStart,
+      end: form.elements.end.value || "",
+      room: String(form.elements.room.value || (matchedSchedule && matchedSchedule.room) || "").trim(),
+      type: lessonType,
+      title: title,
+      description: description,
+      notes: "",
+      notesHtml: "",
+      notesPaper: "lined",
+      notesFont: "app",
+      aiNotes: notes ? [{ id: uid("ainote"), title: notes.title || ("Apontamentos · " + title), notes: notes, summary: draft.generated.summary || description, lessonIds: [lessonId], modelId: draft.generated.modelId || "", createdAt: now }] : [],
+      mastered: false,
+      generatedFromSlides: true,
+      createdAt: now,
+      updatedAt: now
+    };
+    var material = {
+      id: draft.materialId,
+      semesterId: state.currentSemesterId,
+      courseId: draft.courseId,
+      lessonId: lessonId,
+      title: title + " · Slides",
+      fileName: draft.fileName,
+      mimeType: draft.mimeType,
+      size: draft.fileSize,
+      source: draft.remoteFile ? "remote" : "local",
+      blobId: draft.blobId,
+      remoteFile: draft.remoteFile || null,
+      slides: asArray(draft.extracted.slides),
+      slideCount: Number(draft.extracted.slideCount) || asArray(draft.extracted.slides).length,
+      uploadStatus: draft.remoteFile ? "ready" : "local",
+      createdAt: now
+    };
+    var createdQuiz = null;
+    if (form.elements.includeQuiz.checked && asArray(draft.generated.quizQuestions).length) {
+      createdQuiz = {
+        id: uid("quiz"),
+        semesterId: state.currentSemesterId,
+        courseId: draft.courseId,
+        lessonId: lessonId,
+        title: String(form.elements.quizTitle.value || ("Quiz da aula · " + title)).trim(),
+        questions: draft.generated.quizQuestions,
+        generatedByAI: true,
+        generatedFromSlides: true,
+        lockedContent: true,
+        createdAt: now,
+        lastScore: null
+      };
+    }
+    var createdHomework = null;
+    if (form.elements.includeHomework.checked) {
+      var instructions = String(form.elements.homeworkInstructions.value || "").trim();
+      var steps = String(form.elements.homeworkSteps.value || "").split(/\n+/).map(function (item) { return item.trim(); }).filter(Boolean);
+      createdHomework = {
+        id: uid("task"),
+        semesterId: state.currentSemesterId,
+        courseId: draft.courseId,
+        lessonId: lessonId,
+        title: String(form.elements.homeworkTitle.value || ("TPC · " + title)).trim(),
+        type: "homework",
+        dueDate: form.elements.homeworkDueDate.value || addCalendarDays(form.elements.date.value, 3),
+        dueTime: "20:30",
+        priority: "normal",
+        done: false,
+        estimatedMinutes: clamp(Number(form.elements.homeworkMinutes.value) || 30, 5, 240),
+        contentBlocks: normalizeContentBlocks(instructions),
+        solutionBlocks: [],
+        checklist: steps,
+        extraTasks: [],
+        configuredFromPrompt: true,
+        generatedByAI: true,
+        generatedFromSlides: true,
+        lockedContent: true,
+        createdAt: now
+      };
+    }
+    var snapshot = clone(state);
+    try {
+      state.lessons.push(lesson);
+      state.materials.push(material);
+      if (createdQuiz) state.quizzes.push(createdQuiz);
+      if (createdHomework) state.tasks.push(createdHomework);
+      await save(true);
+      if (Sync && Sync.getStatus().configured) {
+        try { await Sync.syncNow(state, defaultState()); } catch (syncError) { console.warn("Lesson from slides sync queued:", syncError); }
+      }
+      lessonSlideDraft = null;
+      closeModal();
+      setRoute("lesson", lessonId);
+      toast("Aula, slides" + (createdQuiz ? ", Quiz-Aula" : "") + (createdHomework ? " e TPC" : "") + " criados.");
+    } catch (error) {
+      state = normalizeState(snapshot);
+      if (confirmButton) confirmButton.disabled = false;
+      if (errorBox) { errorBox.hidden = false; errorBox.textContent = error.message || "Não foi possível guardar a aula."; }
+    }
   }
 
   async function handleAIPptxFile(file) {
@@ -7882,7 +8172,7 @@
         lesson.end = selectedSlot.end;
         lesson.room = lesson.room || selectedSlot.room || "";
       }
-      body = '<form id="entityForm" data-type="lesson" data-id="' + attr(existingLesson && existingLesson.id) + '"><div class="form-grid"><div class="field"><label>Cadeira</label><select name="courseId" data-role="lesson-course" required><option value="">Escolher…</option>' + courseOptions(selectedCourse) + '</select></div><div class="field"><label>Data</label><input name="date" data-role="lesson-date" type="date" required value="' + attr(selectedLessonDate) + '"></div><div class="field"><label>Tipo de aula</label><select name="lessonType" data-role="lesson-type"><option value="T" ' + (selectedLessonType === "T" ? "selected" : "") + '>Teórica</option><option value="TP" ' + (selectedLessonType === "TP" ? "selected" : "") + '>Teórico-prática</option><option value="P" ' + (selectedLessonType === "P" ? "selected" : "") + '>Prática</option><option value="LAB" ' + (selectedLessonType === "LAB" ? "selected" : "") + '>Laboratório</option><option value="OT" ' + (selectedLessonType === "OT" ? "selected" : "") + '>Orientação</option></select></div><div class="field"><label>Bloco compatível do horário</label><select name="scheduleId" data-role="lesson-schedule" required><option value="">Escolher bloco…</option>' + scheduleOptionsForLesson(selectedCourse, selectedLessonType, selectedLessonDate, selectedScheduleId) + '</select><small>Só aparecem blocos da mesma cadeira, dia e tipo.</small></div><div class="field field-full"><label>Nome da aula</label><input name="title" required placeholder="Ex.: TP08 · Herança e polimorfismo" value="' + attr(lesson.title) + '"></div><div class="field"><label>Início</label><input name="start" type="time" readonly value="' + attr(lesson.start || "") + '"></div><div class="field"><label>Fim</label><input name="end" type="time" readonly value="' + attr(lesson.end || "") + '"></div><div class="field field-full"><label>Sala</label><input name="room" placeholder="Ex.: B2.14" value="' + attr(lesson.room) + '"></div><div class="field field-full"><label>Matéria / tópicos</label><textarea name="topics" placeholder="Conceitos dados, capítulos, exercícios…">' + esc(lesson.topics) + '</textarea></div>' + (!existingLesson ? '<div class="field"><label>PDF opcional</label><input name="file" type="file" accept="application/pdf,image/*,.pptx,.txt,.md"></div><div class="field"><label>Ano letivo do PDF</label><input name="materialYear" placeholder="2025/26" value="' + attr(year) + '"></div>' : "") + '</div><div class="form-note" style="margin-top:13px">A aula fica ligada ao período real do horário. O nome que escreveres aparecerá na aula em direto e no Calendário.</div></form>';
+      body = '<form id="entityForm" data-type="lesson" data-id="' + attr(existingLesson && existingLesson.id) + '"><div class="form-grid"><div class="field"><label>Cadeira</label><select name="courseId" data-role="lesson-course" required><option value="">Escolher…</option>' + courseOptions(selectedCourse) + '</select></div><div class="field"><label>Data</label><input name="date" data-role="lesson-date" type="date" required value="' + attr(selectedLessonDate) + '"></div><div class="field"><label>Tipo de aula</label><select name="lessonType" data-role="lesson-type"><option value="T" ' + (selectedLessonType === "T" ? "selected" : "") + '>Teórica</option><option value="TP" ' + (selectedLessonType === "TP" ? "selected" : "") + '>Teórico-prática</option><option value="P" ' + (selectedLessonType === "P" ? "selected" : "") + '>Prática</option><option value="LAB" ' + (selectedLessonType === "LAB" ? "selected" : "") + '>Laboratório</option><option value="OT" ' + (selectedLessonType === "OT" ? "selected" : "") + '>Orientação</option></select></div><div class="field"><label>Bloco compatível do horário</label><select name="scheduleId" data-role="lesson-schedule" required><option value="">Escolher bloco…</option>' + scheduleOptionsForLesson(selectedCourse, selectedLessonType, selectedLessonDate, selectedScheduleId) + '</select><small>Só aparecem blocos da mesma cadeira, dia e tipo.</small></div><div class="field field-full"><label>Nome da aula</label><input name="title" required placeholder="Ex.: TP08 · Herança e polimorfismo" value="' + attr(lesson.title) + '"></div><div class="field"><label>Início</label><input name="start" type="time" readonly value="' + attr(lesson.start || "") + '"></div><div class="field"><label>Fim</label><input name="end" type="time" readonly value="' + attr(lesson.end || "") + '"></div><div class="field field-full"><label>Sala</label><input name="room" placeholder="Ex.: B2.14" value="' + attr(lesson.room) + '"></div><div class="field field-full"><label>Descrição da aula</label><textarea name="description" placeholder="Resumo curto do que foi abordado…">' + esc(lesson.description) + '</textarea></div><div class="field field-full"><label>Matéria / tópicos</label><textarea name="topics" placeholder="Conceitos dados, capítulos, exercícios…">' + esc(lesson.topics) + '</textarea></div>' + (!existingLesson ? '<div class="field"><label>PDF opcional</label><input name="file" type="file" accept="application/pdf,image/*,.pptx,.txt,.md"></div><div class="field"><label>Ano letivo do PDF</label><input name="materialYear" placeholder="2025/26" value="' + attr(year) + '"></div>' : "") + '</div><div class="form-note" style="margin-top:13px">A aula fica ligada ao período real do horário. O nome que escreveres aparecerá na aula em direto e no Calendário.</div></form>';
     } else if (type === "material") {
       title = "Carregar slides ou PDF";
       var materialCourse = preset.courseId || (activeCourses()[0] && activeCourses()[0].id) || "";
@@ -8329,6 +8619,7 @@
           end: lessonSchedule.end,
           type: lessonSchedule.type,
           room: String(data.get("room") || lessonSchedule.room || "").trim(),
+          description: String(data.get("description") || "").trim(),
           topics: String(data.get("topics") || "").trim(),
           notes: existingLesson ? existingLesson.notes || "" : "",
           mastered: existingLesson ? !!existingLesson.mastered : false
@@ -9555,6 +9846,7 @@
     var action = button.getAttribute("data-action");
     if (!action) return;
     if (action === "close-modal") {
+      if (modalRoot.querySelector("#lessonFromSlidesForm")) { await cancelLessonFromSlides(); return; }
       if (quizRuntime) quizRuntime = null;
       if (reviewRuntime) reviewRuntime = null;
       pendingStudyReflectionSessionId = null;
@@ -9595,6 +9887,12 @@
       updateEvaluationBuilderSummary(courseForm);
     } else if (action === "edit-lesson") {
       openEntityForm("lesson", { id: button.dataset.id });
+    } else if (action === "create-lesson-from-slides") {
+      beginLessonFromSlides(button.dataset.course || (route.name === "course" ? route.id : ""));
+    } else if (action === "confirm-lesson-from-slides") {
+      await confirmLessonFromSlides();
+    } else if (action === "cancel-lesson-from-slides") {
+      await cancelLessonFromSlides();
     } else if (action === "create-lesson") {
       var lessonPreset = {};
       if (button.dataset.course) lessonPreset.courseId = button.dataset.course;
@@ -10376,7 +10674,7 @@
       }, 60000);
       if (!state.profile.onboardingComplete || !state.currentSemesterId || !activeCourses().length) startOnboarding(state.semesters.length ? "new-semester" : "first");
       if ("serviceWorker" in navigator && location.protocol !== "file:") {
-        navigator.serviceWorker.register("sw.js?v=32.1-topbar-context", { updateViaCache: "none" }).then(function () {
+        navigator.serviceWorker.register("sw.js?v=33.0-lesson-from-slides", { updateViaCache: "none" }).then(function () {
           if (Sync && Sync.getStatus().configured) Sync.startAutoSync();
         }).catch(function () {
           if (Sync && Sync.getStatus().configured) Sync.startAutoSync();
@@ -10472,7 +10770,9 @@
       return;
     }
     if (event.target === pptxInput) {
-      handleAIPptxFile(event.target.files && event.target.files[0]);
+      var selectedPptx = event.target.files && event.target.files[0];
+      if (lessonSlideImportContext) handleLessonFromSlidesFile(selectedPptx);
+      else handleAIPptxFile(selectedPptx);
       return;
     }
     if (event.target.matches('[data-role="ai-question-range"]')) {
@@ -10781,6 +11081,7 @@
     if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k") { event.preventDefault(); searchInput.focus(); searchInput.select(); }
     if (event.key === "Escape") {
       if (guidedTour) stopGuidedTour(true);
+      else if (modalRoot.querySelector("#lessonFromSlidesForm")) await cancelLessonFromSlides();
       else if (reviewRuntime) { reviewRuntime = null; closeModal(); }
       else if (!onboarding) await closeModalSavingNotebook();
       searchResults.hidden = true;

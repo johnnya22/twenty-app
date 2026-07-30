@@ -1,16 +1,16 @@
 "use strict";
 
-var CACHE = "twenty-study-os-v32-1-topbar-context";
+var CACHE = "twenty-study-os-v33-0-lesson-from-slides";
 var APP_SHELL = [
   "./",
   "./index.html",
-  "./styles.css?v=32.1-topbar-context",
-  "./sync.js?v=32.1-topbar-context",
-  "./db.js?v=32.1-topbar-context",
-  "./ai.js?v=32.1-topbar-context",
-  "./ai-worker.js?v=32.1-topbar-context",
-  "./app.js?v=32.1-topbar-context",
-  "./lucide.min.js?v=32.1-topbar-context",
+  "./styles.css?v=33.0-lesson-from-slides",
+  "./sync.js?v=33.0-lesson-from-slides",
+  "./db.js?v=33.0-lesson-from-slides",
+  "./ai.js?v=33.0-lesson-from-slides",
+  "./ai-worker.js?v=33.0-lesson-from-slides",
+  "./app.js?v=33.0-lesson-from-slides",
+  "./lucide.min.js?v=33.0-lesson-from-slides",
   "./manifest.webmanifest",
   "./icon.svg",
   "./icon-192.png",
