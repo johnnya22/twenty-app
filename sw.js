@@ -1,16 +1,16 @@
 "use strict";
 
-var CACHE = "twenty-study-os-v32-campus-day";
+var CACHE = "twenty-study-os-v32-1-topbar-context";
 var APP_SHELL = [
   "./",
   "./index.html",
-  "./styles.css?v=32.0-campus-day",
-  "./sync.js?v=32.0-campus-day",
-  "./db.js?v=32.0-campus-day",
-  "./ai.js?v=32.0-campus-day",
-  "./ai-worker.js?v=32.0-campus-day",
-  "./app.js?v=32.0-campus-day",
-  "./lucide.min.js?v=32.0-campus-day",
+  "./styles.css?v=32.1-topbar-context",
+  "./sync.js?v=32.1-topbar-context",
+  "./db.js?v=32.1-topbar-context",
+  "./ai.js?v=32.1-topbar-context",
+  "./ai-worker.js?v=32.1-topbar-context",
+  "./app.js?v=32.1-topbar-context",
+  "./lucide.min.js?v=32.1-topbar-context",
   "./manifest.webmanifest",
   "./icon.svg",
   "./icon-192.png",

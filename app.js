@@ -85,6 +85,7 @@
   var modalInitialFingerprint = "";
   var canteenClockTimer = null;
   var homeClockTimer = null;
+  var topContextTimer = null;
   var homeworkClockTimer = null;
   var homeworkSessionRuntime = null;
   var selectedMailboxTaskId = null;
@@ -1553,6 +1554,7 @@
       : "<small>Sem semestre</small><strong>Configura o próximo</strong>";
     document.documentElement.classList.toggle("reduce-motion", !!state.settings.reduceMotion);
     renderNav();
+    refreshTopContextView();
   }
 
   function navRouteName() {
@@ -1698,6 +1700,10 @@
       clearTimeout(homeClockTimer);
       homeClockTimer = null;
     }
+    if (topContextTimer) {
+      clearTimeout(topContextTimer);
+      topContextTimer = null;
+    }
     if (homeworkClockTimer) {
       clearTimeout(homeworkClockTimer);
       homeworkClockTimer = null;
@@ -1737,14 +1743,17 @@
       setTimeout(function () { ensureCanteenAIForCurrentMeal(false); }, 0);
       scheduleCanteenClockRefresh();
     }
+    if (!canteenWeatherState || Date.now() - Number(canteenWeatherState.fetchedAt || 0) > 30 * 60 * 1000) {
+      setTimeout(function () {
+        ensureCanteenWeather(todayISO()).then(function (weather) {
+          if (!weather) return;
+          refreshTopContextView();
+          if (route.name === "home" && !modalRoot.querySelector(".modal-card")) render();
+        }).catch(function () {});
+      }, 0);
+    }
+    scheduleTopContextRefresh();
     if (route.name === "home") {
-      if (!canteenWeatherState || Date.now() - Number(canteenWeatherState.fetchedAt || 0) > 30 * 60 * 1000) {
-        setTimeout(function () {
-          ensureCanteenWeather(todayISO()).then(function (weather) {
-            if (weather && route.name === "home" && !modalRoot.querySelector(".modal-card")) render();
-          }).catch(function () {});
-        }, 0);
-      }
       homeClockTimer = setTimeout(function () {
         if (route.name === "home" && !modalRoot.querySelector(".modal-card")) render();
       }, 60000 - (Date.now() % 60000) + 250);
@@ -2668,6 +2677,62 @@
     return context.kind === "rainy" ? "cloud-rain" : context.kind === "snowy" ? "snowflake" : context.kind === "foggy" ? "cloud-fog" : context.kind === "hot" ? "sun" : context.kind === "cold" ? "cloud-sun" : context.kind === "cloudy" ? "cloud" : "sun-medium";
   }
 
+  function topContextClassData(now) {
+    var live = getLiveLesson(now);
+    if (live) {
+      return {
+        state: "A decorrer",
+        title: live.course ? live.course.name : live.title || "Aula",
+        meta: [live.end ? "até " + live.end : "", live.room || ""].filter(Boolean).join(" · "),
+        icon: "book-open-check",
+        className: "is-live",
+        attrs: live.lesson ? 'data-route="lesson" data-id="' + attr(live.lesson.id) + '"' : live.schedule ? 'data-action="schedule-detail" data-id="' + attr(live.schedule.id) + '"' : 'data-route="home"'
+      };
+    }
+    var next = getNextClass(now);
+    if (next && next.schedule) {
+      var today = todayISO(now);
+      var sameDay = next.dateISO === today;
+      return {
+        state: sameDay ? "A seguir" : relativeDate(next.dateISO),
+        title: next.course ? next.course.name : "Próxima aula",
+        meta: [next.schedule.start, next.schedule.room || ""].filter(Boolean).join(" · "),
+        icon: "calendar-clock",
+        className: "is-next",
+        attrs: 'data-action="schedule-detail" data-id="' + attr(next.schedule.id) + '"'
+      };
+    }
+    return { state: "Sem aulas", title: "Agenda livre", meta: "Vê o calendário", icon: "sparkles", className: "is-free", attrs: 'data-route="planner"' };
+  }
+
+  function renderTopContextMarkup(date) {
+    var now = date || activeHomeNow();
+    var weather = canteenWeatherContext(canteenWeatherState);
+    var weatherValue = weather.temperature == null ? "--°" : weather.temperature + "°";
+    var weatherLabel = weather.kind === "unknown" ? "Tempo" : String(weather.label || "Tempo").split(" · ")[0];
+    var classData = topContextClassData(now);
+    var shortDate = new Intl.DateTimeFormat("pt-PT", { weekday: "short", day: "numeric", month: "short" }).format(now).replace(/\.$/, "");
+    return '<div class="top-context-time" title="' + attr(homeDateLabel(now)) + '"><strong>' + esc(homeClockLabel(now)) + '</strong><small>' + esc(shortDate) + '</small></div>'
+      + '<div class="top-context-weather" title="' + attr(weather.kind === "unknown" ? "Meteorologia indisponível" : weather.prompt) + '"><i data-lucide="' + weatherIconForContext(weather) + '"></i><span><strong>' + esc(weatherValue) + '</strong><small>' + esc(weatherLabel) + '</small></span></div>'
+      + '<button class="top-context-class ' + attr(classData.className) + '" type="button" ' + classData.attrs + ' title="Abrir detalhes da aula"><i data-lucide="' + attr(classData.icon) + '"></i><span><small>' + esc(classData.state) + '</small><strong>' + esc(classData.title) + '</strong><em>' + esc(classData.meta) + '</em></span></button>';
+  }
+
+  function refreshTopContextView() {
+    var element = document.getElementById("topContext");
+    if (!element || !state) return;
+    element.innerHTML = renderTopContextMarkup(activeHomeNow());
+    refreshIcons(element);
+  }
+
+  function scheduleTopContextRefresh() {
+    if (topContextTimer) clearTimeout(topContextTimer);
+    topContextTimer = setTimeout(function () {
+      topContextTimer = null;
+      refreshTopContextView();
+      scheduleTopContextRefresh();
+    }, 60000 - (Date.now() % 60000) + 250);
+  }
+
   function renderCampusDayHeader(context) {
     var weather = canteenWeatherContext(canteenWeatherState);
     var weatherText = weather.kind === "unknown" ? "Tempo indisponível" : weather.label;
@@ -2811,7 +2876,7 @@
     var phaseBadge = context.phaseLabel && context.phaseLabel !== context.atmosphere.label ? '<b>' + esc(context.phaseLabel) + '</b>' : '';
     var hero = '<section class="school-now-card span-12 ' + attr(context.atmosphere.className) + ' phase-' + attr(context.phase) + '"><div class="school-now-copy"><div class="school-now-kicker"><span><i data-lucide="' + attr(context.atmosphere.icon) + '"></i>' + esc(context.atmosphere.label) + '</span>' + phaseBadge + '</div><h2>' + esc(context.title) + '</h2><p>' + esc(context.copy) + '</p><div class="school-now-actions">' + context.primary + context.secondary + '</div></div><div class="school-now-status"><span class="school-now-icon"><i data-lucide="' + attr(context.icon) + '"></i></span><strong>' + esc(context.stat) + '</strong><small>' + esc(context.statLabel) + '</small><div class="school-now-glow"></div></div></section>';
 
-    return renderHomeDebugBar() + renderCampusDayHeader(context) + hero
+    return renderHomeDebugBar() + hero
       + renderCampusDaySchedule(context)
       + renderCampusRestCue(context)
       + '<div class="home-study-next">' + renderStudyRecommendationCard(true) + '</div>'
@@ -10311,7 +10376,7 @@
       }, 60000);
       if (!state.profile.onboardingComplete || !state.currentSemesterId || !activeCourses().length) startOnboarding(state.semesters.length ? "new-semester" : "first");
       if ("serviceWorker" in navigator && location.protocol !== "file:") {
-        navigator.serviceWorker.register("sw.js?v=32.0-campus-day", { updateViaCache: "none" }).then(function () {
+        navigator.serviceWorker.register("sw.js?v=32.1-topbar-context", { updateViaCache: "none" }).then(function () {
           if (Sync && Sync.getStatus().configured) Sync.startAutoSync();
         }).catch(function () {
           if (Sync && Sync.getStatus().configured) Sync.startAutoSync();
