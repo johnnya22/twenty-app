@@ -87,6 +87,7 @@
   var homeClockTimer = null;
   var homeworkClockTimer = null;
   var homeworkSessionRuntime = null;
+  var selectedMailboxTaskId = null;
   var studyFocusRuntime = null;
   var studyFocusTimer = null;
   var pendingStudyReflectionSessionId = null;
@@ -113,6 +114,11 @@
   }
 
   function attr(value) { return esc(value); }
+
+  function cssEscape(value) {
+    if (window.CSS && typeof window.CSS.escape === "function") return window.CSS.escape(String(value || ""));
+    return String(value || "").replace(/[^a-zA-Z0-9_-]/g, function (char) { return "\\" + char; });
+  }
 
   function nl2br(value) { return esc(value).replace(/\n/g, "<br>"); }
 
@@ -677,6 +683,90 @@
     return formatDate(value);
   }
 
+  function activityLetterGrade(score) {
+    score = clamp(Number(score) || 0, 0, 100);
+    if (score >= 95) return "A+";
+    if (score >= 85) return "A";
+    if (score >= 70) return "B";
+    if (score >= 55) return "C";
+    if (score >= 40) return "D";
+    return "F";
+  }
+
+  function activityGradeCopy(letter) {
+    return letter === "A+" ? "Domínio excelente" : letter === "A" ? "Muito bom" : letter === "B" ? "Bom, com algumas falhas" : letter === "C" ? "Compreensão mínima" : letter === "D" ? "Muitas dificuldades" : "Precisa de reforço";
+  }
+
+  function normalizeClassGameType(value) {
+    value = String(value || "").toLowerCase().trim();
+    if (["formula", "short-answer", "write", "type-answer", "written"].indexOf(value) >= 0) return "type-answer";
+    if (["spot-error", "find-error", "incorrect", "error"].indexOf(value) >= 0) return "spot-error";
+    if (["order", "sequence-order", "sort", "ordering"].indexOf(value) >= 0) return "order";
+    if (["match", "matching", "pairs", "connect"].indexOf(value) >= 0) return "match";
+    if (["memory", "sequence", "repeat-sequence"].indexOf(value) >= 0) return "memory";
+    return "choice";
+  }
+
+  function normalizeAnswerText(value) {
+    return String(value == null ? "" : value)
+      .toLowerCase()
+      .normalize("NFD").replace(/[\u0300-\u036f]/g, "")
+      .replace(/\\left|\\right/g, "")
+      .replace(/[\s·×*]+/g, "")
+      .replace(/[.,;:!?()[\]{}]/g, "")
+      .replace(/−/g, "-");
+  }
+
+  function classGameExpectedAnswers(question) {
+    var answers = asArray(question && question.acceptedAnswers).map(String).filter(Boolean);
+    if (question && question.answerText) answers.unshift(String(question.answerText));
+    if (!answers.length && question && question.answer) answers.push(String(question.answer));
+    return Array.from(new Set(answers));
+  }
+
+  function classGameCorrectOrder(question) {
+    var correct = asArray(question && question.correctOrder).map(String).filter(Boolean);
+    return correct.length ? correct : asArray(question && question.orderItems).map(String).filter(Boolean);
+  }
+
+  function classGameAnswerIsCorrect(question, answer) {
+    var type = normalizeClassGameType(question && question.gameType || question && question.mode);
+    if (question && (question.mode === "self-check" || (!asArray(question.options).length && type === "choice"))) return answer === 1;
+    if (type === "type-answer") {
+      var normalized = normalizeAnswerText(answer);
+      return !!normalized && classGameExpectedAnswers(question).some(function (expected) { return normalizeAnswerText(expected) === normalized; });
+    }
+    if (type === "order") {
+      var selectedOrder = asArray(answer).map(String);
+      var correctOrder = classGameCorrectOrder(question);
+      return selectedOrder.length === correctOrder.length && selectedOrder.every(function (item, index) { return item === correctOrder[index]; });
+    }
+    if (type === "match") {
+      var selectedMatches = answer && typeof answer === "object" ? answer : {};
+      return asArray(question.matchPairs).length > 0 && asArray(question.matchPairs).every(function (pair) { return String(selectedMatches[pair.left] || "") === String(pair.right); });
+    }
+    if (type === "memory") {
+      var selectedSequence = asArray(answer).map(String);
+      var correctSequence = asArray(question.sequence).map(String);
+      return selectedSequence.length === correctSequence.length && selectedSequence.every(function (item, index) { return item === correctSequence[index]; });
+    }
+    return Number(answer) === Number(question && question.answerIndex);
+  }
+
+  function classGameAnswerBlocks(question) {
+    var type = normalizeClassGameType(question && question.gameType || question && question.mode);
+    if (type === "type-answer") return normalizeContentBlocks(classGameExpectedAnswers(question)[0] || question.explanation || "Resposta não configurada");
+    if (type === "order") return normalizeContentBlocks(classGameCorrectOrder(question).join(" → "));
+    if (type === "match") return normalizeContentBlocks(asArray(question.matchPairs).map(function (pair) { return pair.left + " → " + pair.right; }).join("\n"));
+    if (type === "memory") return normalizeContentBlocks(asArray(question.sequence).join(" · "));
+    return [];
+  }
+
+  function classGameLabel(question) {
+    var type = normalizeClassGameType(question && question.gameType || question && question.mode);
+    return type === "type-answer" ? "Escreve a resposta" : type === "spot-error" ? "Encontra o erro" : type === "order" ? "Ordena os passos" : type === "match" ? "Faz as ligações" : type === "memory" ? "Repete a sequência" : "Escolhe a resposta";
+  }
+
   function safeColor(value, fallback) {
     return /^#[0-9a-f]{6}$/i.test(value || "") ? value : (fallback || COLORS[0]);
   }
@@ -692,7 +782,7 @@
 
   function defaultState() {
     return {
-      schemaVersion: 9,
+      schemaVersion: 10,
       meta: {
         revision: 0,
         updatedAt: "",
@@ -722,6 +812,7 @@
         jsonSync: true,
         reduceMotion: false,
         plannerView: "schedule",
+        homeScheduleView: "blocks",
         calendarView: "month",
         studyPlanDate: todayISO(),
         weeklyStudyHours: 16,
@@ -782,7 +873,7 @@
   function normalizeState(input) {
     var base = defaultState();
     var source = input && typeof input === "object" ? input : {};
-    base.schemaVersion = Math.max(9, Number(source.schemaVersion) || 0);
+    base.schemaVersion = Math.max(10, Number(source.schemaVersion) || 0);
     base.meta = Object.assign(base.meta, source.meta || {});
     base.meta.completedLessonQuizIds = Array.from(new Set(asArray(base.meta.completedLessonQuizIds).map(String).filter(Boolean)));
     base.meta.completedHomeworkIds = Array.from(new Set(asArray(base.meta.completedHomeworkIds).map(String).filter(Boolean)));
@@ -790,6 +881,7 @@
     base.settings = Object.assign(base.settings, source.settings || {});
     if (["day", "three", "week", "month"].indexOf(base.settings.calendarView) < 0) base.settings.calendarView = "month";
     if (["schedule", "calendar", "study-day"].indexOf(base.settings.plannerView) < 0) base.settings.plannerView = "schedule";
+    if (["blocks", "timeline"].indexOf(base.settings.homeScheduleView) < 0) base.settings.homeScheduleView = "blocks";
     if (!/^\d{4}-\d{2}-\d{2}$/.test(base.settings.studyPlanDate || "")) base.settings.studyPlanDate = todayISO();
     base.settings.weeklyStudyHours = clamp(base.settings.weeklyStudyHours || 16, 1, 80);
     base.settings.studySessionMinutes = clamp(base.settings.studySessionMinutes || 50, 20, 180);
@@ -819,6 +911,18 @@
     base.currentSemesterId = source.currentSemesterId || null;
     ENTITY_ARRAYS.forEach(function (key) {
       base[key] = asArray(source[key]).filter(function (item) { return item && typeof item === "object"; });
+    });
+    base.tasks = base.tasks.map(function (task) {
+      var normalized = Object.assign({ submissionStatus: "todo", workCompletedAt: "", submittedAt: "", submissionPlatformUrl: "", submissionConfirmedAt: "" }, task);
+      if (isHomeworkTask(normalized)) {
+        if (normalized.done || normalized.completedOnce) {
+          normalized.submissionStatus = normalized.submissionStatus === "confirmed" ? "confirmed" : "submitted";
+          normalized.submittedAt = normalized.submittedAt || normalized.completedAt || normalized.updatedAt || "";
+        } else if (["ready", "submitted", "confirmed"].indexOf(normalized.submissionStatus) < 0) {
+          normalized.submissionStatus = "todo";
+        }
+      }
+      return normalized;
     });
     base.courses = base.courses.map(function (course, index) {
       var result = Object.assign({
@@ -906,7 +1010,16 @@
     });
     base.quizzes = base.quizzes.map(function (quiz) {
       quiz.questions = asArray(quiz.questions).map(function (question) {
-        var normalized = Object.assign({}, question, { images: normalizeImageRefs(question.images) });
+        var normalized = Object.assign({ gameType: "choice", answerText: "", acceptedAnswers: [], orderItems: [], correctOrder: [], matchPairs: [], sequence: [] }, question, { images: normalizeImageRefs(question.images) });
+        normalized.gameType = normalizeClassGameType(normalized.gameType || normalized.mode);
+        normalized.acceptedAnswers = asArray(normalized.acceptedAnswers).map(String).filter(Boolean);
+        normalized.orderItems = asArray(normalized.orderItems).map(String).filter(Boolean);
+        normalized.correctOrder = asArray(normalized.correctOrder).map(String).filter(Boolean);
+        normalized.matchPairs = asArray(normalized.matchPairs).map(function (pair) {
+          if (Array.isArray(pair)) return { left: String(pair[0] || ""), right: String(pair[1] || "") };
+          return { left: String(pair && pair.left || ""), right: String(pair && pair.right || "") };
+        }).filter(function (pair) { return pair.left && pair.right; });
+        normalized.sequence = asArray(normalized.sequence).map(String).filter(Boolean);
         normalized.promptBlocks = normalizeContentBlocks(normalized.promptBlocks || normalized.prompt || "");
         normalized.explanationBlocks = normalizeContentBlocks(normalized.explanationBlocks || normalized.explanation || normalized.answer || "");
         normalized.optionBlocks = asArray(normalized.optionBlocks).length ? normalized.optionBlocks.map(normalizeContentBlocks) : asArray(normalized.options).map(function (option) { return normalizeContentBlocks(option); });
@@ -1625,6 +1738,13 @@
       scheduleCanteenClockRefresh();
     }
     if (route.name === "home") {
+      if (!canteenWeatherState || Date.now() - Number(canteenWeatherState.fetchedAt || 0) > 30 * 60 * 1000) {
+        setTimeout(function () {
+          ensureCanteenWeather(todayISO()).then(function (weather) {
+            if (weather && route.name === "home" && !modalRoot.querySelector(".modal-card")) render();
+          }).catch(function () {});
+        }, 0);
+      }
       homeClockTimer = setTimeout(function () {
         if (route.name === "home" && !modalRoot.querySelector(".modal-card")) render();
       }, 60000 - (Date.now() % 60000) + 250);
@@ -2302,6 +2422,7 @@
       return { course: item.course, percentage: percentage, grade: percentage / 5 };
     });
     var academic = subjects.length ? subjects.reduce(function (sum, item) { return sum + item.grade; }, 0) / subjects.length : null;
+    var activityScore = subjects.length ? subjects.reduce(function (sum, item) { return sum + item.percentage; }, 0) / subjects.length : null;
     var tasks = homeTaskBuckets(day);
     var quizLessons = endedLessons.filter(function (block) { return !!configuredQuizForLesson(block.lesson.id); });
     var checksDue = quizLessons.length;
@@ -2310,6 +2431,8 @@
     var routineDone = checksDone + tasks.homeworkDone.length;
     return {
       academic: academic,
+      activityScore: activityScore,
+      activityGrade: activityScore == null ? "" : activityLetterGrade(activityScore),
       subjects: subjects,
       checksDue: checksDue,
       checksDone: checksDone,
@@ -2509,10 +2632,10 @@
       context.phase = "complete";
       context.phaseLabel = "Dia concluído";
       context.title = "Mochila fechada. O dia escolar está completo.";
-      context.copy = report.academic == null ? "Cumpriste a rotina de hoje. Amanhã, a Home volta a adaptar-se ao teu horário." : "Nota académica provisória: " + round(report.academic, 1) + "/20. Agora podes descansar sem aquela sensação de que te esqueceste de alguma coisa.";
+      context.copy = report.activityGrade ? "Desempenho das atividades: " + report.activityGrade + ". Agora podes descansar sem aquela sensação de que te esqueceste de alguma coisa." : "Cumpriste a rotina de hoje. Amanhã, a Home volta a adaptar-se ao teu horário.";
       context.icon = "badge-check";
-      context.stat = report.academic == null ? "✓" : round(report.academic, 1);
-      context.statLabel = report.academic == null ? "rotina completa" : "nota do dia";
+      context.stat = report.activityGrade || "✓";
+      context.statLabel = report.activityGrade ? "atividade do dia" : "rotina completa";
       context.primary = '<button class="button button-yellow" type="button" data-action="view-report-card"><i data-lucide="award"></i>Ver Report Card</button>';
       context.secondary = '<button class="button" type="button" data-route="planner"><i data-lucide="calendar-days"></i>Ver amanhã</button>';
       return context;
@@ -2528,6 +2651,76 @@
     context.primary = '<button class="button button-yellow" type="button" data-route="study"><i data-lucide="sparkles"></i>Estudar um pouco</button>';
     context.secondary = '<button class="button" type="button" data-route="planner"><i data-lucide="calendar-days"></i>Ver calendário</button>';
     return context;
+  }
+
+  function homeClockLabel(date) {
+    return new Intl.DateTimeFormat("pt-PT", { hour: "2-digit", minute: "2-digit", hour12: false }).format(date || new Date());
+  }
+
+  function homeDateLabel(date) {
+    var value = date || new Date();
+    var label = new Intl.DateTimeFormat("pt-PT", { weekday: "long", day: "numeric", month: "long" }).format(value);
+    return label.charAt(0).toUpperCase() + label.slice(1);
+  }
+
+  function weatherIconForContext(context) {
+    if (!context || context.kind === "unknown") return "cloud-sun";
+    return context.kind === "rainy" ? "cloud-rain" : context.kind === "snowy" ? "snowflake" : context.kind === "foggy" ? "cloud-fog" : context.kind === "hot" ? "sun" : context.kind === "cold" ? "cloud-sun" : context.kind === "cloudy" ? "cloud" : "sun-medium";
+  }
+
+  function renderCampusDayHeader(context) {
+    var weather = canteenWeatherContext(canteenWeatherState);
+    var weatherText = weather.kind === "unknown" ? "Tempo indisponível" : weather.label;
+    return '<section class="campus-day-header"><div class="campus-day-time"><strong>' + esc(homeClockLabel(context.now)) + '</strong><span>' + esc(homeDateLabel(context.now)) + '</span></div><div class="campus-day-weather"><i data-lucide="' + weatherIconForContext(weather) + '"></i><span><strong>' + esc(weatherText) + '</strong><small>' + (weather.kind === "unknown" ? 'A meteorologia aparece quando houver ligação.' : esc(weather.prompt.split(".")[0] + ".")) + '</small></span></div></section>';
+  }
+
+  function homeBlockState(block, context) {
+    if (context.current && context.current.key === block.key) return "is-current";
+    if (context.next && context.next.key === block.key) return "is-next";
+    if (block.endMin <= nowMinutes(context.now)) return "is-complete";
+    return "is-upcoming";
+  }
+
+  function homeBlockStatusLabel(block, context) {
+    var stateName = homeBlockState(block, context);
+    return stateName === "is-current" ? "A decorrer" : stateName === "is-next" ? "A seguir" : stateName === "is-complete" ? "Terminada" : "Mais tarde";
+  }
+
+  function homeClassBlockAttrs(block) {
+    if (block.lesson) return 'data-route="lesson" data-id="' + attr(block.lesson.id) + '"';
+    if (block.schedule) return 'data-action="schedule-detail" data-id="' + attr(block.schedule.id) + '"';
+    return 'data-route="planner"';
+  }
+
+  function renderHomeScheduleBlock(block, context) {
+    var course = block.course;
+    var stateName = homeBlockState(block, context);
+    var quiz = block.lesson && configuredQuizForLesson(block.lesson.id);
+    var prepared = !!block.lesson;
+    return '<button class="campus-class-block ' + stateName + '" style="--class-color:' + safeColor(course && course.color) + '" type="button" ' + homeClassBlockAttrs(block) + '><span class="campus-class-time">' + esc(block.start) + '<small>' + esc(block.end) + '</small></span><span class="campus-class-copy"><strong>' + esc(course ? course.name : block.lesson && block.lesson.title || "Aula") + '</strong><small>' + esc([block.type ? lessonTypeLabel(block.type) : "", block.room || ""].filter(Boolean).join(" · ")) + '</small><em>' + (prepared ? '<i data-lucide="book-check"></i> Aula preparada' : '<i data-lucide="folder-clock"></i> Por preparar') + (quiz ? ' · Quiz-Aula' : '') + '</em></span><span class="campus-class-state">' + esc(homeBlockStatusLabel(block, context)) + '</span></button>';
+  }
+
+  function renderHomeScheduleTimeline(block, context) {
+    var course = block.course;
+    var stateName = homeBlockState(block, context);
+    return '<button class="campus-timeline-row ' + stateName + '" type="button" ' + homeClassBlockAttrs(block) + '><time>' + esc(block.start) + '</time><span class="campus-timeline-dot" style="--class-color:' + safeColor(course && course.color) + '"></span><span><strong>' + esc(course ? course.name : "Aula") + '</strong><small>' + esc(block.end + (block.room ? " · " + block.room : "")) + '</small></span><em>' + esc(homeBlockStatusLabel(block, context)) + '</em></button>';
+  }
+
+  function renderCampusDaySchedule(context) {
+    var blocks = context.blocks;
+    var mode = state.settings.homeScheduleView === "timeline" ? "timeline" : "blocks";
+    var content = blocks.length
+      ? (mode === "timeline" ? '<div class="campus-day-timeline">' + blocks.map(function (block) { return renderHomeScheduleTimeline(block, context); }).join("") + '</div>' : '<div class="campus-day-blocks">' + blocks.map(function (block) { return renderHomeScheduleBlock(block, context); }).join("") + '</div>')
+      : '<div class="campus-no-classes"><i data-lucide="calendar-heart"></i><span><strong>Sem aulas hoje</strong><small>O dia fica livre para descansar, estudar ou tratar de outras coisas.</small></span></div>';
+    return '<section class="card campus-day-schedule"><div class="card-title-row"><div><p class="card-label">Horário de hoje</p><h3>' + (blocks.length ? blocks.length + ' aula' + (blocks.length === 1 ? '' : 's') : 'Dia livre') + '</h3><p class="card-subtitle">Toca numa aula para abrir os materiais, apontamentos e Quiz-Aula.</p></div><div class="campus-schedule-toggle" role="group" aria-label="Vista do horário"><button type="button" class="' + (mode === "blocks" ? 'is-active' : '') + '" data-action="home-schedule-view" data-view="blocks"><i data-lucide="layout-grid"></i>Blocos</button><button type="button" class="' + (mode === "timeline" ? 'is-active' : '') + '" data-action="home-schedule-view" data-view="timeline"><i data-lucide="list"></i>Linha</button></div></div>' + content + '</section>';
+  }
+
+  function renderCampusRestCue(context) {
+    if (!context.blocks.length || context.current || context.next) return "";
+    var tomorrow = getNextClass(context.now);
+    var tomorrowCopy = tomorrow ? 'A próxima aula é ' + (tomorrow.course ? tomorrow.course.name : 'uma aula') + ', ' + formatDate(tomorrow.dateISO) + ' às ' + tomorrow.schedule.start + '.' : 'Não há outra aula marcada nos próximos dias.';
+    var hasPending = context.pendingChecks.length || context.tasks.homeworkPending.length || context.tasks.overdue.length;
+    return '<section class="campus-rest-cue ' + (hasPending ? 'has-pending' : 'is-rest') + '"><span><i data-lucide="' + (hasPending ? 'sunset' : 'moon-star') + '"></i></span><div><p class="card-label">' + (hasPending ? 'Fase pós-aulas' : 'Modo descanso') + '</p><h3>' + (hasPending ? 'As aulas terminaram. O resto pode ser feito ao teu ritmo.' : 'O dia escolar terminou.') + '</h3><p>' + esc(tomorrowCopy) + '</p></div><button class="button button-small" type="button" data-route="planner"><i data-lucide="backpack"></i>Preparar amanhã</button></section>';
   }
 
   function renderHomeStep(icon, label, meta, status) {
@@ -2560,11 +2753,11 @@
 
   function renderDailyReportCard(report, blocks) {
     var subjectRows = report.subjects.length ? report.subjects.slice(0, 4).map(function (item) {
-      return '<div class="report-subject"><span><i data-lucide="book-open"></i>' + esc(item.course.name) + '</span><strong>' + round(item.grade, 1) + '</strong></div>';
-    }).join("") : '<p class="report-empty">Faz os Quizzes da aula para construíres a nota académica de hoje.</p>';
-    var grade = report.academic == null ? "—" : round(report.academic, 1);
+      return '<div class="report-subject"><span><i data-lucide="book-open"></i>' + esc(item.course.name) + '</span><strong>' + activityLetterGrade(item.percentage) + '</strong></div>';
+    }).join("") : '<p class="report-empty">Faz os Quiz-Aula para construíres o desempenho das atividades de hoje.</p>';
+    var grade = report.activityGrade || "—";
     var status = report.complete ? "Fechado" : "Em construção";
-    return '<article class="card span-5 daily-report-card ' + (report.complete ? "is-complete" : "") + '"><div class="card-title-row"><div><p class="card-label">Report Card · Hoje</p><h3>O teu dia escolar</h3></div><span class="badge ' + (report.complete ? "badge-mint" : "badge-yellow") + '">' + status + '</span></div><div class="report-grade"><strong>' + grade + '</strong><span>/20<br>nota académica</span></div><div class="report-subjects">' + subjectRows + '</div><div class="report-routine"><span><strong>' + report.routine + '%</strong> rotina escolar</span><div class="mini-progress"><span style="width:' + report.routine + '%"></span></div><small>' + report.checksDone + '/' + report.checksDue + ' Quizzes da aula · ' + report.homeworkDone + '/' + report.homeworkDue + ' TPCs</small></div><button class="button button-small" type="button" data-action="view-report-card"><i data-lucide="arrow-down"></i>Ver Report Card</button></article>';
+    return '<article class="card span-5 daily-report-card ' + (report.complete ? "is-complete" : "") + '"><div class="card-title-row"><div><p class="card-label">Report Card · Hoje</p><h3>O teu dia escolar</h3></div><span class="badge ' + (report.complete ? "badge-mint" : "badge-yellow") + '">' + status + '</span></div><div class="report-grade report-grade-letter"><strong>' + grade + '</strong><span>desempenho<br>das atividades</span></div><div class="report-subjects">' + subjectRows + '</div><div class="report-routine"><span><strong>' + report.routine + '%</strong> rotina escolar</span><div class="mini-progress"><span style="width:' + report.routine + '%"></span></div><small>' + report.checksDone + '/' + report.checksDue + ' Quiz-Aula · ' + report.homeworkDone + '/' + report.homeworkDue + ' TPCs entregues</small></div><button class="button button-small" type="button" data-action="view-report-card"><i data-lucide="arrow-down"></i>Ver Report Card</button></article>';
   }
 
   function renderHome() {
@@ -2618,7 +2811,9 @@
     var phaseBadge = context.phaseLabel && context.phaseLabel !== context.atmosphere.label ? '<b>' + esc(context.phaseLabel) + '</b>' : '';
     var hero = '<section class="school-now-card span-12 ' + attr(context.atmosphere.className) + ' phase-' + attr(context.phase) + '"><div class="school-now-copy"><div class="school-now-kicker"><span><i data-lucide="' + attr(context.atmosphere.icon) + '"></i>' + esc(context.atmosphere.label) + '</span>' + phaseBadge + '</div><h2>' + esc(context.title) + '</h2><p>' + esc(context.copy) + '</p><div class="school-now-actions">' + context.primary + context.secondary + '</div></div><div class="school-now-status"><span class="school-now-icon"><i data-lucide="' + attr(context.icon) + '"></i></span><strong>' + esc(context.stat) + '</strong><small>' + esc(context.statLabel) + '</small><div class="school-now-glow"></div></div></section>';
 
-    return renderHomeDebugBar() + hero
+    return renderHomeDebugBar() + renderCampusDayHeader(context) + hero
+      + renderCampusDaySchedule(context)
+      + renderCampusRestCue(context)
       + '<div class="home-study-next">' + renderStudyRecommendationCard(true) + '</div>'
       + '<div class="bento-grid home-school-grid" style="margin-top:15px">'
       + '<article class="card span-5 school-path-card"><div class="card-title-row"><div><p class="card-label">O teu dia</p><h3>Da aula ao fim do dia</h3><p class="card-subtitle">A Home muda o próximo passo à medida que vais avançando.</p></div><span class="metric-icon"><i data-lucide="route"></i></span></div><div class="school-steps">' + timeline + "</div></article>"
@@ -2648,12 +2843,16 @@
   function renderTaskRow(task) {
     var course = courseById(task.courseId);
     var label = task.type === "lesson-quiz" ? "Quiz" : task.type === "review" ? "Revisão" : task.priority === "high" ? "Prioridade" : "Tarefa";
-    var lockedHomework = (task.type === "homework" || task.type === "tpc") && (task.lockedContent || task.configuredFromPrompt || asArray(task.contentBlocks).length);
-    var oneTimeComplete = task.done && (task.type === "lesson-quiz" || lockedHomework);
+    var homeworkTask = isHomeworkTask(task);
+    var homeworkStatus = homeworkSubmissionStatus(task);
+    var lockedHomework = homeworkTask && (task.lockedContent || task.configuredFromPrompt || asArray(task.contentBlocks).length);
+    var oneTimeComplete = task.done && (task.type === "lesson-quiz" || homeworkTask);
     var lessonAction = "";
     if (task.lessonId && task.type === "lesson-quiz" && !task.done) {
       lessonAction = '<button class="button button-dark button-small task-open-button" type="button" data-action="do-beonline-quiz" data-lesson="' + attr(task.lessonId) + '"><i data-lucide="play"></i>Fazer quiz</button>';
-    } else if (lockedHomework && !task.done) {
+    } else if (homeworkTask && homeworkStatus === "ready") {
+      lessonAction = '<button class="button button-dark button-small task-open-button" type="button" data-action="open-homework-mailbox" data-task="' + attr(task.id) + '"><i data-lucide="mailbox"></i>Entregar</button>';
+    } else if (homeworkTask && !task.done) {
       lessonAction = '<button class="button button-dark button-small task-open-button" type="button" data-action="start-homework-session" data-task="' + attr(task.id) + '"><i data-lucide="play"></i>Fazer</button>';
     } else if (lockedHomework && task.done) {
       lessonAction = '<button class="button button-small task-open-button" type="button" data-action="view-lesson-homework" data-id="' + attr(task.id) + '"><i data-lucide="eye"></i>Ver</button>';
@@ -2662,7 +2861,7 @@
     }
     var checkControl = oneTimeComplete
       ? '<span class="check-button is-done" aria-label="Concluído"><i data-lucide="check"></i></span>'
-      : '<button class="check-button ' + (task.done ? "is-done" : "") + '" type="button" data-action="toggle-task" data-id="' + attr(task.id) + '" aria-label="' + (task.done ? "Reabrir tarefa" : "Concluir tarefa") + '">' + (task.done ? '<i data-lucide="check"></i>' : "") + '</button>';
+      : homeworkTask ? '<span class="homework-status-mark ' + homeworkStatus + '"><i data-lucide="' + (homeworkStatus === "ready" ? "mail-open" : task.done ? "check" : "notebook-pen") + '"></i></span>' : '<button class="check-button ' + (task.done ? "is-done" : "") + '" type="button" data-action="toggle-task" data-id="' + attr(task.id) + '" aria-label="' + (task.done ? "Reabrir tarefa" : "Concluir tarefa") + '">' + (task.done ? '<i data-lucide="check"></i>' : "") + '</button>';
     return '<div class="list-row ' + (task.done ? "is-done" : "") + '">' + checkControl + '<span class="list-icon ' + (task.type === "review" || task.type === "lesson-quiz" ? "yellow" : "") + '"><i data-lucide="' + taskIcon(task.type) + '"></i></span><span class="list-content"><strong>' + esc(task.title) + '</strong><small>' + esc(course ? course.name : "Pessoal") + ' · ' + relativeDate(task.dueDate) + (task.dueTime ? " às " + esc(task.dueTime) : "") + '</small></span><span class="badge ' + (task.type === "lesson-quiz" ? "badge-violet" : task.priority === "high" ? "badge-danger" : "") + '">' + esc(label) + '</span>' + lessonAction + "</div>";
   }
 
@@ -3162,7 +3361,7 @@
   function lessonBuilderSchema(kind, lesson) {
     var commonBlocks = '[{"type":"text","text":"..."},{"type":"latex","latex":"\\\\frac{a}{b}","display":true},{"type":"code","language":"python","code":"..."},{"type":"svg","svg":"<svg viewBox=\\"0 0 640 360\\">...</svg>","alt":"..."},{"type":"slide-image","sourceFile":"nome-do-ficheiro.pptx","slideNumber":12,"description":"imagem ou diagrama exato a usar","alt":"..."}]';
     if (kind === "quiz") {
-      return '{\n  "title": "Quiz da aula · ' + lesson.title.replace(/"/g, "\\\"") + '",\n  "questions": [\n    {\n      "promptBlocks": ' + commonBlocks + ',\n      "options": [' + commonBlocks + ', ' + commonBlocks + ', ' + commonBlocks + ', ' + commonBlocks + '],\n      "correctIndex": 0,\n      "explanationBlocks": ' + commonBlocks + ',\n      "sourceSlides": [1, 2],\n      "difficulty": "medium"\n    }\n  ]\n}';
+      return '{\n  "title": "Quiz da aula · ' + lesson.title.replace(/"/g, "\\\"") + '",\n  "questions": [\n    {"gameType":"choice","promptBlocks":' + commonBlocks + ',"options":[' + commonBlocks + ',' + commonBlocks + ',' + commonBlocks + ',' + commonBlocks + '],"correctIndex":0,"explanationBlocks":' + commonBlocks + '},\n    {"gameType":"type-answer","promptBlocks":' + commonBlocks + ',"answerText":"v=d/t","acceptedAnswers":["v=d/t","v=\\frac{d}{t}"],"explanationBlocks":' + commonBlocks + '},\n    {"gameType":"spot-error","promptBlocks":' + commonBlocks + ',"options":[' + commonBlocks + ',' + commonBlocks + ',' + commonBlocks + ',' + commonBlocks + '],"correctIndex":2,"explanationBlocks":' + commonBlocks + '},\n    {"gameType":"order","promptBlocks":' + commonBlocks + ',"orderItems":["Passo C","Passo A","Passo B"],"correctOrder":["Passo A","Passo B","Passo C"],"explanationBlocks":' + commonBlocks + '},\n    {"gameType":"match","promptBlocks":' + commonBlocks + ',"matchPairs":[{"left":"Força","right":"Newton"},{"left":"Energia","right":"Joule"}],"explanationBlocks":' + commonBlocks + '},\n    {"gameType":"memory","promptBlocks":' + commonBlocks + ',"sequence":["Azul","Vermelho","Verde"],"explanationBlocks":' + commonBlocks + '}\n  ]\n}';
     }
     if (kind === "homework") {
       return '{\n  "title": "TPC · ' + lesson.title.replace(/"/g, "\\\"") + '",\n  "estimatedMinutes": 30,\n  "instructionsBlocks": ' + commonBlocks + ',\n  "solutionBlocks": ' + commonBlocks + ',\n  "checklist": ["Passo 1", "Passo 2"],\n  "extraTasks": [\n    {"title":"Tarefa adicional pedida pelo professor","blocks":' + commonBlocks + ',"optional":false}\n  ]\n}';
@@ -3199,7 +3398,9 @@
       "- Se uma pergunta ou resposta depender de uma imagem específica dos slides, usa type=slide-image com sourceFile, slideNumber, description e alt. Só pede imagens quando forem realmente necessárias, por exemplo gráficos, circuitos, geometria, física, matemática visual ou interpretação de diagramas.",
       "- Uma resposta, opção ou explicação pode ser composta por texto, imagem pedida, SVG, LaTeX ou código, conforme o conteúdo exigir.",
       "- Não inventes imagens que não existem nos slides; quando necessário, descreve exatamente que zona/diagrama deve aparecer.",
-      kind === "quiz" ? "- Cria entre 5 e 10 perguntas. Usa quatro opções por pergunta e um único correctIndex." : "",
+      kind === "quiz" ? "- Cria entre 5 e 10 atividades curtas e mistura apenas os gameType adequados à matéria: choice, type-answer, spot-error, order, match ou memory." : "",
+      kind === "quiz" ? "- choice e spot-error usam options e correctIndex. type-answer usa answerText e acceptedAnswers. order usa orderItems baralhados e correctOrder. match usa matchPairs. memory usa sequence." : "",
+      kind === "quiz" ? "- Em Matemática/Física privilegia fórmulas escritas, encontrar passos errados e ordenar resoluções; em Programação usa bugs, output e ordenar código; em línguas usa escrita, ordenação e correspondência. Não forces um minijogo quando não fizer sentido." : "",
       kind === "homework" ? "- O TPC deve ser diferente do quiz da aula e adequado para fazer em casa. Inclui solução ou critérios de correção." : "",
       kind === "homework" ? "- instructionsBlocks representa a tarefa principal. Usa extraTasks apenas para pedidos adicionais concretos do professor; cada item tem title, blocks e optional." : "",
       kind === "homework" ? "- Dá uma estimativa realista em estimatedMinutes, porque a Twenty vai usar esse valor no timer da sessão de TPC." : "",
@@ -3248,19 +3449,41 @@
   }
 
   function normalizeAIQuizQuestion(question, materials) {
+    question = question && typeof question === "object" ? question : {};
+    var gameType = normalizeClassGameType(question.gameType || question.mode);
     var promptBlocks = attachSlideMaterialReferences(question.promptBlocks || question.prompt || "", materials);
-    var optionBlocks = asArray(question.options).map(function (option) { return attachSlideMaterialReferences(option, materials); });
-    if (!promptBlocks.length) throw new Error("Uma pergunta do quiz não tem enunciado.");
-    if (optionBlocks.length < 2) throw new Error("Cada pergunta do quiz precisa de pelo menos duas opções.");
-    var correctIndex = Number(question.correctIndex != null ? question.correctIndex : question.answerIndex);
-    if (!Number.isInteger(correctIndex) || correctIndex < 0 || correctIndex >= optionBlocks.length) throw new Error("Uma pergunta tem correctIndex inválido.");
-    return {
-      id: uid("quizq"), mode: "multiple-choice", promptBlocks: promptBlocks, prompt: contentBlocksPlainText(promptBlocks),
-      optionBlocks: optionBlocks, options: optionBlocks.map(contentBlocksPlainText), answerIndex: correctIndex,
+    if (!promptBlocks.length) throw new Error("Uma atividade do Quiz-Aula não tem enunciado.");
+    var normalized = {
+      id: uid("quizq"), mode: gameType === "choice" || gameType === "spot-error" ? "multiple-choice" : "class-game", gameType: gameType,
+      promptBlocks: promptBlocks, prompt: contentBlocksPlainText(promptBlocks), optionBlocks: [], options: [], answerIndex: null,
+      answerText: "", acceptedAnswers: [], orderItems: [], correctOrder: [], matchPairs: [], sequence: [],
       explanationBlocks: attachSlideMaterialReferences(question.explanationBlocks || question.explanation || "", materials),
       explanation: contentBlocksPlainText(question.explanationBlocks || question.explanation || ""),
       sourceSlides: asArray(question.sourceSlides).map(Number).filter(Boolean), difficulty: question.difficulty || "auto", images: []
     };
+    if (gameType === "choice" || gameType === "spot-error") {
+      normalized.optionBlocks = asArray(question.options).map(function (option) { return attachSlideMaterialReferences(option, materials); });
+      if (normalized.optionBlocks.length < 2) throw new Error("Uma atividade de escolha precisa de pelo menos duas opções.");
+      var correctIndex = Number(question.correctIndex != null ? question.correctIndex : question.answerIndex);
+      if (!Number.isInteger(correctIndex) || correctIndex < 0 || correctIndex >= normalized.optionBlocks.length) throw new Error("Uma atividade tem correctIndex inválido.");
+      normalized.options = normalized.optionBlocks.map(contentBlocksPlainText);
+      normalized.answerIndex = correctIndex;
+    } else if (gameType === "type-answer") {
+      normalized.answerText = String(question.answerText || question.answer || "").trim();
+      normalized.acceptedAnswers = asArray(question.acceptedAnswers).map(String).filter(Boolean);
+      if (!normalized.answerText && !normalized.acceptedAnswers.length) throw new Error("Uma atividade de resposta escrita precisa de answerText ou acceptedAnswers.");
+    } else if (gameType === "order") {
+      normalized.orderItems = asArray(question.orderItems).map(String).filter(Boolean);
+      normalized.correctOrder = asArray(question.correctOrder).map(String).filter(Boolean);
+      if (normalized.orderItems.length < 2 || normalized.correctOrder.length !== normalized.orderItems.length) throw new Error("Uma atividade de ordenação precisa de orderItems e correctOrder com o mesmo tamanho.");
+    } else if (gameType === "match") {
+      normalized.matchPairs = asArray(question.matchPairs).map(function (pair) { return Array.isArray(pair) ? { left: String(pair[0] || ""), right: String(pair[1] || "") } : { left: String(pair && pair.left || ""), right: String(pair && pair.right || "") }; }).filter(function (pair) { return pair.left && pair.right; });
+      if (normalized.matchPairs.length < 2) throw new Error("Uma atividade de correspondência precisa de pelo menos dois pares.");
+    } else if (gameType === "memory") {
+      normalized.sequence = asArray(question.sequence).map(String).filter(Boolean);
+      if (normalized.sequence.length < 3) throw new Error("Uma atividade de memória precisa de pelo menos três elementos.");
+    }
+    return normalized;
   }
 
   async function importLessonBuilder() {
@@ -3758,13 +3981,85 @@
     return !!task && (task.type === "homework" || task.type === "tpc");
   }
 
+  function homeworkSubmissionStatus(task) {
+    if (!task) return "todo";
+    if (task.done || task.completedOnce || task.submissionStatus === "submitted" || task.submissionStatus === "confirmed") return task.submissionStatus === "confirmed" ? "confirmed" : "submitted";
+    return task.submissionStatus === "ready" ? "ready" : "todo";
+  }
+
+  function isHomeworkWorkDone(task) {
+    return ["ready", "submitted", "confirmed"].indexOf(homeworkSubmissionStatus(task)) >= 0;
+  }
+
+  function homeworkReadyForMailbox(tasks) {
+    return asArray(tasks || homeworkSessionTasks()).filter(function (task) { return homeworkSubmissionStatus(task) === "ready"; });
+  }
+
+  function homeworkSubmittedToday(task) {
+    return ["submitted", "confirmed"].indexOf(homeworkSubmissionStatus(task)) >= 0 && String(task.submittedAt || task.completedAt || "").slice(0, 10) === todayISO(activeHomeNow());
+  }
+
+  async function submitHomeworkToMailbox(taskId, courseId) {
+    var task = state.tasks.find(function (item) { return item.id === taskId && isHomeworkTask(item); });
+    if (!task) { toast("TPC não encontrado.", "error"); return false; }
+    if (homeworkSubmissionStatus(task) !== "ready") { toast("Este TPC ainda não está pronto para entregar.", "warning"); return false; }
+    if (String(task.courseId || "") !== String(courseId || "")) { var correctCourse = courseById(task.courseId); toast("Essa é a mailbox errada. Entrega em " + (correctCourse ? correctCourse.name : "a disciplina correta") + ".", "warning"); return false; }
+    var stamp = new Date().toISOString();
+    task.submissionStatus = "submitted";
+    task.submittedAt = stamp;
+    task.completedAt = stamp;
+    task.done = true;
+    task.completedOnce = true;
+    state.meta.completedHomeworkIds = Array.from(new Set(asArray(state.meta.completedHomeworkIds).concat(String(task.id))));
+    selectedMailboxTaskId = null;
+    await save(true);
+    render();
+    launchMailboxAnimation(courseId);
+    toast("TPC entregue à mailbox de " + ((courseById(courseId) || {}).name || "disciplina") + ".");
+    return true;
+  }
+
+  function launchMailboxAnimation(courseId) {
+    var target = document.querySelector('.homework-mailbox[data-course="' + cssEscape(courseId) + '"]');
+    if (target) {
+      target.classList.add("is-receiving");
+      setTimeout(function () { target.classList.remove("is-receiving"); }, 900);
+    }
+  }
+
+  function renderHomeworkMailboxEnvelope(task) {
+    var course = courseById(task.courseId);
+    var selected = selectedMailboxTaskId === task.id;
+    return '<button class="homework-envelope ' + (selected ? 'is-selected' : '') + '" type="button" draggable="true" data-mailbox-task="' + attr(task.id) + '" data-action="mailbox-select-task" data-id="' + attr(task.id) + '"><span class="homework-envelope-paper"><i data-lucide="file-text"></i></span><span><strong>' + esc(task.title) + '</strong><small>' + esc(course ? course.name : 'Sem disciplina') + ' · pronto para entregar</small></span><i data-lucide="grip-vertical"></i></button>';
+  }
+
+  function renderHomeworkMailbox(course, readyTasks) {
+    var matching = readyTasks.filter(function (task) { return task.courseId === course.id; });
+    var selected = readyTasks.find(function (task) { return task.id === selectedMailboxTaskId; });
+    var canReceive = selected && selected.courseId === course.id;
+    return '<button class="homework-mailbox ' + (canReceive ? 'can-receive' : '') + '" type="button" data-action="mailbox-submit-selected" data-course="' + attr(course.id) + '" aria-label="Mailbox de ' + attr(course.name) + '"><span class="mailbox-flag"></span><span class="mailbox-slot"></span><span class="mailbox-body"><i data-lucide="mailbox"></i><strong>' + esc(course.name) + '</strong><small>' + (matching.length ? matching.length + ' trabalho' + (matching.length === 1 ? '' : 's') + ' por entregar' : 'Sem entregas pendentes') + '</small></span></button>';
+  }
+
+  function renderHomeworkMailboxScreen(tasks) {
+    var ready = homeworkReadyForMailbox(tasks);
+    var submitted = tasks.filter(homeworkSubmittedToday);
+    if (!ready.length) return renderHomeworkComplete(tasks);
+    var courses = activeCourses().filter(function (course) { return ready.some(function (task) { return task.courseId === course.id; }); });
+    if (ready.some(function (task) { return !task.courseId; })) courses.push({ id: "", name: "Geral", color: "#cab6ea" });
+    var selected = ready.find(function (task) { return task.id === selectedMailboxTaskId; });
+    var instruction = selected ? 'Agora toca ou arrasta para a mailbox de ' + ((courseById(selected.courseId) || {}).name || 'disciplina') + '.' : 'Escolhe um envelope e entrega-o na mailbox da disciplina certa.';
+    return '<div class="page-head homework-mailbox-head"><div><button class="button button-ghost button-small" type="button" data-route="home"><i data-lucide="arrow-left"></i>Home</button><h2 style="margin-top:11px">Entregar trabalhos</h2><p>O TPC só fica concluído quando chega à disciplina certa. A entrega é simbólica dentro da Twenty; a app nunca finge que enviou um ficheiro ao professor.</p></div><div class="page-actions"><span class="badge badge-violet">' + submitted.length + '/' + tasks.length + ' entregues</span></div></div><section class="homework-mailroom"><div class="homework-envelopes card"><div class="card-title-row"><div><p class="card-label">Trabalhos prontos</p><h3>Envelopes</h3><p class="card-subtitle">' + esc(instruction) + '</p></div><span class="metric-icon"><i data-lucide="send"></i></span></div><div class="homework-envelope-list">' + ready.map(renderHomeworkMailboxEnvelope).join("") + '</div></div><div class="homework-mailboxes"><div class="mailbox-yard-title"><p class="card-label">Corredor das disciplinas</p><h3>Mailboxes</h3><small>No computador podes arrastar. No telemóvel, escolhe o envelope e toca na caixa.</small></div><div class="homework-mailbox-grid">' + courses.map(function (course) { return renderHomeworkMailbox(course, ready); }).join("") + '</div></div></section>';
+  }
+
   function homeworkSessionTasks() {
     var today = todayISO(activeHomeNow());
     var all = semesterItems("tasks").filter(isHomeworkTask).slice().sort(function (a, b) {
-      return Number(a.done) - Number(b.done) || String(a.dueDate || "9999").localeCompare(String(b.dueDate || "9999")) || String((courseById(a.courseId) || {}).name || "").localeCompare(String((courseById(b.courseId) || {}).name || ""));
+      return Number(isHomeworkWorkDone(a)) - Number(isHomeworkWorkDone(b)) || Number(a.done) - Number(b.done) || String(a.dueDate || "9999").localeCompare(String(b.dueDate || "9999")) || String((courseById(a.courseId) || {}).name || "").localeCompare(String((courseById(b.courseId) || {}).name || ""));
     });
     var relevant = all.filter(function (task) {
-      return !task.done || String(task.completedAt || "").slice(0, 10) === today;
+      var status = homeworkSubmissionStatus(task);
+      if (status === "todo" || status === "ready") return true;
+      return String(task.submittedAt || task.completedAt || "").slice(0, 10) === today;
     });
     return relevant;
   }
@@ -3786,7 +4081,7 @@
 
   function setHomeworkCurrent(taskId, autoStart) {
     var tasks = homeworkSessionTasks();
-    var task = tasks.find(function (item) { return item.id === taskId && !item.done; }) || tasks.find(function (item) { return !item.done; }) || null;
+    var task = tasks.find(function (item) { return item.id === taskId && !isHomeworkWorkDone(item); }) || tasks.find(function (item) { return !isHomeworkWorkDone(item); }) || null;
     if (!homeworkSessionRuntime) homeworkSessionRuntime = { taskId: null, elapsedByTask: {}, startedAt: null, running: false, complete: false };
     storeHomeworkElapsed();
     homeworkSessionRuntime.taskId = task ? task.id : null;
@@ -3797,7 +4092,7 @@
   }
 
   function startHomeworkSession(taskId) {
-    if (!homeworkSessionTasks().some(function (task) { return !task.done; })) {
+    if (!homeworkSessionTasks().some(function (task) { return !isHomeworkWorkDone(task); })) {
       homeworkSessionRuntime = { taskId: null, elapsedByTask: {}, startedAt: null, running: false, complete: true };
     } else {
       homeworkSessionRuntime = { taskId: null, elapsedByTask: {}, startedAt: null, running: false, complete: false };
@@ -3838,8 +4133,10 @@
   function renderHomeworkChecklist(tasks, activeId) {
     return tasks.map(function (task, index) {
       var course = courseById(task.courseId);
-      var status = task.done ? '<i data-lucide="check"></i>' : index + 1;
-      return '<button class="homework-queue-item ' + (task.done ? 'is-done' : '') + ' ' + (task.id === activeId ? 'is-active' : '') + '" type="button" data-action="homework-select" data-id="' + attr(task.id) + '" ' + (task.done ? 'disabled' : '') + '><span class="homework-queue-check">' + status + '</span><span><strong>' + esc(course ? course.name : 'TPC') + '</strong><small>' + esc(task.title) + ' · ' + esc(task.estimatedMinutes || 30) + ' min</small></span></button>';
+      var workDone = isHomeworkWorkDone(task);
+      var status = workDone ? '<i data-lucide="check"></i>' : index + 1;
+      var statusCopy = homeworkSubmissionStatus(task) === "ready" ? "pronto para entregar" : task.done ? "entregue" : esc(task.estimatedMinutes || 30) + " min";
+      return '<button class="homework-queue-item ' + (workDone ? 'is-done' : '') + ' ' + (task.id === activeId ? 'is-active' : '') + '" type="button" data-action="homework-select" data-id="' + attr(task.id) + '" ' + (workDone ? 'disabled' : '') + '><span class="homework-queue-check">' + status + '</span><span><strong>' + esc(course ? course.name : 'TPC') + '</strong><small>' + esc(task.title) + ' · ' + statusCopy + '</small></span></button>';
     }).join("");
   }
 
@@ -3850,7 +4147,8 @@
   }
 
   function renderHomeworkComplete(tasks) {
-    return '<section class="homework-complete-screen"><span class="homework-complete-icon"><i data-lucide="check"></i></span><p class="card-label">After-school complete</p><h2>TPCs feitos!</h2><p>Fechaste ' + tasks.length + ' tarefa' + (tasks.length === 1 ? '' : 's') + '. Já podes descansar sem aquela sensação de “estou-me a esquecer de alguma coisa”.</p><div class="homework-complete-actions"><button class="button button-dark" type="button" data-route="home"><i data-lucide="house"></i>Voltar à Home</button><button class="button" type="button" data-action="view-report-card"><i data-lucide="award"></i>Ver o dia</button></div></section>';
+    var delivered = tasks.filter(function (task) { return ["submitted", "confirmed"].indexOf(homeworkSubmissionStatus(task)) >= 0; }).length;
+    return '<section class="homework-complete-screen homework-complete"><span class="homework-complete-icon"><i data-lucide="check"></i></span><p class="card-label">After-school complete</p><h2>Tudo entregue!</h2><p>Entregaste ' + delivered + ' trabalho' + (delivered === 1 ? '' : 's') + ' nas mailboxes certas. Já podes descansar sem aquela sensação de “estou-me a esquecer de alguma coisa”.</p><div class="homework-complete-actions"><button class="button button-dark" type="button" data-route="home"><i data-lucide="house"></i>Voltar à Home</button><button class="button" type="button" data-action="view-report-card"><i data-lucide="award"></i>Ver o dia</button></div></section>';
   }
 
   function renderHomeworkSession() {
@@ -3863,8 +4161,8 @@
       homeworkSessionRuntime = { taskId: null, elapsedByTask: {}, startedAt: null, running: false, complete: false };
       setHomeworkCurrent("", true);
     }
-    var pending = tasks.filter(function (task) { return !task.done; });
-    if (!pending.length || homeworkSessionRuntime.complete) return renderHomeworkComplete(tasks);
+    var pending = tasks.filter(function (task) { return !isHomeworkWorkDone(task); });
+    if (!pending.length) return renderHomeworkMailboxScreen(tasks);
     var current = pending.find(function (task) { return task.id === homeworkSessionRuntime.taskId; }) || setHomeworkCurrent(pending[0].id, true);
     var course = courseById(current.courseId);
     var position = pending.findIndex(function (task) { return task.id === current.id; }) + 1;
@@ -3879,25 +4177,26 @@
     storeHomeworkElapsed();
     var task = state.tasks.find(function (item) { return item.id === homeworkSessionRuntime.taskId; });
     if (!task) return;
-    task.done = true;
-    task.completedOnce = true;
-    state.meta.completedHomeworkIds = Array.from(new Set(asArray(state.meta.completedHomeworkIds).concat(String(task.id))));
-    task.completedAt = new Date().toISOString();
+    task.done = false;
+    task.completedOnce = false;
+    task.submissionStatus = "ready";
+    task.workCompletedAt = new Date().toISOString();
     task.actualSeconds = Number(homeworkSessionRuntime.elapsedByTask[task.id] || 0);
-    var next = homeworkSessionTasks().find(function (item) { return !item.done; });
+    var next = homeworkSessionTasks().find(function (item) { return !isHomeworkWorkDone(item); });
     if (next) {
       setHomeworkCurrent(next.id, true);
       await save(true);
       render();
-      toast("TPC concluído. A seguir: " + next.title);
+      toast("TPC preparado para entrega. A seguir: " + next.title);
       return;
     }
     homeworkSessionRuntime.taskId = null;
     homeworkSessionRuntime.running = false;
     homeworkSessionRuntime.complete = true;
     await save(true);
+    selectedMailboxTaskId = homeworkReadyForMailbox().length ? homeworkReadyForMailbox()[0].id : null;
     render();
-    setTimeout(launchHomeworkConfetti, 80);
+    toast("Trabalho terminado. Agora entrega-o à mailbox certa.");
   }
 
   function launchHomeworkConfetti() {
@@ -4433,7 +4732,10 @@
   }
 
   function reviewBackBlocks(question) {
+    var directAnswer = classGameAnswerBlocks(question);
     var explanation = normalizeContentBlocks(question.explanationBlocks || question.explanation || question.answer || "");
+    if (directAnswer.length && explanation.length) return directAnswer.concat([{ type: "text", text: "Explicação:" }]).concat(explanation);
+    if (directAnswer.length) return directAnswer;
     if (explanation.length) return explanation;
     var options = asArray(question.optionBlocks).length ? question.optionBlocks : asArray(question.options).map(normalizeContentBlocks);
     return options[Number(question.answerIndex)] || [];
@@ -4476,8 +4778,7 @@
       var sourceIndex = options.sourceIndexes ? Number(options.sourceIndexes[index]) : index;
       var answer = answers[index];
       var confidence = normalizeConfidence(confidences && confidences[index]);
-      var selfCheck = question.mode === "self-check" || !asArray(question.options).length;
-      var correct = selfCheck ? answer === 1 : answer === Number(question.answerIndex);
+      var correct = classGameAnswerIsCorrect(question, answer);
       var calibration = calibrationFromPerformance(correct, confidence);
       if (!correct) summary.errors += 1;
       if (calibration === "fragile") summary.fragile += 1;
@@ -4708,7 +5009,7 @@
     var aiProjects = semesterItems("aiProjects");
     var quizRows = quizzes.length ? quizzes.slice(0, 5).map(function (quiz) {
       var course = courseById(quiz.courseId);
-      return '<div class="study-practice-row"><span class="list-icon violet"><i data-lucide="circle-help"></i></span><span><strong>' + esc(quiz.title) + '</strong><small>' + esc(course ? course.name : "Sem cadeira") + ' · ' + asArray(quiz.questions).length + ' perguntas' + (quiz.lastScore != null ? ' · último ' + quiz.lastScore + '%' : '') + '</small></span><button class="button button-small" type="button" data-action="start-quiz" data-id="' + attr(quiz.id) + '"><i data-lucide="play"></i>Começar</button></div>';
+      return '<div class="study-practice-row"><span class="list-icon violet"><i data-lucide="circle-help"></i></span><span><strong>' + esc(quiz.title) + '</strong><small>' + esc(course ? course.name : "Sem cadeira") + ' · ' + asArray(quiz.questions).length + ' perguntas' + (quiz.lastScore != null ? ' · último ' + activityLetterGrade(quiz.lastScore) : '') + '</small></span><button class="button button-small" type="button" data-action="start-quiz" data-id="' + attr(quiz.id) + '"><i data-lucide="play"></i>Começar</button></div>';
     }).join("") : emptyState("circle-help", "Ainda sem quizzes", "Cria um quiz numa aula ou importa material para começar a praticar.", "add-quiz", "Criar quiz");
     return '<div class="study-section-intro"><div><p class="card-label">Praticar</p><h2>Como queres testar a matéria?</h2><p>Escolhe uma atividade. A Twenty guarda os erros e agenda o que precisa de voltar.</p></div><button class="button button-dark" type="button" data-action="add-quiz"><i data-lucide="plus"></i>Novo quiz</button></div>'
       + '<div class="study-tool-grid"><button class="study-tool-card tool-diagnostic" type="button" data-route="study" data-tab="diagnostic"><span class="study-tool-icon"><i data-lucide="scan-search"></i></span><span><small>Antes de estudar muita matéria</small><strong>Diagnóstico rápido</strong><p>Descobre o que já dominas e revê apenas as lacunas.</p><b>' + diagnostics.length + ' realizados</b></span><i data-lucide="arrow-right"></i></button>'
@@ -8575,14 +8876,14 @@
       viewLessonQuiz(quiz.lessonId);
       return;
     }
-    quizRuntime = { quizId: id, mode: "quiz", questionIndexes: [], index: 0, answers: [], confidences: [], explanations: [], selected: null, confidence: 0, revealed: false };
+    quizRuntime = { quizId: id, mode: "quiz", questionIndexes: [], index: 0, answers: [], confidences: [], explanations: [], selected: null, typedAnswer: "", orderSelection: [], matchSelection: {}, memorySelection: [], memoryHidden: false, confidence: 0, revealed: false };
     renderQuizQuestion();
   }
 
   function startDiagnostic(id) {
     var quiz = state.quizzes.find(function (item) { return item.id === id; });
     if (!quiz || asArray(quiz.questions).length < 3) { toast("O diagnóstico precisa de pelo menos três perguntas reais.", "warning"); return; }
-    quizRuntime = { quizId: id, mode: "diagnostic", questionIndexes: diagnosticQuestionIndexes(quiz), index: 0, answers: [], confidences: [], explanations: [], selected: null, confidence: 0, revealed: false };
+    quizRuntime = { quizId: id, mode: "diagnostic", questionIndexes: diagnosticQuestionIndexes(quiz), index: 0, answers: [], confidences: [], explanations: [], selected: null, typedAnswer: "", orderSelection: [], matchSelection: {}, memorySelection: [], memoryHidden: false, confidence: 0, revealed: false };
     renderQuizQuestion();
   }
 
@@ -8590,6 +8891,83 @@
     if (!quizRuntime) return;
     var input = document.getElementById("quizReason");
     if (input) quizRuntime.explanations[quizRuntime.index] = String(input.value || "").trim();
+  }
+
+  function captureQuizGameInput() {
+    if (!quizRuntime) return;
+    var typed = document.getElementById("quizTypedAnswer");
+    if (typed) quizRuntime.typedAnswer = String(typed.value || "").trim();
+    var matchSelects = document.querySelectorAll(".quiz-match-select");
+    if (matchSelects.length) {
+      quizRuntime.matchSelection = quizRuntime.matchSelection || {};
+      matchSelects.forEach(function (select) { quizRuntime.matchSelection[select.dataset.left || ""] = select.value || ""; });
+    }
+  }
+
+  function resetQuizRuntimeQuestionState() {
+    if (!quizRuntime) return;
+    quizRuntime.selected = null;
+    quizRuntime.typedAnswer = "";
+    quizRuntime.orderSelection = [];
+    quizRuntime.matchSelection = {};
+    quizRuntime.memorySelection = [];
+    quizRuntime.memoryHidden = false;
+    quizRuntime.confidence = 0;
+    quizRuntime.revealed = false;
+  }
+
+  function currentQuizGameAnswer(question) {
+    var type = normalizeClassGameType(question && question.gameType || question && question.mode);
+    if (type === "type-answer") return String(quizRuntime.typedAnswer || "").trim();
+    if (type === "order") return asArray(quizRuntime.orderSelection).slice();
+    if (type === "match") return Object.assign({}, quizRuntime.matchSelection || {});
+    if (type === "memory") return asArray(quizRuntime.memorySelection).slice();
+    return quizRuntime.selected;
+  }
+
+  function quizGameAnswerReady(question) {
+    var type = normalizeClassGameType(question && question.gameType || question && question.mode);
+    if (question.mode === "self-check" || (!asArray(question.options).length && type === "choice")) return true;
+    if (type === "type-answer") return !!String(quizRuntime.typedAnswer || "").trim();
+    if (type === "order") return asArray(quizRuntime.orderSelection).length === asArray(question.orderItems).length && asArray(question.orderItems).length > 0;
+    if (type === "match") return asArray(question.matchPairs).length > 0 && asArray(question.matchPairs).every(function (pair) { return !!String((quizRuntime.matchSelection || {})[pair.left] || ""); });
+    if (type === "memory") return quizRuntime.memoryHidden && asArray(quizRuntime.memorySelection).length === asArray(question.sequence).length && asArray(question.sequence).length > 0;
+    return quizRuntime.selected != null;
+  }
+
+  function arrayWithoutSelectedOccurrences(items, selected) {
+    var remaining = asArray(items).slice();
+    asArray(selected).forEach(function (value) {
+      var index = remaining.indexOf(value);
+      if (index >= 0) remaining.splice(index, 1);
+    });
+    return remaining;
+  }
+
+  function renderClassGameBody(question, confidence, reason) {
+    var type = normalizeClassGameType(question.gameType || question.mode);
+    var label = '<div class="class-game-label type-' + attr(type) + '"><i data-lucide="' + (type === "type-answer" ? "sigma" : type === "spot-error" ? "scan-search" : type === "order" ? "list-ordered" : type === "match" ? "waypoints" : type === "memory" ? "brain" : "circle-help") + '"></i><span><strong>' + esc(classGameLabel(question)) + '</strong><small>Atividade rápida da aula</small></span></div>';
+    if (type === "type-answer") {
+      return label + '<div class="class-game-written"><label for="quizTypedAnswer">A tua resposta</label><input id="quizTypedAnswer" type="text" autocomplete="off" inputmode="text" value="' + attr(quizRuntime.typedAnswer || "") + '" placeholder="Escreve a fórmula ou resposta…"><small>São aceites respostas equivalentes configuradas pelo quiz.</small></div>' + renderConfidenceScale("quiz-confidence", confidence) + reason;
+    }
+    if (type === "order") {
+      var chosen = asArray(quizRuntime.orderSelection);
+      var remaining = arrayWithoutSelectedOccurrences(question.orderItems, chosen);
+      return label + '<div class="class-game-order"><div class="class-game-order-result"><p class="card-label">A tua ordem</p>' + (chosen.length ? chosen.map(function (item, index) { return '<button type="button" data-action="quiz-order-remove" data-index="' + index + '"><span>' + (index + 1) + '</span>' + esc(item) + '<i data-lucide="x"></i></button>'; }).join("") : '<small>Toca nos passos pela ordem correta.</small>') + '</div><div class="class-game-order-pool">' + remaining.map(function (item) { return '<button type="button" data-action="quiz-order-pick" data-value="' + attr(item) + '"><i data-lucide="grip"></i>' + esc(item) + '</button>'; }).join("") + '</div></div>' + (quizGameAnswerReady(question) ? renderConfidenceScale("quiz-confidence", confidence) + reason : '<div class="form-note">Escolhe todos os passos para indicar a confiança.</div>');
+    }
+    if (type === "match") {
+      var rights = asArray(question.matchPairs).map(function (pair) { return pair.right; }).sort(function (a, b) { return String(a).localeCompare(String(b)); });
+      return label + '<div class="class-game-match">' + asArray(question.matchPairs).map(function (pair) { var selected = (quizRuntime.matchSelection || {})[pair.left] || ""; return '<label><strong>' + esc(pair.left) + '</strong><i data-lucide="arrow-right"></i><select class="quiz-match-select" data-left="' + attr(pair.left) + '"><option value="">Escolher…</option>' + rights.map(function (right) { return '<option value="' + attr(right) + '" ' + (selected === right ? 'selected' : '') + '>' + esc(right) + '</option>'; }).join("") + '</select></label>'; }).join("") + '</div>' + renderConfidenceScale("quiz-confidence", confidence) + reason;
+    }
+    if (type === "memory") {
+      if (!quizRuntime.memoryHidden) {
+        return label + '<div class="class-game-memory-show"><p>Memoriza a sequência:</p><div>' + asArray(question.sequence).map(function (item, index) { return '<span style="--memory-index:' + index + '">' + esc(item) + '</span>'; }).join("") + '</div><small>Quando estiveres pronto, a sequência desaparece.</small></div>';
+      }
+      var memoryChosen = asArray(quizRuntime.memorySelection);
+      var memoryRemaining = arrayWithoutSelectedOccurrences(question.sequence, memoryChosen).reverse();
+      return label + '<div class="class-game-memory-play"><div class="memory-answer">' + (memoryChosen.length ? memoryChosen.map(function (item, index) { return '<button type="button" data-action="quiz-memory-remove" data-index="' + index + '">' + esc(item) + '</button>'; }).join("") : '<small>Repete a sequência.</small>') + '</div><div class="memory-pool">' + memoryRemaining.map(function (item) { return '<button type="button" data-action="quiz-memory-pick" data-value="' + attr(item) + '">' + esc(item) + '</button>'; }).join("") + '</div></div>' + (quizGameAnswerReady(question) ? renderConfidenceScale("quiz-confidence", confidence) + reason : '');
+    }
+    return "";
   }
 
   function renderQuizQuestion() {
@@ -8601,11 +8979,12 @@
     var sourceIndex = quizRuntimeSourceIndex(quizRuntime.index);
     var selected = quizRuntime.selected;
     var confidence = normalizeConfidence(quizRuntime.confidence);
-    var progress = '<div class="quiz-progress"><span style="width:' + ((quizRuntime.index + 1) / questions.length * 100) + '%"></span></div><p class="card-label" style="margin-top:14px">' + (quizRuntime.mode === "diagnostic" ? "Diagnóstico" : "Pergunta") + ' ' + (quizRuntime.index + 1) + ' de ' + questions.length + '</p>';
+    var gameType = normalizeClassGameType(question.gameType || question.mode);
+    var progress = '<div class="quiz-progress"><span style="width:' + ((quizRuntime.index + 1) / questions.length * 100) + '%"></span></div><p class="card-label" style="margin-top:14px">' + (quizRuntime.mode === "diagnostic" ? "Diagnóstico" : "Quiz-Aula") + ' · ' + classGameLabel(question) + ' · ' + (quizRuntime.index + 1) + ' de ' + questions.length + '</p>';
     var body;
     var footer;
     var reason = shouldAskQuizExplanation(quiz, question, sourceIndex, confidence) ? '<div class="quiz-reason"><label for="quizReason">Porque escolheste esta resposta? <small>Opcional · uma frase</small></label><textarea id="quizReason" rows="2" placeholder="Explica o teu raciocínio…">' + esc(quizRuntime.explanations[quizRuntime.index] || "") + '</textarea></div>' : '';
-    if (question.mode === "self-check" || !asArray(question.options).length) {
+    if (question.mode === "self-check" || (!asArray(question.options).length && gameType === "choice")) {
       var source = [question.assessmentLabel, question.academicYear].filter(Boolean).join(" · ") || "Pergunta de teste anterior";
       body = progress + '<div class="self-check-source"><span class="badge badge-pink"><i data-lucide="history"></i>Pergunta anterior</span><small>' + esc(source) + '</small></div><h3 class="quiz-question">' + esc(question.prompt) + '</h3>' + renderImageGallery(question.images, "question", { ownerId: question.sourceQuestionId || "" });
       if (quizRuntime.revealed) {
@@ -8615,15 +8994,23 @@
         body += '<div class="form-note self-check-note"><strong>Responde primeiro sem consultar os apontamentos.</strong><br>Indica a confiança antes de revelar a solução.</div>' + renderConfidenceScale("quiz-confidence", confidence);
         footer = '<footer class="modal-foot"><button class="button" type="button" data-action="close-modal">Sair</button><button class="button button-dark" type="button" data-action="quiz-reveal" ' + (state.settings.studyConfidencePrompts && !confidence ? "disabled" : "") + '><i data-lucide="eye"></i>Revelar resposta</button></footer>';
       }
+    } else if (["type-answer", "order", "match", "memory"].indexOf(gameType) >= 0) {
+      body = progress + '<div class="quiz-question">' + renderContentBlocks(question.promptBlocks || question.prompt) + '</div>' + renderImageGallery(question.images, "question", { ownerId: question.sourceQuestionId || "" }) + renderClassGameBody(question, confidence, reason) + '<div id="quizFeedback"></div>';
+      if (gameType === "memory" && !quizRuntime.memoryHidden) {
+        footer = '<footer class="modal-foot"><button class="button" type="button" data-action="close-modal">Sair</button><button class="button button-dark" type="button" data-action="quiz-memory-hide"><i data-lucide="eye-off"></i>Estou pronto</button></footer>';
+      } else {
+        footer = '<footer class="modal-foot"><button class="button" type="button" data-action="close-modal">Sair</button><button class="button button-dark" type="button" data-action="quiz-next" ' + (!quizGameAnswerReady(question) || (state.settings.studyConfidencePrompts && !confidence) ? "disabled" : "") + '>' + (quizRuntime.index === questions.length - 1 ? "Terminar" : "Seguinte") + '<i data-lucide="arrow-right"></i></button></footer>';
+      }
     } else {
       var quizOptions = asArray(question.optionBlocks).length ? question.optionBlocks : asArray(question.options);
-      body = progress + '<div class="quiz-question">' + renderContentBlocks(question.promptBlocks || question.prompt) + '</div>' + renderImageGallery(question.images, "question", { ownerId: question.sourceQuestionId || "" }) + '<div class="quiz-options">' + quizOptions.map(function (option, index) {
+      body = progress + '<div class="class-game-label type-' + attr(gameType) + '"><i data-lucide="' + (gameType === "spot-error" ? "scan-search" : "circle-help") + '"></i><span><strong>' + esc(classGameLabel(question)) + '</strong><small>' + (gameType === "spot-error" ? 'Toca na opção incorreta.' : 'Escolhe uma opção.') + '</small></span></div><div class="quiz-question">' + renderContentBlocks(question.promptBlocks || question.prompt) + '</div>' + renderImageGallery(question.images, "question", { ownerId: question.sourceQuestionId || "" }) + '<div class="quiz-options ' + (gameType === "spot-error" ? 'is-spot-error' : '') + '">' + quizOptions.map(function (option, index) {
         return '<button class="quiz-option ' + (selected === index ? "is-selected" : "") + '" type="button" data-action="quiz-answer" data-index="' + index + '"><span>' + String.fromCharCode(65 + index) + '</span>' + renderQuizOptionContent(option) + "</button>";
       }).join("") + '</div>' + (selected == null ? '<div class="form-note"><strong>Escolhe primeiro uma resposta.</strong> A confiança só aparece depois para não influenciar a escolha.</div>' : renderConfidenceScale("quiz-confidence", confidence) + reason) + '<div id="quizFeedback"></div>';
       footer = '<footer class="modal-foot"><button class="button" type="button" data-action="close-modal">Sair</button><button class="button button-dark" type="button" data-action="quiz-next" ' + (selected == null || (state.settings.studyConfidencePrompts && !confidence) ? "disabled" : "") + '>' + (quizRuntime.index === questions.length - 1 ? "Terminar" : "Seguinte") + '<i data-lucide="arrow-right"></i></button></footer>';
     }
-    openModal((quizRuntime.mode === "diagnostic" ? "Diagnóstico · " : "") + quiz.title, body, { footer: footer });
+    openModal((quizRuntime.mode === "diagnostic" ? "Diagnóstico · " : "") + quiz.title, body, { footer: footer, className: "modal-class-game" });
   }
+
 
   async function finishDiagnostic(quiz, questions, sourceIndexes, answers, confidences, explanations) {
     var completedAt = new Date().toISOString();
@@ -8648,10 +9035,10 @@
     if (quizRuntime.mode === "diagnostic") { await finishDiagnostic(quiz, questions, sourceIndexes, answers, confidences, explanations); return; }
     var correct = answers.reduce(function (sum, answer, index) {
       var question = questions[index] || {};
-      if (question.mode === "self-check" || !asArray(question.options).length) return sum + (answer === 1 ? 1 : 0);
-      return sum + (answer === Number(question.answerIndex) ? 1 : 0);
+      return sum + (classGameAnswerIsCorrect(question, answer) ? 1 : 0);
     }, 0);
     var score = Math.round(correct / questions.length * 100);
+    var letterGrade = activityLetterGrade(score);
     var completedAt = new Date().toISOString();
     var reviewSummary = syncQuizReviewItems(quiz, answers, confidences, explanations, { questions: questions, sourceIndexes: sourceIndexes });
     quiz.lastScore = score;
@@ -8659,7 +9046,7 @@
     quiz.completedOnce = true;
     quiz.lastCompletedAt = completedAt;
     quiz.attempts = asArray(quiz.attempts);
-    quiz.attempts.push({ id: uid("attempt"), completedAt: completedAt, score: score, answers: answers, confidences: confidences, explanations: explanations, correct: correct, total: questions.length, reviewErrors: reviewSummary.errors, fragile: reviewSummary.fragile, misconceptions: reviewSummary.misconceptions });
+    quiz.attempts.push({ id: uid("attempt"), completedAt: completedAt, score: score, letterGrade: letterGrade, answers: answers, confidences: confidences, explanations: explanations, correct: correct, total: questions.length, reviewErrors: reviewSummary.errors, fragile: reviewSummary.fragile, misconceptions: reviewSummary.misconceptions });
     if (quiz.attempts.length > 30) quiz.attempts = quiz.attempts.slice(-30);
     if (quiz.lessonId) completeLessonBeOnline(quiz.lessonId);
     ensureBeOnlineTasks();
@@ -8669,7 +9056,7 @@
     var closesLesson = !!quiz.lessonId;
     var resultCopy = reviewSummary.misconceptions ? reviewSummary.misconceptions + ' erro(s) foram respondidos com confiança e ficaram no topo do Banco de Erros.' : reviewSummary.fragile ? reviewSummary.fragile + ' acerto(s) estavam inseguros e regressam mais cedo.' : closesLesson ? (score === 100 ? "Aula acompanhada. Mantiveste-te em linha e sem matéria acumulada." : score >= 70 ? "Aula acompanhada. Os erros já entraram na revisão para não se perderem." : "Aula acompanhada, mas merece reforço. A Twenty marcou os itens falhados para revisão.") : (score === 100 ? "Excelente domínio deste quiz." : score >= 70 ? "Bom caminho. Os itens falhados já estão no Banco de erros." : "Os erros foram transformados numa fila curta de revisão.");
     var reviewButton = reviewSummary.errors || reviewSummary.fragile ? '<button class="button button-dark" type="button" data-route="study" data-tab="errors"><i data-lucide="triangle-alert"></i>Rever ' + (reviewSummary.errors + reviewSummary.fragile) + ' item' + ((reviewSummary.errors + reviewSummary.fragile) === 1 ? '' : 's') + '</button>' : '<button class="button button-dark" type="button" data-route="study" data-tab="review"><i data-lucide="rotate-ccw"></i>Ver próxima revisão</button>';
-    openModal(closesLesson ? "Aula revista" : "Quiz concluído", '<div class="finish-card quiz-learning-finish"><span class="badge badge-dark"><i data-lucide="' + (closesLesson ? "book-check" : "sparkles") + '"></i>' + (closesLesson ? "Aula acompanhada" : "Resultado") + '</span><h2>' + score + '%</h2><p class="card-subtitle">' + correct + ' de ' + questions.length + ' respostas corretas</p><div class="progress-ring" style="--progress:' + score + '%"><strong>' + score + '%</strong></div><p>' + resultCopy + '</p><div class="quiz-review-summary"><span><strong>' + reviewSummary.errors + '</strong><small>erros</small></span><span><strong>' + reviewSummary.fragile + '</strong><small>acertos frágeis</small></span><span><strong>' + reviewSummary.misconceptions + '</strong><small>erros confiantes</small></span></div></div>', { footer: '<footer class="modal-foot"><button class="button" type="button" data-action="close-modal">Fechar</button>' + reviewButton + '</footer>' });
+    openModal(closesLesson ? "Aula revista" : "Quiz concluído", '<div class="finish-card quiz-learning-finish"><span class="badge badge-dark"><i data-lucide="' + (closesLesson ? "book-check" : "sparkles") + '"></i>' + (closesLesson ? "Aula acompanhada" : "Resultado") + '</span><div class="class-activity-grade"><strong>' + letterGrade + '</strong><span>Desempenho da atividade</span></div><p class="card-subtitle">' + correct + ' de ' + questions.length + ' respostas corretas · ' + score + '% nos detalhes</p><div class="progress-ring" style="--progress:' + score + '%"><strong>' + letterGrade + '</strong></div><p><strong>' + esc(activityGradeCopy(letterGrade)) + '.</strong> ' + resultCopy + '</p><div class="quiz-review-summary"><span><strong>' + reviewSummary.errors + '</strong><small>erros</small></span><span><strong>' + reviewSummary.fragile + '</strong><small>acertos frágeis</small></span><span><strong>' + reviewSummary.misconceptions + '</strong><small>erros confiantes</small></span></div></div>', { footer: '<footer class="modal-foot"><button class="button" type="button" data-action="close-modal">Fechar</button>' + reviewButton + '</footer>' });
   }
 
   function showAssessmentScope(id) {
@@ -9405,9 +9792,15 @@
       var task = state.tasks.find(function (item) { return item.id === button.dataset.id; });
       if (task && task.type === "lesson-quiz") {
         await doLessonQuiz(task.lessonId || "");
-      } else if (task && (task.type === "homework" || task.type === "tpc") && (task.lockedContent || task.configuredFromPrompt)) {
-        if (task.done || task.completedOnce) {
-          viewLessonHomework(task.id);
+      } else if (task && isHomeworkTask(task)) {
+        if (homeworkSubmissionStatus(task) === "ready") {
+          closeModal();
+          selectedMailboxTaskId = task.id;
+          homeworkSessionRuntime = { taskId: null, elapsedByTask: {}, startedAt: null, running: false, complete: true };
+          setRoute("homework");
+        } else if (task.done || task.completedOnce) {
+          if (task.lockedContent || task.configuredFromPrompt) viewLessonHomework(task.id);
+          else showTaskDetail(task.id);
         } else {
           closeModal();
           startHomeworkSession(task.id);
@@ -9419,6 +9812,11 @@
         render();
         toast(task.done ? "Tarefa concluída." : "Tarefa reaberta.");
       }
+    } else if (action === "open-homework-mailbox") {
+      closeModal();
+      selectedMailboxTaskId = button.dataset.task || null;
+      homeworkSessionRuntime = { taskId: null, elapsedByTask: {}, startedAt: null, running: false, complete: true };
+      setRoute("homework");
     } else if (action === "start-homework-session") {
       closeModal();
       startHomeworkSession(button.dataset.task || "");
@@ -9434,6 +9832,15 @@
       render();
     } else if (action === "homework-finish") {
       await finishHomeworkTask();
+    } else if (action === "mailbox-select-task") {
+      selectedMailboxTaskId = button.dataset.id || null;
+      render();
+    } else if (action === "mailbox-submit-selected") {
+      if (!selectedMailboxTaskId) {
+        toast("Escolhe primeiro o envelope que queres entregar.", "warning");
+      } else {
+        await submitHomeworkToMailbox(selectedMailboxTaskId, button.dataset.course || "");
+      }
     } else if (action === "toggle-mastery") {
       var lesson = lessonById(button.dataset.id);
       if (lesson) { lesson.mastered = !lesson.mastered; await save(true); render(); toast(lesson.mastered ? "Aula marcada como dominada." : "Aula voltou à lista de revisão."); }
@@ -9458,9 +9865,19 @@
       });
       if (pendingOnline.length) await doLessonQuiz(pendingOnline[0].id);
     } else if (action === "quiz-answer") {
-      if (quizRuntime) { captureQuizExplanation(); quizRuntime.selected = Number(button.dataset.index); quizRuntime.confidence = 0; renderQuizQuestion(); }
+      if (quizRuntime) { captureQuizExplanation(); captureQuizGameInput(); quizRuntime.selected = Number(button.dataset.index); quizRuntime.confidence = 0; renderQuizQuestion(); }
+    } else if (action === "quiz-order-pick") {
+      if (quizRuntime) { captureQuizExplanation(); quizRuntime.orderSelection = asArray(quizRuntime.orderSelection).concat(String(button.dataset.value || "")); quizRuntime.confidence = 0; renderQuizQuestion(); }
+    } else if (action === "quiz-order-remove") {
+      if (quizRuntime) { captureQuizExplanation(); quizRuntime.orderSelection = asArray(quizRuntime.orderSelection); quizRuntime.orderSelection.splice(Number(button.dataset.index || 0), 1); quizRuntime.confidence = 0; renderQuizQuestion(); }
+    } else if (action === "quiz-memory-hide") {
+      if (quizRuntime) { quizRuntime.memoryHidden = true; quizRuntime.memorySelection = []; quizRuntime.confidence = 0; renderQuizQuestion(); }
+    } else if (action === "quiz-memory-pick") {
+      if (quizRuntime) { captureQuizExplanation(); quizRuntime.memorySelection = asArray(quizRuntime.memorySelection).concat(String(button.dataset.value || "")); quizRuntime.confidence = 0; renderQuizQuestion(); }
+    } else if (action === "quiz-memory-remove") {
+      if (quizRuntime) { captureQuizExplanation(); quizRuntime.memorySelection = asArray(quizRuntime.memorySelection); quizRuntime.memorySelection.splice(Number(button.dataset.index || 0), 1); quizRuntime.confidence = 0; renderQuizQuestion(); }
     } else if (action === "quiz-confidence") {
-      if (quizRuntime) { captureQuizExplanation(); quizRuntime.confidence = normalizeConfidence(button.dataset.value); renderQuizQuestion(); }
+      if (quizRuntime) { captureQuizGameInput(); captureQuizExplanation(); quizRuntime.confidence = normalizeConfidence(button.dataset.value); renderQuizQuestion(); }
     } else if (action === "quiz-reveal") {
       if (quizRuntime && (!state.settings.studyConfidencePrompts || quizRuntime.confidence)) { quizRuntime.revealed = true; renderQuizQuestion(); }
     } else if (action === "quiz-self-rate") {
@@ -9468,14 +9885,24 @@
         captureQuizExplanation();
         quizRuntime.answers.push(Number(button.dataset.value) === 1 ? 1 : 0);
         quizRuntime.confidences.push(normalizeConfidence(quizRuntime.confidence));
-        quizRuntime.selected = null;
-        quizRuntime.confidence = 0;
-        quizRuntime.revealed = false;
+        resetQuizRuntimeQuestionState();
         quizRuntime.index += 1;
         renderQuizQuestion();
       }
     } else if (action === "quiz-next") {
-      if (quizRuntime && quizRuntime.selected != null && (!state.settings.studyConfidencePrompts || quizRuntime.confidence)) { captureQuizExplanation(); quizRuntime.answers.push(quizRuntime.selected); quizRuntime.confidences.push(normalizeConfidence(quizRuntime.confidence)); quizRuntime.selected = null; quizRuntime.confidence = 0; quizRuntime.revealed = false; quizRuntime.index += 1; renderQuizQuestion(); }
+      if (quizRuntime) {
+        captureQuizGameInput();
+        captureQuizExplanation();
+        var activeQuiz = state.quizzes.find(function (item) { return item.id === quizRuntime.quizId; });
+        var activeQuestion = activeQuiz && quizRuntimeQuestions(activeQuiz)[quizRuntime.index];
+        if (!activeQuestion || !quizGameAnswerReady(activeQuestion)) { toast("Completa primeiro a atividade.", "warning"); return; }
+        if (state.settings.studyConfidencePrompts && !quizRuntime.confidence) { toast("Indica primeiro a tua confiança.", "warning"); return; }
+        quizRuntime.answers.push(currentQuizGameAnswer(activeQuestion));
+        quizRuntime.confidences.push(normalizeConfidence(quizRuntime.confidence));
+        resetQuizRuntimeQuestionState();
+        quizRuntime.index += 1;
+        renderQuizQuestion();
+      }
     } else if (action === "assessment-scope" || action === "study-assessment") {
       showAssessmentScope(button.dataset.id);
     } else if (action === "show-event") {
@@ -9598,6 +10025,10 @@
       if (canteenResult.status === "ready") toast("Ementa atualizada a partir da SAS NOVA.");
       else if (canteenResult.data) toast("A SAS NOVA não respondeu; mantive a última ementa guardada.", "warning");
       else toast("Não foi possível atualizar a ementa.", "error");
+    } else if (action === "home-schedule-view") {
+      state.settings.homeScheduleView = button.dataset.view === "timeline" ? "timeline" : "blocks";
+      await save(true);
+      render();
     } else if (action === "planner-mode") {
       state.settings.plannerView = ["schedule", "calendar", "study-day"].indexOf(button.dataset.mode) >= 0 ? button.dataset.mode : "schedule";
       await save(true);
@@ -9880,7 +10311,7 @@
       }, 60000);
       if (!state.profile.onboardingComplete || !state.currentSemesterId || !activeCourses().length) startOnboarding(state.semesters.length ? "new-semester" : "first");
       if ("serviceWorker" in navigator && location.protocol !== "file:") {
-        navigator.serviceWorker.register("sw.js?v=31.1-study-ux", { updateViaCache: "none" }).then(function () {
+        navigator.serviceWorker.register("sw.js?v=32.0-campus-day", { updateViaCache: "none" }).then(function () {
           if (Sync && Sync.getStatus().configured) Sync.startAutoSync();
         }).catch(function () {
           if (Sync && Sync.getStatus().configured) Sync.startAutoSync();
@@ -9898,6 +10329,48 @@
     }
   }
 
+  function handleMailboxDragStart(event) {
+    var envelope = event.target.closest("[data-mailbox-task]");
+    if (!envelope || !event.dataTransfer) return;
+    selectedMailboxTaskId = envelope.dataset.mailboxTask || null;
+    event.dataTransfer.effectAllowed = "move";
+    event.dataTransfer.setData("text/twenty-homework", selectedMailboxTaskId || "");
+    envelope.classList.add("is-dragging");
+    document.querySelectorAll(".homework-mailbox").forEach(function (mailbox) {
+      if (mailbox.dataset.course === ((state.tasks.find(function (task) { return task.id === selectedMailboxTaskId; }) || {}).courseId || "")) mailbox.classList.add("can-receive");
+    });
+  }
+
+  function handleMailboxDragOver(event) {
+    var mailbox = event.target.closest(".homework-mailbox");
+    if (!mailbox || !selectedMailboxTaskId) return;
+    event.preventDefault();
+    if (event.dataTransfer) event.dataTransfer.dropEffect = "move";
+    mailbox.classList.add("is-drag-over");
+  }
+
+  function clearMailboxDragState() {
+    document.querySelectorAll(".homework-envelope.is-dragging, .homework-mailbox.is-drag-over, .homework-mailbox.can-receive").forEach(function (element) {
+      element.classList.remove("is-dragging", "is-drag-over", "can-receive");
+    });
+  }
+
+  async function handleMailboxDrop(event) {
+    var mailbox = event.target.closest(".homework-mailbox");
+    if (!mailbox) return;
+    event.preventDefault();
+    var taskId = event.dataTransfer && event.dataTransfer.getData("text/twenty-homework") || selectedMailboxTaskId;
+    try {
+      await submitHomeworkToMailbox(taskId, mailbox.dataset.course || "");
+    } catch (error) {
+      toast(error.message || "Não foi possível entregar o TPC.", "error");
+      mailbox.classList.add("is-wrong");
+      setTimeout(function () { mailbox.classList.remove("is-wrong"); }, 650);
+    } finally {
+      clearMailboxDragState();
+    }
+  }
+
   window.addEventListener("beforeunload", function (event) {
     if (!personalSettingsDraft && profilePhotoDraft === null) return;
     event.preventDefault();
@@ -9905,6 +10378,11 @@
   });
 
   document.addEventListener("click", handleDocumentClick);
+  document.addEventListener("dragstart", handleMailboxDragStart);
+  document.addEventListener("dragover", handleMailboxDragOver);
+  document.addEventListener("dragleave", function (event) { var mailbox = event.target.closest(".homework-mailbox"); if (mailbox) mailbox.classList.remove("is-drag-over"); });
+  document.addEventListener("drop", function (event) { handleMailboxDrop(event).catch(function (error) { console.error(error); }); });
+  document.addEventListener("dragend", clearMailboxDragState);
   document.addEventListener("submit", function (event) {
     if (event.target.id !== "personalSettingsForm") return;
     event.preventDefault();

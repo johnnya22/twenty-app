@@ -1,16 +1,16 @@
 "use strict";
 
-var CACHE = "twenty-study-os-v31-1-study-ux";
+var CACHE = "twenty-study-os-v32-campus-day";
 var APP_SHELL = [
   "./",
   "./index.html",
-  "./styles.css?v=31.1-study-ux",
-  "./sync.js?v=31.1-study-ux",
-  "./db.js?v=31.1-study-ux",
-  "./ai.js?v=31.1-study-ux",
-  "./ai-worker.js?v=31.1-study-ux",
-  "./app.js?v=31.1-study-ux",
-  "./lucide.min.js?v=31.1-study-ux",
+  "./styles.css?v=32.0-campus-day",
+  "./sync.js?v=32.0-campus-day",
+  "./db.js?v=32.0-campus-day",
+  "./ai.js?v=32.0-campus-day",
+  "./ai-worker.js?v=32.0-campus-day",
+  "./app.js?v=32.0-campus-day",
+  "./lucide.min.js?v=32.0-campus-day",
   "./manifest.webmanifest",
   "./icon.svg",
   "./icon-192.png",
