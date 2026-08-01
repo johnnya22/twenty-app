@@ -126,6 +126,14 @@
 
   function nl2br(value) { return esc(value).replace(/\n/g, "<br>"); }
 
+  function countLabel(count, singular, plural) {
+    var value = Number(count) || 0;
+    return value + " " + (value === 1 ? singular : (plural || singular + "s"));
+  }
+
+  function questionCountLabel(count) { return countLabel(count, "pergunta", "perguntas"); }
+  function previousQuestionCountLabel(count) { return countLabel(count, "pergunta anterior", "perguntas anteriores"); }
+
 
   function normalizeContentBlocks(value) {
     if (value == null) return [];
@@ -1659,7 +1667,7 @@
 
   function appVersion() {
     var meta = document.querySelector('meta[name="twenty-version"]');
-    return meta && meta.content ? String(meta.content) : "0.33.4";
+    return meta && meta.content ? String(meta.content) : "0.33.5";
   }
 
   function routeKey(value) {
@@ -2544,8 +2552,9 @@
       checksDone: checksDone,
       homeworkDue: tasks.homeworkDue.length,
       homeworkDone: tasks.homeworkDone.length,
-      routine: routineTotal ? Math.round(routineDone / routineTotal * 100) : 100,
-      complete: routineTotal ? routineDone >= routineTotal : blocks.length > 0,
+      routine: routineTotal ? Math.round(routineDone / routineTotal * 100) : null,
+      routineTotal: routineTotal,
+      complete: routineTotal ? routineDone >= routineTotal : false,
       day: day
     };
   }
@@ -2918,8 +2927,13 @@
       return '<div class="report-subject"><span><i data-lucide="book-open"></i>' + esc(item.course.name) + '</span><strong>' + activityLetterGrade(item.percentage) + '</strong></div>';
     }).join("") : '<p class="report-empty">Faz os Quiz-Aula para construíres o desempenho das atividades de hoje.</p>';
     var grade = report.activityGrade || "—";
-    var status = report.complete ? "Fechado" : "Em construção";
-    return '<article class="card span-5 daily-report-card ' + (report.complete ? "is-complete" : "") + '"><div class="card-title-row"><div><p class="card-label">Report Card · Hoje</p><h3>O teu dia escolar</h3></div><span class="badge ' + (report.complete ? "badge-mint" : "badge-yellow") + '">' + status + '</span></div><div class="report-grade report-grade-letter"><strong>' + grade + '</strong><span>desempenho<br>das atividades</span></div><div class="report-subjects">' + subjectRows + '</div><div class="report-routine"><span><strong>' + report.routine + '%</strong> rotina escolar</span><div class="mini-progress"><span style="width:' + report.routine + '%"></span></div><small>' + report.checksDone + '/' + report.checksDue + ' Quiz-Aula · ' + report.homeworkDone + '/' + report.homeworkDue + ' TPCs entregues</small></div><button class="button button-small" type="button" data-action="view-report-card"><i data-lucide="arrow-down"></i>Ver Report Card</button></article>';
+    var hasRoutine = Number(report.routineTotal) > 0;
+    var status = !hasRoutine ? "Sem atividades" : report.complete ? "Concluído" : "Em curso";
+    var statusClass = !hasRoutine ? "" : report.complete ? "badge-mint" : "badge-yellow";
+    var routineHtml = hasRoutine
+      ? '<div class="report-routine"><span><strong>' + report.routine + '%</strong> rotina escolar</span><div class="mini-progress"><span style="width:' + report.routine + '%"></span></div><small>' + report.checksDone + '/' + report.checksDue + ' Quiz-Aula · ' + report.homeworkDone + '/' + report.homeworkDue + ' TPCs entregues</small></div>'
+      : '<div class="report-routine is-empty"><span><strong>—</strong> rotina escolar</span><small>Sem atividades para concluir hoje.</small></div>';
+    return '<article class="card span-5 daily-report-card ' + (report.complete ? "is-complete" : "") + '"><div class="card-title-row"><div><p class="card-label">Report Card · Hoje</p><h3>O teu dia escolar</h3></div><span class="badge ' + statusClass + '">' + status + '</span></div><div class="report-grade report-grade-letter"><strong>' + grade + '</strong><span>desempenho<br>das atividades</span></div><div class="report-subjects">' + subjectRows + '</div>' + routineHtml + '<button class="button button-small" type="button" data-action="view-report-card"><i data-lucide="arrow-down"></i>Ver Report Card</button></article>';
   }
 
   function renderHome() {
@@ -2938,7 +2952,7 @@
     var configuredEndedLessons = endedLessons.filter(function (block) { return !!configuredQuizForLesson(block.lesson.id); });
     var completedChecks = configuredEndedLessons.filter(function (block) { return lessonIsBeOnline(block.lesson); }).length;
     var tasks = context.tasks;
-    var afterSchoolItems = context.pendingChecks.map(renderLessonCheckRow).join("");
+    var afterSchoolItems = context.pendingChecks.slice(0, 1).map(renderLessonCheckRow).join("");
     var homeworkList = tasks.overdue.concat(tasks.homeworkPending).filter(function (task, index, array) {
       return array.findIndex(function (candidate) { return candidate.id === task.id; }) === index;
     }).slice(0, 4);
@@ -2968,7 +2982,7 @@
       + renderHomeCanteenStep(context.now)
       + renderHomeStep("check-check", "Quizzes da aula", configuredEndedLessons.length ? completedChecks + "/" + configuredEndedLessons.length + " feitos" : "Configura-os dentro de cada aula", checksStepStatus)
       + renderHomeStep("notebook-pen", "TPC", tpcTotal ? tpcDone + "/" + tpcTotal + " concluídos" : "Sem TPC para hoje", tpcStepStatus)
-      + renderHomeStep("award", "Report Card", report.complete && blocks.length ? "Dia fechado" : "Atualiza ao longo do dia", reportStatus);
+      + renderHomeStep("award", "Report Card", !report.routineTotal ? "Sem atividades hoje" : report.complete ? "Dia fechado" : "Atualiza ao longo do dia", reportStatus);
 
     var phaseBadge = context.phaseLabel && context.phaseLabel !== context.atmosphere.label ? '<b>' + esc(context.phaseLabel) + '</b>' : '';
     var hero = '<section class="school-now-card span-12 ' + attr(context.atmosphere.className) + ' phase-' + attr(context.phase) + '"><div class="school-now-copy"><div class="school-now-kicker"><span><i data-lucide="' + attr(context.atmosphere.icon) + '"></i>' + esc(context.atmosphere.label) + '</span>' + phaseBadge + '</div><h2>' + esc(context.title) + '</h2><p>' + esc(context.copy) + '</p><div class="school-now-actions">' + context.primary + context.secondary + '</div></div><div class="school-now-status"><span class="school-now-icon"><i data-lucide="' + attr(context.icon) + '"></i></span><strong>' + esc(context.stat) + '</strong><small>' + esc(context.statLabel) + '</small><div class="school-now-glow"></div></div></section>';
@@ -3004,7 +3018,8 @@
 
   function renderTaskRow(task) {
     var course = courseById(task.courseId);
-    var label = task.type === "lesson-quiz" ? "Quiz" : task.type === "review" ? "Revisão" : task.priority === "high" ? "Prioridade" : "Tarefa";
+    var label = task.type === "lesson-quiz" ? "Quiz" : task.type === "review" ? "Revisão" : task.type === "project" ? "Projeto" : task.type === "reading" ? "Leitura" : "Tarefa";
+    var priority = task.priority === "high" ? '<span class="task-priority-indicator" title="Prioridade alta" aria-label="Prioridade alta"><i data-lucide="triangle-alert"></i></span>' : '';
     var homeworkTask = isHomeworkTask(task);
     var homeworkStatus = homeworkSubmissionStatus(task);
     var lockedHomework = homeworkTask && (task.lockedContent || task.configuredFromPrompt || asArray(task.contentBlocks).length);
@@ -3024,7 +3039,7 @@
     var checkControl = oneTimeComplete
       ? '<span class="check-button is-done" aria-label="Concluído"><i data-lucide="check"></i></span>'
       : homeworkTask ? '<span class="homework-status-mark ' + homeworkStatus + '"><i data-lucide="' + (homeworkStatus === "ready" ? "mail-open" : task.done ? "check" : "notebook-pen") + '"></i></span>' : '<button class="check-button ' + (task.done ? "is-done" : "") + '" type="button" data-action="toggle-task" data-id="' + attr(task.id) + '" aria-label="' + (task.done ? "Reabrir tarefa" : "Concluir tarefa") + '">' + (task.done ? '<i data-lucide="check"></i>' : "") + '</button>';
-    return '<div class="list-row ' + (task.done ? "is-done" : "") + '">' + checkControl + '<span class="list-icon ' + (task.type === "review" || task.type === "lesson-quiz" ? "yellow" : "") + '"><i data-lucide="' + taskIcon(task.type) + '"></i></span><span class="list-content"><strong>' + esc(task.title) + '</strong><small>' + esc(course ? course.name : "Pessoal") + ' · ' + relativeDate(task.dueDate) + (task.dueTime ? " às " + esc(task.dueTime) : "") + '</small></span><span class="badge ' + (task.type === "lesson-quiz" ? "badge-violet" : task.priority === "high" ? "badge-danger" : "") + '">' + esc(label) + '</span>' + lessonAction + "</div>";
+    return '<div class="list-row ' + (task.done ? "is-done" : "") + (task.priority === "high" ? " is-high-priority" : "") + '">' + checkControl + '<span class="list-icon ' + (task.type === "review" || task.type === "lesson-quiz" ? "yellow" : "") + '"><i data-lucide="' + taskIcon(task.type) + '"></i></span><span class="list-content"><strong>' + esc(task.title) + '</strong><small>' + esc(course ? course.name : "Pessoal") + ' · ' + relativeDate(task.dueDate) + (task.dueTime ? " às " + esc(task.dueTime) : "") + '</small></span><span class="badge ' + (task.type === "lesson-quiz" ? "badge-violet" : "") + '">' + esc(label) + '</span>' + priority + lessonAction + "</div>";
   }
 
   function courseProgress(course) {
@@ -3050,14 +3065,18 @@
     return '<div class="page-toolbar page-toolbar-end"><div class="page-actions"><button class="button" type="button" data-action="import-courses"><i data-lucide="file-json-2"></i>Importar JSON</button><button class="button" type="button" data-action="add-course"><i data-lucide="plus"></i>Nova cadeira</button><button class="button button-dark" type="button" data-action="new-semester"><i data-lucide="calendar-plus"></i>Novo semestre</button></div></div>' + (courses.length ? '<div class="course-grid">' + cards + "</div>" : emptyState("library-big", "Ainda não há cadeiras", "Adiciona a primeira cadeira ou importa a configuração do semestre.", "import-courses", "Importar cadeiras")) + archiveHtml;
   }
 
+  function courseTabButton(course, active, id, label) {
+    return '<button type="button" class="' + (active === id ? "is-active" : "") + '" data-action="course-tab" data-id="' + attr(course.id) + '" data-tab="' + id + '">' + label + '</button>';
+  }
+
   function courseTabs(course, active) {
-    var tabs = [
-      ["overview", "Resumo"], ["lessons", "Aulas"], ["notebook", "Caderno"], ["materials", "Materiais"], ["assessments", "Avaliações"],
-      ["questions", "Perguntas anteriores"], ["quizzes", "Quizzes"], ["grades", "Notas"]
-    ];
-    return '<div class="tabbar" role="tablist">' + tabs.map(function (tab) {
-      return '<button type="button" class="' + (active === tab[0] ? "is-active" : "") + '" data-action="course-tab" data-id="' + attr(course.id) + '" data-tab="' + tab[0] + '">' + tab[1] + "</button>";
-    }).join("") + "</div>";
+    var contentTabs = [["lessons", "Aulas"], ["notebook", "Caderno"], ["materials", "Materiais"]];
+    var assessmentTabs = [["assessments", "Avaliações"], ["questions", "Perguntas anteriores"], ["quizzes", "Quizzes"], ["grades", "Notas"]];
+    function group(label, tabs) {
+      var current = tabs.find(function (tab) { return tab[0] === active; });
+      return '<div class="course-tab-group ' + (current ? 'has-active' : '') + '"><span>' + label + (current ? '<small>' + current[1] + '</small>' : '') + '</span><div>' + tabs.map(function (tab) { return courseTabButton(course, active, tab[0], tab[1]); }).join("") + '</div></div>';
+    }
+    return '<nav class="course-tabbar" aria-label="Navegação da cadeira"><div class="course-tab-summary">' + courseTabButton(course, active, "overview", "Resumo") + '</div>' + group("Conteúdo", contentTabs) + group("Avaliação", assessmentTabs) + '</nav>';
   }
 
   function renderCourse(id, tab) {
@@ -3127,7 +3146,7 @@
     var avg = courseAverage(course);
     var evalItems = avg.components.length ? avg.components.map(function (result) {
       var rules = componentRuleText(result.component);
-      return '<div class="evaluation-item ' + (result.minimumState === "failed" ? "has-failed-minimum" : "") + '"><div><strong>' + esc(result.component.label) + '</strong><b>' + (result.effective == null ? "—" : round(result.effective, 1)) + '</b></div><small>' + (Number(result.component.weight) || 0) + '% · ' + result.count + '/' + result.expectedCount + ' nota(s)' + (result.replaced ? " · substituição aplicada" : "") + (rules.length ? " · " + esc(rules.join(" · ")) : "") + "</small></div>";
+      return '<div class="evaluation-item ' + (result.minimumState === "failed" ? "has-failed-minimum" : "") + '"><div><strong>' + esc(result.component.label) + '</strong><b>' + (result.effective == null ? "—" : round(result.effective, 1)) + '</b></div><small>' + (Number(result.component.weight) || 0) + '% · ' + result.count + '/' + result.expectedCount + ' ' + (result.expectedCount === 1 ? 'nota' : 'notas') + (result.replaced ? " · substituição aplicada" : "") + (rules.length ? " · " + esc(rules.join(" · ")) : "") + "</small></div>";
     }).join("") : '<div class="form-note">Configura as percentagens para calcular automaticamente a nota.</div>';
     var latestLessons = lessons.length ? lessons.slice(0, 4).map(renderLessonRow).join("") : emptyState("presentation", "Sem aulas", "Cria a primeira aula e liga-lhe o PDF, quiz e perguntas antigas.", "create-lesson", "Criar aula");
     var nextAssessments = assessments.length ? assessments.slice(0, 3).map(function (item) {
@@ -3151,9 +3170,9 @@
       groups[key].push(lesson);
     });
     var content = Object.keys(groups).map(function (key) {
-      return '<section class="section-block"><div class="section-heading"><div><h3>' + esc(key) + '</h3><p>' + groups[key].length + ' aula(s)</p></div></div><div class="list-stack">' + groups[key].map(renderLessonRow).join("") + "</div></section>";
+      return '<section class="section-block"><div class="section-heading"><div><h3>' + esc(key) + '</h3><p>' + countLabel(groups[key].length, 'aula', 'aulas') + '</p></div></div><div class="list-stack">' + groups[key].map(renderLessonRow).join("") + "</div></section>";
     }).join("");
-    return '<div class="page-head"><div><h2>Todas as aulas</h2><p>Abre uma aula para ver os slides, quiz, matéria, perguntas anteriores e apontamentos no mesmo sítio.</p></div>' + (!archived ? '<div class="page-actions"><button class="button" type="button" data-action="create-lesson" data-course="' + attr(course.id) + '"><i data-lucide="plus"></i>Nova aula</button><button class="button button-dark" type="button" data-action="create-lesson-from-slides" data-course="' + attr(course.id) + '"><i data-lucide="wand-sparkles"></i>Criar com slides</button></div>' : "") + '</div>' + (lessons.length ? content : emptyState("presentation", "Ainda não há aulas", "Cria uma aula associada a um período do horário.", "create-lesson", "Criar primeira aula"));
+    return '<div class="page-head"><div><h2>Todas as aulas</h2><p>Abre uma aula para ver os slides, quiz, matéria, perguntas anteriores e apontamentos no mesmo sítio.</p></div></div>' + (lessons.length ? content : emptyState("presentation", "Ainda não há aulas", "Cria uma aula associada a um período do horário.", "create-lesson", "Criar primeira aula"));
   }
 
   function materialYearBadge(material, course) {
@@ -3215,7 +3234,7 @@
       return '<label class="lesson-ai-choice"><input type="checkbox" name="lessonIds" value="' + attr(item.id) + '" ' + (selected[item.id] ? "checked" : "") + '><span><strong>' + esc(item.title) + '</strong><small>' + formatDate(item.date) + ' · ' + count + ' páginas/slides</small></span></label>';
     }).join("");
     var pastCount = state.questions.filter(function (question) { return asArray(question.lessonIds).some(function (id) { return available.some(function (lessonItem) { return lessonItem.id === id; }); }); }).length;
-    var body = '<form id="lessonAIForm" data-lesson="' + attr(lesson.id) + '" data-output="' + output + '"><div class="lesson-ai-modal-intro"><span class="metric-icon"><i data-lucide="' + (output === "quiz" ? "brain" : "notebook-pen") + '"></i></span><div><h3>' + (output === "quiz" ? "Gerar quiz a partir das aulas" : "Gerar apontamentos a partir das aulas") + '</h3><p>Escolhe exatamente que aulas entram como fonte. A geração é guardada nesta aula e sincronizada no Git.</p></div></div><div class="field"><label>Aulas usadas pela IA</label><div class="lesson-ai-choices">' + lessonRows + '</div></div><label class="lesson-ai-toggle"><input type="checkbox" name="includePast" ' + (pastCount ? "checked" : "") + '><span><strong>Incluir perguntas de anos anteriores</strong><small>' + pastCount + ' pergunta(s) disponíveis nas aulas escolhidas. No quiz, também entram como perguntas reais.</small></span></label><div class="form-grid"><div class="field"><label>Modelo</label><select name="modelMode"><option value="auto">Automático · estável</option><option value="fast">Rápido · 0.5B</option><option value="quality">Qualidade · 1.5B</option></select></div>' + (output === "quiz" ? '<div class="field"><label>Número de perguntas IA</label><select name="questionCount"><option>5</option><option selected>10</option><option>15</option><option>20</option></select></div><div class="field"><label>Dificuldade</label><select name="difficulty"><option value="auto">Automática</option><option value="easy">Fácil</option><option value="medium">Média</option><option value="hard">Difícil</option></select></div>' : '') + '</div><div class="form-note"><strong>Primeira geração:</strong> o modelo pode demorar a descarregar. Não precisas de manter esta janela aberta depois de terminar.</div></form>';
+    var body = '<form id="lessonAIForm" data-lesson="' + attr(lesson.id) + '" data-output="' + output + '"><div class="lesson-ai-modal-intro"><span class="metric-icon"><i data-lucide="' + (output === "quiz" ? "brain" : "notebook-pen") + '"></i></span><div><h3>' + (output === "quiz" ? "Gerar quiz a partir das aulas" : "Gerar apontamentos a partir das aulas") + '</h3><p>Escolhe exatamente que aulas entram como fonte. A geração é guardada nesta aula e sincronizada no Git.</p></div></div><div class="field"><label>Aulas usadas pela IA</label><div class="lesson-ai-choices">' + lessonRows + '</div></div><label class="lesson-ai-toggle"><input type="checkbox" name="includePast" ' + (pastCount ? "checked" : "") + '><span><strong>Incluir perguntas de anos anteriores</strong><small>' + questionCountLabel(pastCount) + ' disponíveis nas aulas escolhidas. No quiz, também entram como perguntas reais.</small></span></label><div class="form-grid"><div class="field"><label>Modelo</label><select name="modelMode"><option value="auto">Automático · estável</option><option value="fast">Rápido · 0.5B</option><option value="quality">Qualidade · 1.5B</option></select></div>' + (output === "quiz" ? '<div class="field"><label>Número de perguntas IA</label><select name="questionCount"><option>5</option><option selected>10</option><option>15</option><option>20</option></select></div><div class="field"><label>Dificuldade</label><select name="difficulty"><option value="auto">Automática</option><option value="easy">Fácil</option><option value="medium">Média</option><option value="hard">Difícil</option></select></div>' : '') + '</div><div class="form-note"><strong>Primeira geração:</strong> o modelo pode demorar a descarregar. Não precisas de manter esta janela aberta depois de terminar.</div></form>';
     openModal(output === "quiz" ? "Criar quiz com IA" : "Criar apontamentos com IA", body, { className: "modal-wide lesson-ai-modal", footer: '<footer class="modal-foot"><button class="button" type="button" data-action="close-modal">Cancelar</button><button class="button button-dark" type="button" data-action="run-lesson-ai"><i data-lucide="sparkles"></i>Gerar e sincronizar</button></footer>' });
   }
 
@@ -3376,13 +3395,20 @@
     }
   }
 
+  function materialDisplayTitle(material, lesson) {
+    if (!lesson) return material.title || material.fileName || "Material";
+    var isPdf = material.kind === "pdf" || /application\/pdf/i.test(material.mimeType || "") || /\.pdf$/i.test(material.fileName || "");
+    var isSlides = material.kind === "slides" || /powerpoint|presentation/i.test(material.mimeType || "") || /\.pptx$/i.test(material.fileName || "");
+    return (isPdf ? "PDF · " : isSlides ? "Slides · " : "Material · ") + lesson.title;
+  }
+
   function renderMaterialCard(material, course, archived) {
     var lesson = lessonById(material.lessonId);
     var kind = material.kind || "slides";
     var icon = kind === "slides" ? "presentation" : kind === "notes" ? "notebook-pen" : "file-text";
     var synced = !!(material.remoteFile && material.remoteFile.path);
     var aiReady = isPptxMaterial(material) && asArray(material.slides).length && lesson;
-    return '<article class="material-card"><div class="material-preview"><i data-lucide="' + icon + '"></i>' + materialYearBadge(material, course) + '</div><h4>' + esc(material.title) + '</h4><p>' + esc(lesson ? lesson.title : "Biblioteca da cadeira") + (material.fileName ? " · " + esc(material.fileName) : "") + '</p><div class="material-actions"><span class="badge ' + (synced ? 'badge-mint' : 'badge-yellow') + '">' + (synced ? 'Sincronizado' : 'Local') + '</span><span class="list-actions">' + (aiReady && !archived ? '<button class="row-button row-button-ai" type="button" data-action="configure-lesson-content" data-kind="quiz" data-lesson="' + attr(lesson.id) + '" aria-label="Configurar quiz da aula"><i data-lucide="sparkles"></i></button>' : '') + (!synced && material.blobId && !archived ? '<button class="row-button" type="button" data-action="sync-material" data-id="' + attr(material.id) + '" aria-label="Sincronizar ficheiro com o Git"><i data-lucide="cloud-upload"></i></button>' : '') + '<button class="row-button" type="button" data-action="open-material" data-id="' + attr(material.id) + '" aria-label="Abrir material"><i data-lucide="eye"></i></button>' + (!archived ? '<button class="row-button" type="button" data-action="delete-entity" data-kind="materials" data-id="' + attr(material.id) + '" aria-label="Remover material"><i data-lucide="trash-2"></i></button>' : "") + '</span></div>' + (aiReady ? '<small class="material-ai-ready"><i data-lucide="brain"></i>' + asArray(material.slides).length + ' páginas/slides prontos para IA</small>' : '') + '</article>';
+    return '<article class="material-card"><div class="material-preview"><i data-lucide="' + icon + '"></i>' + materialYearBadge(material, course) + '</div><h4>' + esc(materialDisplayTitle(material, lesson)) + '</h4><p>' + esc(lesson ? lesson.title : "Biblioteca da cadeira") + (material.fileName ? " · " + esc(material.fileName) : "") + '</p><div class="material-actions"><span class="badge ' + (synced ? 'badge-mint' : 'badge-yellow') + '">' + (synced ? 'Sincronizado' : 'Local') + '</span><span class="list-actions">' + (aiReady && !archived ? '<button class="row-button row-button-ai" type="button" data-action="configure-lesson-content" data-kind="quiz" data-lesson="' + attr(lesson.id) + '" aria-label="Configurar quiz da aula"><i data-lucide="sparkles"></i></button>' : '') + (!synced && material.blobId && !archived ? '<button class="row-button" type="button" data-action="sync-material" data-id="' + attr(material.id) + '" aria-label="Sincronizar ficheiro com o Git"><i data-lucide="cloud-upload"></i></button>' : '') + '<button class="row-button" type="button" data-action="open-material" data-id="' + attr(material.id) + '" aria-label="Abrir material"><i data-lucide="eye"></i></button>' + (!archived ? '<button class="row-button" type="button" data-action="delete-entity" data-kind="materials" data-id="' + attr(material.id) + '" aria-label="Remover material"><i data-lucide="trash-2"></i></button>' : "") + '</span></div>' + (aiReady ? '<small class="material-ai-ready"><i data-lucide="brain"></i>' + asArray(material.slides).length + ' páginas/slides prontos para IA</small>' : '') + '</article>';
   }
 
   function renderCourseMaterials(course, archived) {
@@ -3392,7 +3418,7 @@
     var older = materials.filter(function (item) { return semester && item.academicYear && item.academicYear !== semester.academicYear; });
     var currentHtml = current.length ? '<div class="material-grid">' + current.map(function (item) { return renderMaterialCard(item, course, archived); }).join("") + "</div>" : emptyState("file-up", "Sem materiais deste ano", "Podes carregar o PDF depois da aula. Até lá, os slides antigos ficam disponíveis em baixo.", "add-material", "Carregar PDF");
     var olderHtml = older.length ? '<section class="section-block"><div class="section-heading"><div><h3>Anos letivos anteriores</h3><p>Cada ficheiro mantém o ano visível para não se confundir com a matéria atual.</p></div></div><div class="material-grid">' + older.map(function (item) { return renderMaterialCard(item, course, archived); }).join("") + "</div></section>" : "";
-    return '<div class="page-head"><div><h2>Slides e PDFs</h2><p>Os documentos do ano atual aparecem sem etiqueta; materiais antigos mostram sempre o respetivo ano letivo.</p></div>' + (!archived ? '<div class="page-actions"><button class="button button-dark" type="button" data-action="add-material" data-course="' + attr(course.id) + '"><i data-lucide="file-up"></i>Carregar material</button></div>' : "") + '</div><section class="section-block"><div class="section-heading"><div><h3>' + esc(semester ? semester.academicYear : "Ano atual") + '</h3><p>Materiais principais desta cadeira</p></div></div>' + currentHtml + "</section>" + olderHtml;
+    return '<div class="page-head"><div><h2>Slides e PDFs</h2><p>Carrega e consulta os materiais desta cadeira. Os ficheiros de anos anteriores ficam identificados com o respetivo ano letivo.</p></div>' + (!archived ? '<div class="page-actions"><button class="button button-dark" type="button" data-action="add-material" data-course="' + attr(course.id) + '"><i data-lucide="file-up"></i>Carregar material</button></div>' : "") + '</div><section class="section-block"><div class="section-heading"><div><h3>' + esc(semester ? semester.academicYear : "Ano atual") + '</h3><p>Materiais principais desta cadeira</p></div></div>' + currentHtml + "</section>" + olderHtml;
   }
 
   function assessmentRuleBadges(item) {
@@ -3434,14 +3460,14 @@
     var exams = state.pastExams.filter(function (item) { return item.courseId === course.id; }).sort(function (a, b) { return String(b.academicYear || b.date).localeCompare(String(a.academicYear || a.date)); });
     var examCards = exams.map(function (exam) {
       var count = questions.filter(function (question) { return question.pastExamId === exam.id; }).length;
-      return '<article class="past-exam-card"><div><span class="badge badge-violet">' + esc(exam.academicYear || "Ano por indicar") + '</span><h3>' + esc(exam.title) + '</h3><p>' + count + ' pergunta(s)' + (exam.date ? ' · ' + esc(formatDate(exam.date)) : '') + (exam.source ? ' · ' + esc(exam.source) : '') + '</p></div><div class="list-actions"><button class="button button-small" type="button" data-action="add-question" data-course="' + attr(course.id) + '" data-past-exam="' + attr(exam.id) + '"><i data-lucide="plus"></i>Pergunta</button><button class="row-button" type="button" data-action="delete-entity" data-kind="pastExams" data-id="' + attr(exam.id) + '" aria-label="Remover teste anterior"><i data-lucide="trash-2"></i></button></div></article>';
+      return '<article class="past-exam-card"><div><span class="badge badge-violet">' + esc(exam.academicYear || "Ano por indicar") + '</span><h3>' + esc(exam.title) + '</h3><p>' + questionCountLabel(count) + (exam.date ? ' · ' + esc(formatDate(exam.date)) : '') + (exam.source ? ' · ' + esc(exam.source) : '') + '</p></div><div class="list-actions"><button class="button button-small" type="button" data-action="add-question" data-course="' + attr(course.id) + '" data-past-exam="' + attr(exam.id) + '"><i data-lucide="plus"></i>Pergunta</button><button class="row-button" type="button" data-action="delete-entity" data-kind="pastExams" data-id="' + attr(exam.id) + '" aria-label="Remover teste anterior"><i data-lucide="trash-2"></i></button></div></article>';
     }).join("");
     var groupedQuestions = exams.map(function (exam) {
       var items = questions.filter(function (question) { return question.pastExamId === exam.id; });
-      return items.length ? '<section class="section-block"><div class="section-heading"><div><h3>' + esc(exam.title) + '</h3><p>' + esc(exam.academicYear || "Ano letivo por indicar") + ' · ' + items.length + ' pergunta(s)</p></div></div><div class="list-stack">' + items.map(function (item) { return renderQuestionCard(item, archived); }).join("") + '</div></section>' : '';
+      return items.length ? '<section class="section-block"><div class="section-heading"><div><h3>' + esc(exam.title) + '</h3><p>' + esc(exam.academicYear || "Ano letivo por indicar") + ' · ' + questionCountLabel(items.length) + '</p></div></div><div class="list-stack">' + items.map(function (item) { return renderQuestionCard(item, archived); }).join("") + '</div></section>' : '';
     }).join("");
     var loose = questions.filter(function (question) { return !question.pastExamId || !pastExamById(question.pastExamId); });
-    if (loose.length) groupedQuestions += '<section class="section-block"><div class="section-heading"><div><h3>Perguntas sem teste associado</h3><p>' + loose.length + ' pergunta(s)</p></div></div><div class="list-stack">' + loose.map(function (item) { return renderQuestionCard(item, archived); }).join("") + '</div></section>';
+    if (loose.length) groupedQuestions += '<section class="section-block"><div class="section-heading"><div><h3>Perguntas sem teste associado</h3><p>' + questionCountLabel(loose.length) + '</p></div></div><div class="list-stack">' + loose.map(function (item) { return renderQuestionCard(item, archived); }).join("") + '</div></section>';
     return '<div class="page-head"><div><h2>Perguntas de testes anteriores</h2><p>Importa um teste completo ou adiciona perguntas individuais e liga-as às aulas relevantes.</p></div>' + (!archived ? '<div class="page-actions"><button class="button" type="button" data-action="add-question" data-course="' + attr(course.id) + '"><i data-lucide="plus"></i>Pergunta</button><button class="button button-dark" type="button" data-action="add-past-exam" data-course="' + attr(course.id) + '"><i data-lucide="file-json-2"></i>Importar teste</button></div>' : "") + '</div>' + (exams.length ? '<div class="past-exam-grid">' + examCards + '</div>' : '') + (questions.length ? groupedQuestions : emptyState("message-circle-question", "Banco de perguntas vazio", "Adiciona uma pergunta ou importa um teste anterior em JSON.", "add-past-exam", "Importar teste anterior"));
   }
 
@@ -3462,7 +3488,7 @@
         actions += '<button class="button button-dark" type="button" data-action="start-quiz" data-id="' + attr(quiz.id) + '"><i data-lucide="play"></i>Começar</button>';
         if (!archived) actions += '<button class="button" type="button" data-action="add-quiz-question" data-id="' + attr(quiz.id) + '"><i data-lucide="plus"></i>Manual</button>' + (hasPast ? '<button class="button" type="button" data-action="add-past-to-quiz" data-id="' + attr(quiz.id) + '"><i data-lucide="history"></i>Anteriores</button>' : '') + '<button class="button button-danger" type="button" data-action="delete-entity" data-kind="quizzes" data-id="' + attr(quiz.id) + '"><i data-lucide="trash-2"></i></button>';
       }
-      return '<article class="card span-4"><div class="card-title-row"><div><div class="question-meta"><span class="badge badge-violet">' + asArray(quiz.questions).length + ' pergunta(s)</span><span class="badge">' + origin + '</span>' + (lesson ? '<span class="badge ' + (completed ? 'badge-mint' : 'badge-yellow') + '"><i data-lucide="' + (completed ? 'lock-keyhole' : 'pencil-line') + '"></i>' + (completed ? ' Só leitura' : ' Editável') + '</span>' : '') + '</div><h3 style="margin-top:11px">' + esc(quiz.title) + '</h3><p class="card-subtitle">' + esc(lesson ? lesson.title : "Quiz geral da cadeira") + '</p></div><span class="metric-icon"><i data-lucide="sparkles"></i></span></div><div class="live-actions" style="margin-top:21px">' + actions + '</div></article>';
+      return '<article class="card span-4"><div class="card-title-row"><div><div class="question-meta"><span class="badge badge-violet">' + questionCountLabel(asArray(quiz.questions).length) + '</span><span class="badge">' + origin + '</span>' + (lesson ? '<span class="badge ' + (completed ? 'badge-mint' : 'badge-yellow') + '"><i data-lucide="' + (completed ? 'lock-keyhole' : 'pencil-line') + '"></i>' + (completed ? ' Só leitura' : ' Editável') + '</span>' : '') + '</div><h3 style="margin-top:11px">' + esc(quiz.title) + '</h3><p class="card-subtitle">' + esc(lesson ? lesson.title : "Quiz geral da cadeira") + '</p></div><span class="metric-icon"><i data-lucide="sparkles"></i></span></div><div class="live-actions" style="margin-top:21px">' + actions + '</div></article>';
     }).join("");
     return '<div class="page-head"><div><h2>Quizzes da cadeira</h2><p>Os Quiz-Aula podem ser editados e apagados até à primeira conclusão; depois ficam apenas para consulta.</p></div>' + (!archived ? '<div class="page-actions"><button class="button button-dark" type="button" data-action="add-quiz" data-course="' + attr(course.id) + '"><i data-lucide="plus"></i>Novo quiz geral</button></div>' : "") + '</div><div class="bento-grid">' + (quizzes.length ? html : '<div class="span-12">' + emptyState("sparkles", "Ainda não há quizzes", "Configura um quiz em cada aula ou cria um quiz geral para a cadeira.", "add-quiz", "Criar quiz geral") + "</div>") + "</div>";
   }
@@ -3488,11 +3514,11 @@
     }).join("");
     var componentsHtml = avg.components.map(function (result) {
       var minimumCopy = result.minimum == null ? "" : result.minimumState === "failed" ? " · mínimo não atingido" : result.minimumState === "met" ? " · mínimo atingido" : " · mínimo por confirmar";
-      return '<div class="evaluation-item ' + (result.minimumState === "failed" ? "has-failed-minimum" : "") + '"><div><strong>' + esc(result.component.label) + '</strong><b>' + (result.effective == null ? "—" : round(result.effective, 1)) + '/20</b></div><small>' + (Number(result.component.weight) || 0) + '% · ' + result.count + '/' + result.expectedCount + ' nota(s)' + (result.replaced ? " · substituição aplicada" : "") + minimumCopy + "</small></div>";
+      return '<div class="evaluation-item ' + (result.minimumState === "failed" ? "has-failed-minimum" : "") + '"><div><strong>' + esc(result.component.label) + '</strong><b>' + (result.effective == null ? "—" : round(result.effective, 1)) + '/20</b></div><small>' + (Number(result.component.weight) || 0) + '% · ' + result.count + '/' + result.expectedCount + ' ' + (result.expectedCount === 1 ? 'nota' : 'notas') + (result.replaced ? " · substituição aplicada" : "") + minimumCopy + "</small></div>";
     }).join("");
     var alerts = "";
     if (avg.minimumFailures.length) alerts += '<div class="grade-rule-alert is-danger"><i data-lucide="shield-alert"></i><span><strong>Mínimo não atingido.</strong> ' + esc(avg.minimumFailures.map(function (result) { return result.component.label + " exige " + result.minimum + "/20"; }).join(" · ")) + '</span></div>';
-    if (avg.defensePending.length) alerts += '<div class="grade-rule-alert"><i data-lucide="messages-square"></i><span><strong>Defesa pendente.</strong> ' + avg.defensePending.length + ' nota(s) precisam de confirmação.</span></div>';
+    if (avg.defensePending.length) alerts += '<div class="grade-rule-alert"><i data-lucide="messages-square"></i><span><strong>Defesa pendente.</strong> ' + countLabel(avg.defensePending.length, 'nota', 'notas') + ' precisam de confirmação.</span></div>';
     return '<div class="page-head"><div><h2>Notas e cálculo</h2><p>Cada nota fica ligada à avaliação de origem e respeita mínimos, substituições e regras de defesa configuradas.</p></div>' + (!archived ? '<div class="page-actions"><button class="button button-dark" type="button" data-action="add-grade" data-course="' + attr(course.id) + '"><i data-lucide="plus"></i>Adicionar nota</button></div>' : "") + '</div>' + alerts + '<div class="bento-grid"><article class="card card-yellow span-4 metric-card"><div class="metric-top"><p class="card-label">Média atual</p><span class="metric-icon"><i data-lucide="calculator"></i></span></div><div><p class="metric-value">' + (avg.value == null ? "—" : round(avg.value, 1)) + '</p><p class="metric-caption">' + avg.knownWeight + '% da avaliação com nota</p></div></article><article class="card span-8"><p class="card-label">Componentes</p><div class="evaluation-grid">' + (componentsHtml || '<div class="form-note">Configura primeiro o método de avaliação.</div>') + '</div></article><article class="card span-12"><div class="card-title-row"><div><h3>Todas as notas</h3></div></div>' + (grades.length ? '<div style="overflow:auto"><table class="grade-table"><thead><tr><th>Avaliação ou aula</th><th>Data</th><th>Notas</th><th>Valor</th><th></th></tr></thead><tbody>' + rows + "</tbody></table></div>" : emptyState("chart-no-axes-combined", "Sem notas registadas", "Adiciona notas para calcular a média da cadeira e a média ECTS.", "add-grade", "Adicionar nota")) + "</article></div>";
   }
 
@@ -3698,7 +3724,7 @@
       var selection = pages.length ? '<div class="builder-page-grid">' + pages.map(function (slide) {
         return '<label class="builder-page-choice"><input type="checkbox" name="sourceSlides" value="' + attr(lessonBuilderSourceKey(material.id, slide.number)) + '" data-material="' + attr(material.id) + '" checked><span><b>' + (isPdf ? 'P' : 'S') + esc(slide.number || "?") + '</b><small>' + esc(slide.title || ((isPdf ? "Página " : "Slide ") + slide.number)) + '</small></span></label>';
       }).join("") + '</div>' : '<div class="builder-source-warning"><i data-lucide="triangle-alert"></i><span><strong>Texto ainda não extraído</strong><small>Volta a carregar este ficheiro para preparar as páginas para IA.</small></span></div>';
-      return '<section class="builder-material" data-builder-material="' + attr(material.id) + '"><header><span class="list-icon"><i data-lucide="' + icon + '"></i></span><span><strong>' + esc(material.title || material.fileName || "Material") + '</strong><small>' + pages.length + ' ' + unit + '(s) com texto · imagens numa atualização futura</small></span><div class="builder-page-actions"><button type="button" data-action="builder-select-pages" data-material="' + attr(material.id) + '" data-mode="all">Todas</button><button type="button" data-action="builder-select-pages" data-material="' + attr(material.id) + '" data-mode="none">Nenhuma</button></div></header>' + selection + '</section>';
+      return '<section class="builder-material" data-builder-material="' + attr(material.id) + '"><header><span class="list-icon"><i data-lucide="' + icon + '"></i></span><span><strong>' + esc(material.title || material.fileName || "Material") + '</strong><small>' + countLabel(pages.length, unit, isPdf ? "páginas" : "slides") + ' com texto · imagens numa atualização futura</small></span><div class="builder-page-actions"><button type="button" data-action="builder-select-pages" data-material="' + attr(material.id) + '" data-mode="all">Todas</button><button type="button" data-action="builder-select-pages" data-material="' + attr(material.id) + '" data-mode="none">Nenhuma</button></div></header>' + selection + '</section>';
     }).join("") + '</div>';
   }
 
@@ -3720,8 +3746,10 @@
     if (kind === "quiz" && configuredQuizForLesson(lesson.id)) { viewLessonQuiz(lesson.id); return; }
     if (kind === "homework" && homeworkForLesson(lesson.id)) { viewLessonHomework(homeworkForLesson(lesson.id).id); return; }
     lessonBuilderDraft = { lessonId: lesson.id, kind: kind, sourceKeys: [], includePast: false, prompt: "" };
-    var includePast = pastQuestionsForLesson(lesson.id).length > 0;
-    var body = '<form id="lessonBuilderForm" data-kind="' + attr(kind) + '" data-lesson="' + attr(lesson.id) + '" data-step="sources"><div class="builder-intro"><span class="metric-icon"><i data-lucide="' + (kind === "quiz" ? "check-check" : kind === "homework" ? "notebook-pen" : "book-open-text") + '"></i></span><div><p class="card-label">Passo 1 de 2 · Fontes</p><h3>' + esc(lesson.title) + '</h3><p>Seleciona apenas as páginas ou slides que queres usar. O texto extraído dessas escolhas será colocado no prompt.</p></div></div><div class="builder-selection-summary"><i data-lucide="scan-text"></i><span><strong data-builder-selection-count>0 páginas/slides selecionados</strong><small>PDF e PowerPoint são suportados. Nesta versão entram no prompt apenas texto e referências; imagens virão depois.</small></span></div>' + lessonBuilderMaterialChoices(lesson) + '<label class="builder-past-toggle"><input type="checkbox" name="includePast" ' + (includePast ? "checked" : "") + '><span><strong>Incluir perguntas de anos anteriores</strong><small>' + pastQuestionsForLesson(lesson.id).length + ' pergunta(s) associada(s) a esta aula</small></span></label></form>';
+    var pastCount = pastQuestionsForLesson(lesson.id).length;
+    var includePast = pastCount > 0;
+    var pastLabel = previousQuestionCountLabel(pastCount) + (pastCount === 1 ? " associada a esta aula" : " associadas a esta aula");
+    var body = '<form id="lessonBuilderForm" data-kind="' + attr(kind) + '" data-lesson="' + attr(lesson.id) + '" data-step="sources"><div class="builder-intro"><span class="metric-icon"><i data-lucide="' + (kind === "quiz" ? "check-check" : kind === "homework" ? "notebook-pen" : "book-open-text") + '"></i></span><div><p class="card-label">Passo 1 de 2 · Fontes</p><h3>' + esc(lesson.title) + '</h3><p>Seleciona apenas as páginas ou slides que queres usar. O texto extraído dessas escolhas será colocado no prompt.</p></div></div><div class="builder-selection-summary"><i data-lucide="scan-text"></i><span><strong data-builder-selection-count>0 páginas/slides selecionados</strong><small>PDF e PowerPoint são suportados. Nesta versão entram no prompt apenas texto e referências; imagens virão depois.</small></span></div>' + lessonBuilderMaterialChoices(lesson) + '<label class="builder-past-toggle"><input type="checkbox" name="includePast" ' + (includePast ? "checked" : "") + '><span><strong>Incluir perguntas de anos anteriores</strong><small>' + pastLabel + '</small></span></label></form>';
     openModal("Criar " + lessonBuilderLabel(kind) + " com IA", body, { className: "modal-builder", footer: '<footer class="modal-foot"><button class="button" type="button" data-action="close-modal">Cancelar</button><button class="button button-dark" type="button" data-action="copy-lesson-builder-prompt"><i data-lucide="copy-check"></i>Copiar prompt e continuar</button></footer>' });
     var form = modalRoot.querySelector("#lessonBuilderForm");
     if (form) lessonBuilderSelectionCount(form);
@@ -4041,7 +4069,7 @@
 
 
   function notebookPaperLabel(value) {
-    return value === "grid" ? "Quadriculado" : value === "blank" ? "Branco" : "Pautado";
+    return value === "grid" ? "Folha quadriculada" : value === "blank" ? "Folha branca" : "Folha pautada";
   }
 
   function renderNotebookPage(lesson, compact) {
@@ -4056,7 +4084,7 @@
     if (!lesson) return;
     var html = lesson.notesHtml || (lesson.notes ? '<p>' + nl2br(lesson.notes) + '</p>' : '<p><br></p>');
     var toolbar = '<div class="notebook-toolbar" role="toolbar" aria-label="Formatar apontamentos"><button type="button" data-action="notebook-command" data-command="bold" title="Negrito"><i data-lucide="bold"></i></button><button type="button" data-action="notebook-command" data-command="italic" title="Itálico"><i data-lucide="italic"></i></button><button type="button" data-action="notebook-command" data-command="underline" title="Sublinhar"><i data-lucide="underline"></i></button><button type="button" data-action="notebook-command" data-command="strikeThrough" title="Rasurar"><i data-lucide="strikethrough"></i></button><span></span><button type="button" data-action="notebook-block" data-block="h2">H2</button><button type="button" data-action="notebook-block" data-block="h3">H3</button><button type="button" data-action="notebook-command" data-command="insertUnorderedList" title="Lista"><i data-lucide="list"></i></button><button type="button" data-action="notebook-command" data-command="insertOrderedList" title="Lista numerada"><i data-lucide="list-ordered"></i></button><button type="button" data-action="notebook-command" data-command="formatBlock" data-value="blockquote" title="Citação"><i data-lucide="quote"></i></button><span></span><button type="button" data-action="notebook-add-image" title="Adicionar imagem ou sticker"><i data-lucide="image-plus"></i></button><button type="button" data-action="configure-lesson-content" data-kind="notes" data-lesson="' + attr(lesson.id) + '" title="Acrescentar com IA"><i data-lucide="sparkles"></i></button></div>';
-    var body = '<form id="notebookForm" data-lesson="' + attr(lesson.id) + '"><div class="notebook-settings"><label>Folha<select id="notebookPaper"><option value="lined" ' + (lesson.notesPaper === "lined" ? "selected" : "") + '>Pautado</option><option value="grid" ' + (lesson.notesPaper === "grid" ? "selected" : "") + '>Quadriculado</option><option value="blank" ' + (lesson.notesPaper === "blank" ? "selected" : "") + '>Branco</option></select></label><label>Fonte<select disabled><option>Fonte da Twenty</option></select></label></div>' + toolbar + '<input id="notebookImageInput" type="file" accept="image/*" multiple hidden><div id="notebookEditor" class="notebook-page notebook-editor paper-' + attr(lesson.notesPaper || "lined") + '" contenteditable="true" spellcheck="true">' + html + '</div><div class="form-note"><strong>Colar de sites:</strong> usa “Copiar imagem” ou copia conteúdo de uma página e cola aqui. Texto e imagens são aceites diretamente no caderno. As imagens funcionam como stickers: arrasta para mudar de lugar e usa os controlos para redimensionar, alinhar ou apagar. O conteúdo criado pela IA é sempre acrescentado no fim e nunca apaga o que escreveste.</div></form>';
+    var body = '<form id="notebookForm" data-lesson="' + attr(lesson.id) + '"><div class="notebook-settings"><label>Folha<select id="notebookPaper"><option value="lined" ' + (lesson.notesPaper === "lined" ? "selected" : "") + '>Folha pautada</option><option value="grid" ' + (lesson.notesPaper === "grid" ? "selected" : "") + '>Folha quadriculada</option><option value="blank" ' + (lesson.notesPaper === "blank" ? "selected" : "") + '>Folha branca</option></select></label><label>Fonte<select disabled><option>Fonte da Twenty</option></select></label></div>' + toolbar + '<input id="notebookImageInput" type="file" accept="image/*" multiple hidden><div id="notebookEditor" class="notebook-page notebook-editor paper-' + attr(lesson.notesPaper || "lined") + '" contenteditable="true" spellcheck="true">' + html + '</div><div class="form-note"><strong>Colar de sites:</strong> usa “Copiar imagem” ou copia conteúdo de uma página e cola aqui. Texto e imagens são aceites diretamente no caderno. As imagens funcionam como stickers: arrasta para mudar de lugar e usa os controlos para redimensionar, alinhar ou apagar. O conteúdo criado pela IA é sempre acrescentado no fim e nunca apaga o que escreveste.</div></form>';
     openModal("Apontamentos da aula", body, { className: "modal-notebook", footer: '<footer class="modal-foot"><button class="button" type="button" data-action="close-modal">Sair e guardar</button><button class="button button-dark" type="button" data-action="save-notebook"><i data-lucide="check"></i>Guardar apontamentos</button></footer>' });
   }
 
@@ -4185,13 +4213,15 @@
       return { kind: "schedule", id: entry.id, title: course ? course.code || course.name : "Aula", time: entry.start, color: safeColor(course && course.color), subtitle: lessonTypeLabel(entry.type) + (entry.room ? " · " + entry.room : "") };
     }));
     entries = entries.concat(semesterItems("assessments").filter(function (item) { return item.date === dateValue; }).map(function (item) {
-      return { kind: "assessment", id: item.id, title: item.title, time: item.time, color: "#ffad72", subtitle: item.type || "Avaliação" };
+      var course = courseById(item.courseId);
+      return { kind: "assessment", id: item.id, title: item.title, time: item.time, color: safeColor(course && course.color, "#ffad72"), subtitle: item.type || "Avaliação" };
     }));
     entries = entries.concat(semesterItems("events").filter(function (item) { return item.date === dateValue; }).map(function (item) {
       return { kind: "event", id: item.id, title: item.title, time: item.time, color: "#ff92ae", subtitle: item.location || "Evento" };
     }));
     entries = entries.concat(semesterItems("tasks").filter(function (item) { return !item.done && item.dueDate === dateValue; }).map(function (item) {
-      return { kind: "task", id: item.id, title: item.title, time: item.dueTime, color: "#a99df7", subtitle: "Tarefa", lessonId: item.lessonId };
+      var course = courseById(item.courseId);
+      return { kind: "task", id: item.id, title: item.title, time: item.dueTime, color: safeColor(course && course.color, "#a99df7"), subtitle: "Tarefa", lessonId: item.lessonId };
     }));
     entries = entries.concat(semesterItems("studyBlocks").filter(function (item) { return item.date === dateValue; }).map(function (item) {
       var course = courseById(item.courseId);
@@ -4211,11 +4241,11 @@
   }
 
   function renderCalendarEntry(item) {
-    return '<button class="calendar-entry is-' + item.kind + '" type="button" ' + calendarEntryAction(item) + ' style="--entry-color:' + safeColor(item.color, "#a99df7") + '" title="' + attr(item.title) + '"><span></span><strong>' + esc(item.time ? item.time + " · " + item.title : item.title) + '</strong></button>';
+    return '<button class="calendar-entry is-' + item.kind + '" type="button" ' + calendarEntryAction(item) + ' style="--entry-color:' + safeColor(item.color, "#a99df7") + '" title="' + attr(item.title) + '"><span></span><i data-lucide="' + calendarKindIcon(item.kind) + '"></i><strong>' + esc(item.time ? item.time + " · " + item.title : item.title) + '</strong></button>';
   }
 
   function renderCalendarAgendaEntry(item) {
-    return '<button class="calendar-agenda-entry is-' + item.kind + '" type="button" ' + calendarEntryAction(item) + ' style="--entry-color:' + safeColor(item.color, "#a99df7") + '"><time>' + esc(item.time || "Dia inteiro") + '</time><span><strong>' + esc(item.title) + '</strong><small>' + esc(item.subtitle || "") + '</small></span><i data-lucide="arrow-up-right"></i></button>';
+    return '<button class="calendar-agenda-entry is-' + item.kind + '" type="button" ' + calendarEntryAction(item) + ' style="--entry-color:' + safeColor(item.color, "#a99df7") + '"><time>' + esc(item.time || "Dia inteiro") + '</time><span class="calendar-agenda-kind"><i data-lucide="' + calendarKindIcon(item.kind) + '"></i></span><span><strong>' + esc(item.title) + '</strong><small>' + esc(item.subtitle || "") + '</small></span><i data-lucide="arrow-up-right"></i></button>';
   }
 
   function addCalendarDays(value, amount) {
@@ -4241,8 +4271,12 @@
     return '<div class="calendar-view-control" role="group" aria-label="Intervalo do calendário">' + views.map(function (item) { return '<button type="button" class="' + (active === item.id ? "is-active" : "") + '" data-action="calendar-view" data-view="' + item.id + '">' + item.label + '</button>'; }).join("") + '</div>';
   }
 
+  function calendarKindIcon(kind) {
+    return kind === "assessment" ? "file-pen-line" : kind === "event" ? "party-popper" : kind === "task" ? "check-square" : kind === "study-block" ? "book-open-check" : kind === "schedule" ? "clock-3" : "presentation";
+  }
+
   function calendarLegend() {
-    return '<div class="calendar-legend"><span><i class="lesson"></i>Aula</span><span><i class="schedule"></i>Horário</span><span><i class="assessment"></i>Avaliação</span><span><i class="event"></i>Evento</span><span><i class="task"></i>Tarefa</span><span><i class="study-block"></i>Estudo</span></div>';
+    return '<div class="calendar-legend calendar-legend-semantic"><span><i data-lucide="palette"></i>Cor = cadeira</span><span><i data-lucide="presentation"></i>Aula</span><span><i data-lucide="file-pen-line"></i>Avaliação</span><span><i data-lucide="party-popper"></i>Evento</span><span><i data-lucide="check-square"></i>Tarefa</span><span><i data-lucide="book-open-check"></i>Estudo</span></div>';
   }
 
   function calendarToolbar(title, activeView) {
@@ -4322,12 +4356,12 @@
       item = lessonById(id);
       course = item && courseById(item.courseId);
       var pastCount = item ? pastQuestionsForLesson(item.id).length : 0;
-      return item ? { type: type, id: item.id, title: "Rever " + item.title, courseId: item.courseId, icon: "presentation", duration: Number(state.settings.studySessionMinutes), meta: (course ? course.name + " · " : "") + pastCount + " pergunta(s) anterior(es)", score: 55 + pastCount * 4 } : null;
+      return item ? { type: type, id: item.id, title: "Rever " + item.title, courseId: item.courseId, icon: "presentation", duration: Number(state.settings.studySessionMinutes), meta: (course ? course.name + " · " : "") + previousQuestionCountLabel(pastCount), score: 55 + pastCount * 4 } : null;
     }
     if (type === "quiz") {
       item = state.quizzes.find(function (entry) { return entry.id === id; });
       course = item && courseById(item.courseId);
-      return item ? { type: type, id: item.id, title: item.title, courseId: item.courseId, icon: "sparkles", duration: 30, meta: (course ? course.name + " · " : "") + asArray(item.questions).length + " pergunta(s)", score: item.lastScore == null ? 60 : 45 + Math.max(0, 100 - item.lastScore) / 4 } : null;
+      return item ? { type: type, id: item.id, title: item.title, courseId: item.courseId, icon: "sparkles", duration: 30, meta: (course ? course.name + " · " : "") + questionCountLabel(asArray(item.questions).length), score: item.lastScore == null ? 60 : 45 + Math.max(0, 100 - item.lastScore) / 4 } : null;
     }
     if (type === "assessment") {
       item = assessmentById(id);
@@ -5824,7 +5858,7 @@
       var course = courseById(item.courseId);
       return '<div class="study-review-preview-row is-error"><span class="list-icon pink"><i data-lucide="triangle-alert"></i></span><span><strong>' + esc(item.front) + '</strong><small>' + esc(course ? course.name : "Revisão") + ' · ' + esc(calibrationLabel(item.calibration)) + '</small></span><button class="row-button" type="button" data-action="start-review-session" data-id="' + attr(item.id) + '" aria-label="Rever"><i data-lucide="play"></i></button></div>';
     }).join("");
-    return '<div class="study-section-intro"><div><p class="card-label">Rever</p><h2>Uma fila curta, sem decidir tudo outra vez.</h2><p>A Twenty dá prioridade ao que chegou à data e ao que parecia certo, mas estava errado.</p></div><button class="button button-dark" type="button" data-action="start-review-session" ' + (!due.length ? 'disabled' : '') + '><i data-lucide="play"></i>Começar ' + Math.min(due.length, Number(state.settings.reviewDailyGoal || 10)) + '</button></div>'
+    return '<div class="study-section-intro"><div><p class="card-label">Rever</p><h2>Uma fila curta, sem decidir tudo outra vez.</h2><p>Começa pelas revisões de hoje e pelos erros que ainda precisam de atenção.</p></div><button class="button button-dark" type="button" data-action="start-review-session" ' + (!due.length ? 'disabled' : '') + '><i data-lucide="play"></i>Começar ' + Math.min(due.length, Number(state.settings.reviewDailyGoal || 10)) + '</button></div>'
       + '<article class="study-review-hero"><div><span class="study-review-ring"><strong>' + due.length + '</strong><small>para hoje</small></span><div><p class="card-label">Revisão espaçada</p><h3>' + (due.length ? 'A tua fila está pronta' : 'Estás em dia') + '</h3><p>' + (due.length ? 'Tenta recordar, indica a confiança e só depois revela a solução.' : 'Os próximos itens aparecem quando chegarem à data.') + '</p></div></div><div class="study-review-hero-meta"><span><strong>' + errors.length + '</strong><small>a reforçar</small></span><span><strong>' + mastery.percent + '%</strong><small>consolidado</small></span></div></article>'
       + '<div class="study-review-columns"><section class="card"><div class="section-heading"><div><h3>Fila de hoje</h3><p>Conteúdos que chegaram à data.</p></div><button class="button button-small" type="button" data-route="study" data-tab="queue">Ver tudo</button></div><div class="list-stack">' + (duePreview || '<div class="past-question-empty"><i data-lucide="check-check"></i><span>Sem revisões pendentes.</span></div>') + '</div></section>'
       + '<section class="card"><div class="section-heading"><div><h3>Precisa de atenção</h3><p>Erros repetidos, inseguros ou confiantes.</p></div><button class="button button-small" type="button" data-route="study" data-tab="errors">Banco de erros</button></div><div class="list-stack">' + (errorPreview || '<div class="past-question-empty"><i data-lucide="badge-check"></i><span>O Banco de Erros está vazio.</span></div>') + '</div></section></div>';
@@ -6308,7 +6342,7 @@
     var notes = [];
     if (result.minimumFailures.length) notes.push(result.minimumFailures.length + " mínimo(s) não atingido(s)");
     if (result.defensePending.length) notes.push(result.defensePending.length + " defesa(s) pendente(s)");
-    target.innerHTML = '<div><p class="card-label">Média projetada</p><strong class="simulator-result-number">' + (result.value == null ? "—" : round(result.value, 2)) + '</strong><span>/20</span></div><p>' + (simulated.length ? "Com " + simulated.length + " nota(s) simulada(s)" : "Introduz uma nota para ver a projeção") + (current == null ? "" : " · atual " + round(current, 2) + "/20") + '</p><div class="simulator-component-grid">' + components + '</div>' + (notes.length ? '<div class="form-note">' + esc(notes.join(" · ")) + '</div>' : '');
+    target.innerHTML = '<div><p class="card-label">Média projetada</p><strong class="simulator-result-number">' + (result.value == null ? "—" : round(result.value, 2)) + '</strong><span>/20</span></div><p>' + (simulated.length ? "Com " + countLabel(simulated.length, "nota simulada", "notas simuladas") : "Introduz uma nota para ver a projeção") + (current == null ? "" : " · atual " + round(current, 2) + "/20") + '</p><div class="simulator-component-grid">' + components + '</div>' + (notes.length ? '<div class="form-note">' + esc(notes.join(" · ")) + '</div>' : '');
     refreshIcons(target);
   }
 
@@ -6330,7 +6364,8 @@
     }).join("");
     var best = courses.map(function (course) { return { course: course, avg: courseAverage(course).value }; }).filter(function (item) { return item.avg != null; }).sort(function (a, b) { return b.avg - a.avg; })[0];
     var known = courses.filter(function (course) { return courseAverage(course).value != null; }).length;
-    return '<div class="page-toolbar page-toolbar-end"><div class="page-actions"><button class="button" type="button" data-action="grade-simulator"><i data-lucide="calculator"></i>Simular notas</button><button class="button" type="button" onclick="window.print()"><i data-lucide="printer"></i>Imprimir</button><button class="button button-dark" type="button" data-action="add-grade"><i data-lucide="plus"></i>Adicionar nota</button></div></div><div class="bento-grid"><article class="card card-pink span-5 target-card"><div class="target-copy"><p class="card-label">Média ECTS atual</p><h3 style="font-size:3.4rem">' + (ects.value == null ? "—" : round(ects.value, 2)) + '</h3><p>' + (ects.value == null ? "Adiciona as primeiras notas para iniciar o cálculo." : "Calculada com " + ects.ects + " ECTS que já têm avaliação.") + '</p></div><div class="progress-ring" style="--progress:' + (ects.value == null ? 0 : clamp(ects.value / 20 * 100, 0, 100)) + '%"><strong>' + (ects.value == null ? "0" : Math.round(ects.value / 20 * 100)) + '%</strong></div></article><article class="card card-yellow span-3 metric-card"><div class="metric-top"><p class="card-label">ECTS inscritos</p><span class="metric-icon"><i data-lucide="graduation-cap"></i></span></div><div><p class="metric-value">' + totalEcts + '</p><p class="metric-caption">' + ects.ects + ' já entram na média</p></div></article><article class="card card-mint span-4 metric-card"><div class="metric-top"><p class="card-label">Melhor cadeira</p><span class="metric-icon"><i data-lucide="trophy"></i></span></div><div><p class="metric-value" style="font-size:2.35rem">' + (best ? round(best.avg, 1) : "—") + '</p><p class="metric-caption">' + (best ? esc(best.course.name) : "Ainda sem notas") + '</p></div></article><article class="card span-12"><div class="card-title-row"><div><p class="card-label">Resumo do semestre</p><h3>' + known + ' de ' + courses.length + ' cadeiras com notas</h3></div><span class="badge badge-violet">Meta ' + normalizedTargetGrade(state.profile.targetGrade) + '/20</span></div><div style="overflow:auto;margin-top:13px">' + (courses.length ? '<table class="grade-table"><thead><tr><th>Cadeira</th><th>ECTS</th><th>Avaliado</th><th>Média</th><th></th></tr></thead><tbody>' + courseRows + "</tbody></table>" : emptyState("graduation-cap", "Sem cadeiras", "Configura o semestre para começar o cálculo.", "new-semester", "Criar semestre")) + '</div></article></div>';
+    var hasAnyGrade = semesterItems("grades").length > 0;
+    return '<div class="page-toolbar page-toolbar-end"><div class="page-actions"><button class="button" type="button" data-action="grade-simulator"><i data-lucide="calculator"></i>Simular notas</button><button class="button" type="button" onclick="window.print()"><i data-lucide="printer"></i>Imprimir</button>' + (hasAnyGrade ? '<button class="button button-dark" type="button" data-action="add-grade"><i data-lucide="plus"></i>Adicionar nota</button>' : '') + '</div></div><div class="bento-grid"><article class="card card-yellow span-5 target-card"><div class="target-copy"><p class="card-label">Média ECTS atual</p><h3 style="font-size:3.4rem">' + (ects.value == null ? "—" : round(ects.value, 2)) + '</h3><p>' + (ects.value == null ? "Adiciona as primeiras notas para iniciar o cálculo." : "Calculada com " + ects.ects + " ECTS que já têm avaliação.") + '</p></div><div class="progress-ring" style="--progress:' + (ects.value == null ? 0 : clamp(ects.value / 20 * 100, 0, 100)) + '%"><strong>' + (ects.value == null ? "0" : Math.round(ects.value / 20 * 100)) + '%</strong></div></article><article class="card span-3 metric-card"><div class="metric-top"><p class="card-label">ECTS inscritos</p><span class="metric-icon"><i data-lucide="graduation-cap"></i></span></div><div><p class="metric-value">' + totalEcts + '</p><p class="metric-caption">' + ects.ects + ' já entram na média</p></div></article><article class="card card-mint span-4 metric-card"><div class="metric-top"><p class="card-label">Melhor cadeira</p><span class="metric-icon"><i data-lucide="trophy"></i></span></div><div><p class="metric-value" style="font-size:2.35rem">' + (best ? round(best.avg, 1) : "—") + '</p><p class="metric-caption">' + (best ? esc(best.course.name) : "Ainda sem notas") + '</p></div></article><article class="card span-12"><div class="card-title-row"><div><p class="card-label">Resumo do semestre</p><h3>' + known + ' de ' + courses.length + ' cadeiras com notas</h3></div><span class="badge badge-violet">Meta ' + normalizedTargetGrade(state.profile.targetGrade) + '/20</span></div><div style="overflow:auto;margin-top:13px">' + (!courses.length ? emptyState("graduation-cap", "Sem cadeiras", "Configura o semestre para começar o cálculo.", "new-semester", "Criar semestre") : (!hasAnyGrade ? emptyState("chart-no-axes-combined", "Ainda sem notas", "Adiciona a primeira nota para iniciar o cálculo do semestre.", "add-grade", "Adicionar nota") : '<table class="grade-table"><thead><tr><th>Cadeira</th><th>ECTS</th><th>Avaliado</th><th>Média</th><th></th></tr></thead><tbody>' + courseRows + "</tbody></table>")) + '</div></article></div>';
   }
 
   function canteenPortugalParts(date) {
@@ -8052,7 +8087,7 @@
       ? mealTabs + renderCanteenMeal(activeMeal, canteenMenu, { date: selected.date, mealType: activeMealType, hours: hours, service: service, selectedIsToday: selectedIsToday })
       : '<div class="campus-dining-state"><div><small>SEM EMENTA</small><h3>Não há refeição publicada para este dia.</h3><p>Consulta outro dia no botão de informação.</p></div></div>';
     return '<section class="campus-dining-page campus-theme-' + attr(canteenTheme) + '">' +
-      '<header class="campus-dining-hero"><div class="campus-dining-brand"><h2>CAMPUS<br>DINING</h2><p>DINE IN CAFETERIA</p></div><div class="campus-dining-stamp ' + (service.open && selectedIsToday ? 'is-open' : '') + '">' + esc(statusLabel) + '</div><button class="campus-dining-info" type="button" data-action="canteen-open-info" aria-label="Informação da cantina">i</button></header>' +
+      '<header class="campus-dining-hero"><div class="campus-dining-brand"><h2>CANTINA<br>DO CAMPUS</h2><p>REFEIÇÕES NO CAMPUS</p></div><div class="campus-dining-stamp ' + (service.open && selectedIsToday ? 'is-open' : '') + '">' + esc(statusLabel) + '</div><button class="campus-dining-info" type="button" data-action="canteen-open-info" aria-label="Informação da cantina">i</button></header>' +
       body +
       '</section>';
   }
@@ -8150,13 +8185,13 @@
     var allergenCountLabel = allergenSettings.selected.length ? allergenSettings.selected.length + ' selecionado' + (allergenSettings.selected.length === 1 ? '' : 's') : 'Nenhum selecionado';
     var canteenAllergenCard = '<article class="card settings-card canteen-allergen-settings-card"><div class="card-title-row"><div><p class="card-label">Cantina</p><h3>Alergénios</h3><p class="card-subtitle">Escolhe os códigos que queres evitar. A Twenty esconde apenas opções que tenham esses alergénios indicados na ementa oficial.</p></div><span class="metric-icon"><i data-lucide="shield-alert"></i></span></div><div class="settings-row"><div><strong>Esconder opções incompatíveis</strong><small>Também impede a Chef’s Note de recomendar esses pratos.</small></div><button class="switch ' + (allergenSettings.hideDishes ? 'is-on' : '') + '" type="button" data-action="canteen-toggle-hide-allergens" aria-label="Esconder pratos com alergénios selecionados"><span></span></button></div><div class="settings-allergen-summary"><span class="badge ' + (allergenSettings.selected.length ? 'badge-yellow' : 'badge-mint') + '">' + esc(allergenCountLabel) + '</span><button type="button" data-action="canteen-clear-allergens" ' + (allergenSettings.selected.length ? '' : 'disabled') + '>Limpar seleção</button></div><div class="settings-allergen-grid">' + allergenOptions + '</div><p class="settings-allergen-note">O filtro depende dos códigos publicados pela cantina. As sobremesas não são filtradas porque a fonte oficial não publica os respetivos códigos. Confirma sempre a informação com a unidade, sobretudo em casos de alergia grave.</p></article>';
     var canteenNightTheme = state.settings.canteenTheme === "night";
-    var canteenThemeCard = '<article class="card settings-card canteen-theme-settings-card"><div class="card-title-row"><div><p class="card-label">Cantina</p><h3>Tema do menu</h3><p class="card-subtitle">Alterna entre o menu claro do teu mockup e uma versão noite com a mesma estrutura.</p></div><span class="metric-icon"><i data-lucide="palette"></i></span></div><div class="settings-row"><div><strong>' + (canteenNightTheme ? 'Tema noite' : 'Tema claro') + '</strong><small>Este controlo também está disponível no botão i da Cantina.</small></div><button class="switch ' + (canteenNightTheme ? 'is-on' : '') + '" type="button" data-action="canteen-toggle-theme" aria-label="Alternar tema da Cantina"><span></span></button></div><div class="canteen-theme-preview ' + (canteenNightTheme ? 'is-night' : '') + '"><b>CAMPUS DINING</b><span>Chef’s Note</span><i></i></div></article>';
+    var canteenThemeCard = '<article class="card settings-card canteen-theme-settings-card"><div class="card-title-row"><div><p class="card-label">Cantina</p><h3>Tema do menu</h3><p class="card-subtitle">Alterna entre o menu claro do teu mockup e uma versão noite com a mesma estrutura.</p></div><span class="metric-icon"><i data-lucide="palette"></i></span></div><div class="settings-row"><div><strong>' + (canteenNightTheme ? 'Tema noite' : 'Tema claro') + '</strong><small>Este controlo também está disponível no botão i da Cantina.</small></div><button class="switch ' + (canteenNightTheme ? 'is-on' : '') + '" type="button" data-action="canteen-toggle-theme" aria-label="Alternar tema da Cantina"><span></span></button></div><div class="canteen-theme-preview ' + (canteenNightTheme ? 'is-night' : '') + '"><b>CANTINA DO CAMPUS</b><span>Nota do Chef</span><i></i></div></article>';
     var motionCard = '<article class="card settings-card"><div class="card-title-row"><div><p class="card-label">Interface</p><h3>Movimento e conforto</h3><p class="card-subtitle">Controla animações sem perder a informação importante.</p></div><span class="metric-icon"><i data-lucide="accessibility"></i></span></div><div class="settings-row"><div><strong>Reduzir movimento</strong><small>Desativa transições e celebrações mais intensas.</small></div><button class="switch ' + (state.settings.reduceMotion ? "is-on" : "") + '" type="button" data-action="toggle-reduce-motion"><span></span></button></div></article>';
     var campusCard = '<article class="card settings-card card-yellow"><div class="card-title-row"><div><p class="card-label">Home</p><h3>Atividade simulada</h3><p class="card-subtitle">Mostra indicadores de presença no campus claramente assinalados como simulação.</p></div><span class="metric-icon"><i data-lucide="users-round"></i></span></div><div class="settings-row"><div><strong>Contador simulado</strong><small>É apenas ambiente visual; não representa utilizadores reais.</small></div><button class="switch ' + (state.settings.campusSimulation ? "is-on" : "") + '" type="button" data-action="toggle-campus"><span></span></button></div></article>';
     var tutorialCard = '<article class="card settings-card"><div class="card-title-row"><div><p class="card-label">Ajuda</p><h3>Aprender a Twenty</h3><p class="card-subtitle">Revê a visita guiada ou testa um dia escolar completo.</p></div><span class="metric-icon"><i data-lucide="map"></i></span></div><div class="list-actions"><button class="button button-dark button-small" type="button" data-action="show-tutorial"><i data-lucide="map"></i>Visita guiada</button><button class="button button-small" type="button" data-action="debug-start-tutorial"><i data-lucide="play"></i>Simular dia</button></div></article>';
     var planningCard = '<article class="card settings-card"><div class="card-title-row"><div><p class="card-label">Rotina</p><h3>Planeamento de estudo</h3><p class="card-subtitle">' + Number(state.settings.weeklyStudyHours || 16) + ' h/semana · sessões de ' + Number(state.settings.studySessionMinutes || 50) + ' min.</p></div><span class="metric-icon"><i data-lucide="timer-reset"></i></span></div><div class="settings-row"><div><strong>' + esc(state.settings.studyDayStart || "09:00") + '–' + esc(state.settings.studyDayEnd || "19:00") + '</strong><small>Pausa de ' + Number(state.settings.studyBreakMinutes || 10) + ' minutos entre sessões.</small></div><span class="badge badge-violet">Plano ativo</span></div><button class="button button-small" type="button" data-action="study-planner-settings"><i data-lucide="sliders-horizontal"></i>Configurar rotina</button></article>';
     var safetyCard = '<article class="card settings-card span-12 settings-danger-zone"><div class="card-title-row"><div><p class="card-label">Zona de segurança</p><h3>Recomeçar neste dispositivo</h3><p class="card-subtitle">Remove o estado local e os ficheiros deste browser. O repositório Git não é apagado.</p></div><button class="button button-danger" type="button" data-action="reset-app"><i data-lucide="trash-2"></i>Apagar dados locais</button></div></article>';
-    var systemCard = '<article class="card settings-card settings-system-card"><div class="card-title-row"><div><p class="card-label">Estado</p><h3>Twenty ' + esc(appVersion()) + '</h3><p class="card-subtitle">Versão instalada e serviços principais deste dispositivo.</p></div><span class="metric-icon"><i data-lucide="badge-check"></i></span></div><div class="settings-system-grid"><div><span>Versão</span><strong>' + esc(appVersion()) + '</strong></div><div><span>Git</span><strong>' + esc(syncVersionBadge) + '</strong></div><div><span>Semestre</span><strong>' + activeCourses().length + ' cadeiras</strong></div><div><span>IA Cantina</span><strong>' + esc(canteenAIStatus.label) + '</strong></div><div><span>Dados</span><strong>Revisão ' + (Number(state.meta.revision) || 0) + '</strong></div></div></article>';
+    var systemCard = '<article class="card settings-card settings-system-card"><div class="card-title-row"><div><p class="card-label">Estado</p><h3>Estado do sistema</h3><p class="card-subtitle">Serviços principais e versão instalada neste dispositivo.</p></div><span class="metric-icon"><i data-lucide="badge-check"></i></span></div><div class="settings-system-grid"><div><span>Versão</span><strong>' + esc(appVersion()) + '</strong></div><div><span>Git</span><strong>' + esc(syncVersionBadge) + '</strong></div><div><span>Semestre</span><strong>' + activeCourses().length + ' cadeiras</strong></div><div><span>IA Cantina</span><strong>' + esc(canteenAIStatus.label) + '</strong></div><div><span>Dados</span><strong>Revisão ' + (Number(state.meta.revision) || 0) + '</strong></div></div></article>';
 
     var titles = {
       overview: ["Visão geral", "O essencial da tua conta académica e do sistema."],
@@ -8178,7 +8213,7 @@
     }[section];
     var nav = settingsNavButton("overview", "layout-dashboard", "Visão geral", section) + settingsNavButton("personal", "id-card", "Dados pessoais", section) + settingsNavButton("academic", "graduation-cap", "Académico", section) + settingsNavButton("canteen", "utensils", "Cantina", section) + settingsNavButton("data", "database", "Dados e sync", section) + settingsNavButton("system", "sliders-horizontal", "Sistema", section) + settingsNavButton("developer", "flask-conical", "Laboratório", section);
     var sectionIcon = section === "overview" ? "layout-dashboard" : section === "personal" ? "id-card" : section === "academic" ? "graduation-cap" : section === "canteen" ? "utensils" : section === "data" ? "database" : section === "system" ? "sliders-horizontal" : "flask-conical";
-    return '<div class="settings-command-bar"><div><span class="badge badge-violet"><i data-lucide="badge-check"></i>Twenty ' + esc(appVersion()) + '</span>' + (homeDebug && homeDebug.active ? '<span class="badge badge-yellow"><i data-lucide="calendar-clock"></i>' + esc(debugSnapshot.time) + '</span>' : '') + '</div><div class="page-actions"><button class="button" type="button" data-action="debug-open-time"><i data-lucide="calendar-clock"></i>Alterar data</button><button class="button button-dark" type="button" data-action="quick-add"><i data-lucide="plus"></i>Adicionar conteúdo</button></div></div><div class="settings-shell"><aside class="settings-nav"><div class="settings-nav-title"><span><i data-lucide="sliders-horizontal"></i></span><div><strong>Áreas</strong><small>Twenty ' + esc(appVersion()) + '</small></div></div>' + nav + '<div class="settings-nav-version"><span>Versão instalada</span><strong>' + esc(appVersion()) + '</strong></div></aside><section class="settings-panel"><header class="settings-section-head"><div><span>Área das definições</span><h3>' + esc(titles[section][0]) + '</h3><p>' + esc(titles[section][1]) + '</p></div><i data-lucide="' + sectionIcon + '"></i></header><div class="settings-grid">' + content + '</div></section></div>';
+    return '<div class="settings-command-bar"><div><span class="badge badge-mint"><i data-lucide="check"></i>Atualizado</span>' + (homeDebug && homeDebug.active ? '<span class="badge badge-yellow"><i data-lucide="calendar-clock"></i>' + esc(debugSnapshot.time) + '</span>' : '') + '</div><div class="page-actions"><button class="button" type="button" data-action="debug-open-time"><i data-lucide="calendar-clock"></i>Alterar data</button></div></div><div class="settings-shell"><aside class="settings-nav"><div class="settings-nav-title"><span><i data-lucide="sliders-horizontal"></i></span><div><strong>Áreas</strong></div></div>' + nav + '</aside><section class="settings-panel"><header class="settings-section-head"><div><span>Área das definições</span><h3>' + esc(titles[section][0]) + '</h3><p>' + esc(titles[section][1]) + '</p></div><i data-lucide="' + sectionIcon + '"></i></header><div class="settings-grid">' + content + '</div></section></div>';
   }
 
   function updateStorageCount() {
@@ -8186,7 +8221,7 @@
       var target = document.getElementById("storageFileCount");
       if (!target) return;
       var bytes = files.reduce(function (sum, file) { return sum + (Number(file.size) || 0); }, 0);
-      target.textContent = files.length + " ficheiro(s) · " + formatBytes(bytes);
+      target.textContent = countLabel(files.length, "ficheiro", "ficheiros") + " · " + formatBytes(bytes);
     }).catch(function () {});
   }
 
@@ -8693,7 +8728,7 @@
       title = "Importar teste anterior";
       var examCourse = preset.courseId || (activeCourses()[0] && activeCourses()[0].id) || "";
       body = '<form id="entityForm" data-type="past-exam-import"><div class="form-grid"><div class="field"><label>Cadeira</label><select name="courseId" required><option value="">Escolher…</option>' + courseOptions(examCourse) + '</select></div><div class="field"><label>Ano letivo</label><input name="academicYear" placeholder="2024/2025" value="' + attr(preset.academicYear || year) + '"></div><div class="field field-full"><label>Nome do teste</label><input name="title" required placeholder="Ex.: Teste 1 — época normal"></div><div class="field"><label>Data <span class="optional-label">opcional</span></label><input name="date" type="date"></div><div class="field"><label>Origem</label><input name="source" placeholder="PDF do professor, arquivo pessoal…"></div><div class="field field-full"><label>Ficheiro JSON <span class="optional-label">opcional</span></label><input name="jsonFile" data-role="local-json-file" data-target="pastExamJson" type="file" accept="application/json,.json"></div><div class="field field-full"><label>JSON das perguntas</label><textarea id="pastExamJson" name="json" class="json-editor" spellcheck="false" placeholder="Cola aqui o JSON gerado ou cria primeiro o teste vazio."></textarea>' + importTools("past-exam", "pastExamJson") + '<small>A importação é validada por inteiro antes de criar o teste. Os caminhos de imagem ficam guardados; também podes fazer upload ao editar cada pergunta.</small></div></div></form>';
-      submitLabel = "Importar teste";
+      submitLabel = "Importar teste anterior";
     } else if (type === "course-import") {
       title = "Importar cadeiras em JSON";
       body = '<form id="entityForm" data-type="course-import"><div class="form-grid"><div class="field field-full"><label>Ficheiro JSON</label><input name="jsonFile" data-role="local-json-file" data-target="courseImportJson" type="file" accept="application/json,.json"></div><div class="field field-full"><label>JSON das cadeiras</label><textarea id="courseImportJson" name="json" class="json-editor" spellcheck="false" placeholder="Cola uma cadeira ou um objeto com courses: […]."></textarea>' + importTools("course", "courseImportJson") + '<small>Cada cadeira é ligada ao semestre atual. O método de avaliação, mínimos e defesas são importados sem preencher campos em falta.</small></div></div></form>';
@@ -8773,7 +8808,7 @@
     await save(true);
     closeModal();
     render();
-    toast(additions.length + " pergunta(s) anterior(es) adicionada(s) ao quiz.");
+    toast(previousQuestionCountLabel(additions.length) + " adicionadas ao quiz.");
   }
 
   function parseEvaluation(text, existing) {
@@ -9294,7 +9329,7 @@
         validatedQuestions.forEach(function (question) { question.pastExamId = newPastExam.id; });
         state.pastExams.push(newPastExam);
         state.questions = state.questions.concat(validatedQuestions);
-        postSaveMessage = incomingQuestions.length ? "Teste anterior e " + incomingQuestions.length + " pergunta(s) importados." : "Teste anterior criado. Podes adicionar as perguntas depois.";
+        postSaveMessage = incomingQuestions.length ? "Teste anterior e " + questionCountLabel(incomingQuestions.length) + " importados." : "Teste anterior criado. Podes adicionar as perguntas depois.";
       } else if (type === "profile") {
         state.profile.name = String(data.get("name") || "").trim();
         state.profile.institution = String(data.get("institution") || "NOVA FCT").trim();
@@ -9636,7 +9671,7 @@
     quiz.questions = asArray(quiz.questions).concat(additions);
     await save(true);
     render();
-    if (additions.length) toast(additions.length + " pergunta(s) anterior(es) preparadas para o quiz.");
+    if (additions.length) toast(previousQuestionCountLabel(additions.length) + " preparadas para o quiz.");
     if (startAfter !== false) startQuiz(quiz.id);
     return quiz;
   }
@@ -10057,7 +10092,7 @@
       return;
     }
     var linkedPastQuestions = kind === "pastExams" ? state.questions.filter(function (question) { return question.pastExamId === id; }) : [];
-    var confirmation = linkedPastQuestions.length ? "Remover este teste anterior e as " + linkedPastQuestions.length + " pergunta(s) associadas?" : "Remover este item? Esta ação não pode ser desfeita.";
+    var confirmation = linkedPastQuestions.length ? "Remover este teste anterior e as " + questionCountLabel(linkedPastQuestions.length) + " associadas?" : "Remover este item? Esta ação não pode ser desfeita.";
     if (!window.confirm(confirmation)) return;
     var remoteFileToDelete = kind === "materials" && item.remoteFile && item.remoteFile.path ? item.remoteFile : null;
     var blobIdsToDelete = [];
@@ -11187,7 +11222,7 @@
       }, 60000);
       if (!state.profile.onboardingComplete || !state.currentSemesterId || !activeCourses().length) startOnboarding(state.semesters.length ? "new-semester" : "first");
       if ("serviceWorker" in navigator && location.protocol !== "file:") {
-        navigator.serviceWorker.register("sw.js?v=33.4-source-selection", { updateViaCache: "none" }).then(function () {
+        navigator.serviceWorker.register("sw.js?v=33.5-consistency", { updateViaCache: "none" }).then(function () {
           if (Sync && Sync.getStatus().configured) Sync.startAutoSync();
         }).catch(function () {
           if (Sync && Sync.getStatus().configured) Sync.startAutoSync();

@@ -1,17 +1,17 @@
 "use strict";
 
-var CACHE = "twenty-study-os-v33-4-source-selection";
+var CACHE = "twenty-study-os-v33-5-consistency";
 var APP_SHELL = [
   "./",
   "./index.html",
-  "./styles.css?v=33.4-source-selection",
-  "./sync.js?v=33.4-source-selection",
-  "./db.js?v=33.4-source-selection",
-  "./pdf-local.js?v=33.4-source-selection",
-  "./ai.js?v=33.4-source-selection",
-  "./ai-worker.js?v=33.4-source-selection",
-  "./app.js?v=33.4-source-selection",
-  "./lucide.min.js?v=33.4-source-selection",
+  "./styles.css?v=33.5-consistency",
+  "./sync.js?v=33.5-consistency",
+  "./db.js?v=33.5-consistency",
+  "./pdf-local.js?v=33.5-consistency",
+  "./ai.js?v=33.5-consistency",
+  "./ai-worker.js?v=33.5-consistency",
+  "./app.js?v=33.5-consistency",
+  "./lucide.min.js?v=33.5-consistency",
   "./manifest.webmanifest",
   "./icon.svg",
   "./icon-192.png",
