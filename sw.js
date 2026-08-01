@@ -1,16 +1,16 @@
 "use strict";
 
-var CACHE = "twenty-study-os-v33-1-paths-fix";
+var CACHE = "twenty-study-os-v33-3-interface-architecture";
 var APP_SHELL = [
   "./",
   "./index.html",
-  "./styles.css?v=33.1-paths-fix",
-  "./sync.js?v=33.1-paths-fix",
-  "./db.js?v=33.1-paths-fix",
-  "./ai.js?v=33.1-paths-fix",
-  "./ai-worker.js?v=33.1-paths-fix",
-  "./app.js?v=33.1-paths-fix",
-  "./lucide.min.js?v=33.1-paths-fix",
+  "./styles.css?v=33.3-interface-architecture",
+  "./sync.js?v=33.3-interface-architecture",
+  "./db.js?v=33.3-interface-architecture",
+  "./ai.js?v=33.3-interface-architecture",
+  "./ai-worker.js?v=33.3-interface-architecture",
+  "./app.js?v=33.3-interface-architecture",
+  "./lucide.min.js?v=33.3-interface-architecture",
   "./manifest.webmanifest",
   "./icon.svg",
   "./icon-192.png",

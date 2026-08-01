@@ -519,6 +519,80 @@
     }
   }
 
+  function quoteRawSvgJSONValues(text) {
+    var source = String(text || "");
+    var output = "";
+    var cursor = 0;
+    while (cursor < source.length) {
+      var keyIndex = source.indexOf('"svg"', cursor);
+      if (keyIndex < 0) { output += source.slice(cursor); break; }
+      var colonIndex = source.indexOf(":", keyIndex + 5);
+      if (colonIndex < 0) { output += source.slice(cursor); break; }
+      var quoteIndex = colonIndex + 1;
+      while (/\s/.test(source.charAt(quoteIndex))) quoteIndex += 1;
+      if (source.charAt(quoteIndex) !== '"') {
+        output += source.slice(cursor, quoteIndex);
+        cursor = quoteIndex;
+        continue;
+      }
+      var svgStart = source.indexOf("<svg", quoteIndex + 1);
+      if (svgStart < 0 || svgStart - quoteIndex > 8) {
+        output += source.slice(cursor, quoteIndex + 1);
+        cursor = quoteIndex + 1;
+        continue;
+      }
+      var svgEnd = source.indexOf("</svg>", svgStart);
+      if (svgEnd < 0) {
+        output += source.slice(cursor);
+        break;
+      }
+      var afterSvg = svgEnd + 6;
+      var closingQuote = afterSvg;
+      while (/\s/.test(source.charAt(closingQuote))) closingQuote += 1;
+      if (source.charAt(closingQuote) !== '"') {
+        output += source.slice(cursor, quoteIndex + 1);
+        cursor = quoteIndex + 1;
+        continue;
+      }
+      var rawSvg = source.slice(quoteIndex + 1, afterSvg)
+        .replace(/\\"/g, '"')
+        .replace(/\r?\n/g, " ")
+        .trim();
+      output += source.slice(cursor, quoteIndex) + JSON.stringify(rawSvg);
+      cursor = closingQuote + 1;
+    }
+    return output;
+  }
+
+  function escapeJSONControlCharacters(text) {
+    var source = String(text || "");
+    var output = "";
+    var inString = false;
+    var escaped = false;
+    for (var index = 0; index < source.length; index += 1) {
+      var char = source.charAt(index);
+      if (inString && char.charCodeAt(0) < 32) {
+        var controls = { "\b": "\\b", "\f": "\\f", "\n": "\\n", "\r": "\\r", "\t": "\\t" };
+        output += controls[char] || "";
+        escaped = false;
+        continue;
+      }
+      output += char;
+      if (char === '"' && !escaped) inString = !inString;
+      if (char === "\\" && !escaped) escaped = true;
+      else escaped = false;
+    }
+    return output;
+  }
+
+  function repairCommonAIJSON(text) {
+    var repaired = quoteRawSvgJSONValues(String(text || "")
+      .replace(/^\uFEFF/, "")
+      .replace(/[\u201C\u201D]/g, '"'));
+    return escapeJSONControlCharacters(repaired)
+      .replace(/,\s*([}\]])/g, "$1");
+  }
+
   function parseJSONReply(value) {
     var text = String(value || "").trim();
     if (!text) throw new Error("Cola primeiro a resposta JSON da IA.");
@@ -527,7 +601,10 @@
     var first = text.indexOf("{");
     var last = text.lastIndexOf("}");
     if (first >= 0 && last > first) text = text.slice(first, last + 1);
-    try { return JSON.parse(text); } catch (_) { throw new Error("A resposta não é JSON válido. Pede à IA para devolver apenas o objeto JSON."); }
+    try { return JSON.parse(text); } catch (_) {}
+    try { return JSON.parse(repairCommonAIJSON(text)); } catch (_) {
+      throw new Error("A resposta da IA ficou com JSON inválido. A Twenty tentou reparar aspas, vírgulas e SVG, mas não conseguiu. Gera novamente com o novo prompt e cola apenas o objeto JSON.");
+    }
   }
 
   function clone(value) { return JSON.parse(JSON.stringify(value)); }
@@ -1579,6 +1656,11 @@
     document.title = title + " · Twenty";
   }
 
+  function appVersion() {
+    var meta = document.querySelector('meta[name="twenty-version"]');
+    return meta && meta.content ? String(meta.content) : "0.33.3";
+  }
+
   function routeKey(value) {
     value = value || route;
     return [value.name || "home", value.id || "", value.tab || "overview"].join("|");
@@ -2257,6 +2339,18 @@
       pendingChecks: context.pendingChecks.length,
       pendingHomework: context.tasks.homeworkPending.length + context.tasks.overdue.length
     };
+  }
+
+  function debugLocalDateTimeValue(date) {
+    date = date || activeHomeNow();
+    return date.getFullYear() + "-" + String(date.getMonth() + 1).padStart(2, "0") + "-" + String(date.getDate()).padStart(2, "0") + "T" + String(date.getHours()).padStart(2, "0") + ":" + String(date.getMinutes()).padStart(2, "0");
+  }
+
+  function openQuickSimulationTime() {
+    var current = activeHomeNow();
+    var active = !!(homeDebug && homeDebug.active);
+    var body = '<div class="simulation-time-card"><div class="simulation-time-status"><span class="metric-icon"><i data-lucide="calendar-clock"></i></span><div><strong>' + (active ? 'Simulação ativa' : 'Usar data e hora de teste') + '</strong><small>' + (active ? 'A Home está a usar uma data simulada.' : 'Os teus dados continuam iguais; só muda o relógio da experiência.') + '</small></div><span class="badge ' + (active ? 'badge-yellow' : 'badge-mint') + '">' + (active ? 'Teste' : 'Dados reais') + '</span></div><label class="simulation-date-field"><span>Data e hora</span><input id="debugCustomTime" type="datetime-local" value="' + attr(debugLocalDateTimeValue(current)) + '"></label><div class="simulation-presets"><button type="button" data-action="debug-time-preset" data-time="08:20"><i data-lucide="sunrise"></i>Antes das aulas</button><button type="button" data-action="debug-time-preset" data-time="09:45"><i data-lucide="presentation"></i>Durante a aula</button><button type="button" data-action="debug-time-preset" data-time="12:40"><i data-lucide="utensils"></i>Almoço</button><button type="button" data-action="debug-time-preset" data-time="17:35"><i data-lucide="sunset"></i>Fim das aulas</button></div><p class="form-note">A simulação é temporária. Ao sair, a Twenty regressa imediatamente à data e hora reais.</p></div>';
+    openModal("Data e hora de simulação", body, { className: "simulation-time-modal", footer: '<footer class="modal-foot"><button class="button" type="button" data-action="debug-open-lab"><i data-lucide="flask-conical"></i>Laboratório completo</button>' + (active ? '<button class="button" type="button" data-action="debug-exit">Usar hora real</button>' : '') + '<button class="button button-dark" type="button" data-action="debug-apply-time"><i data-lucide="check"></i>Aplicar data</button></footer>' });
   }
 
   function openHomeDebugLab() {
@@ -2952,7 +3046,7 @@
       var count = state.courses.filter(function (course) { return course.semesterId === semester.id; }).length;
       return '<div class="list-row"><span class="list-icon"><i data-lucide="archive"></i></span><span class="list-content"><strong>' + esc(semester.name) + '</strong><small>' + esc(semester.academicYear) + ' · ' + count + ' cadeiras · apenas consulta</small></span><button class="button button-small" type="button" data-action="view-archive" data-id="' + attr(semester.id) + '">Ver</button></div>';
     }).join("") + "</div></section>" : "";
-    return '<div class="page-head"><div><h2>Cadeiras do semestre</h2><p>Cada cadeira reúne aulas, slides, perguntas de testes anteriores, quizzes, avaliações e notas.</p></div><div class="page-actions"><button class="button" type="button" data-action="import-courses"><i data-lucide="file-json-2"></i>Importar JSON</button><button class="button" type="button" data-action="add-course"><i data-lucide="plus"></i>Nova cadeira</button><button class="button button-dark" type="button" data-action="new-semester"><i data-lucide="calendar-plus"></i>Novo semestre</button></div></div>' + (courses.length ? '<div class="course-grid">' + cards + "</div>" : emptyState("library-big", "Ainda não há cadeiras", "Adiciona a primeira cadeira ou importa a configuração do semestre.", "import-courses", "Importar cadeiras")) + archiveHtml;
+    return '<div class="page-toolbar page-toolbar-end"><div class="page-actions"><button class="button" type="button" data-action="import-courses"><i data-lucide="file-json-2"></i>Importar JSON</button><button class="button" type="button" data-action="add-course"><i data-lucide="plus"></i>Nova cadeira</button><button class="button button-dark" type="button" data-action="new-semester"><i data-lucide="calendar-plus"></i>Novo semestre</button></div></div>' + (courses.length ? '<div class="course-grid">' + cards + "</div>" : emptyState("library-big", "Ainda não há cadeiras", "Adiciona a primeira cadeira ou importa a configuração do semestre.", "import-courses", "Importar cadeiras")) + archiveHtml;
   }
 
   function courseTabs(course, active) {
@@ -2975,10 +3069,10 @@
     var archived = !!(semester && semester.archived);
     var average = courseAverage(course);
     setHeader(course.code || "Cadeira", semester ? semester.name + " · " + semester.academicYear : "Cadeira");
-    var hero = '<section class="card course-hero" style="--course-color:' + safeColor(course.color) + '"><div class="course-hero-copy"><span class="badge badge-dark">' + esc(course.code || "Cadeira") + '</span><h2>' + esc(course.name) + '</h2><p>' + (Number(course.ects) || 0) + ' ECTS · ' + asArray(course.lessonTypes).map(lessonTypeLabel).join(" · ") + (archived ? " · Semestre arquivado" : "") + '</p></div><div class="course-score"><strong>' + (average.value == null ? "—" : round(average.value, 1)) + '</strong><span>' + (average.value == null ? "sem notas" : "média atual / 20") + "</span></div></section>";
+    var hero = '<section class="card course-hero course-hero-clean" style="--course-color:' + safeColor(course.color) + '"><div class="course-hero-copy"><span class="badge badge-dark">' + esc(course.code || "Cadeira") + '</span><h2>' + esc(course.name) + '</h2><p>' + (Number(course.ects) || 0) + ' ECTS · ' + asArray(course.lessonTypes).map(lessonTypeLabel).join(" · ") + (archived ? " · Semestre arquivado" : "") + '</p></div></section>';
     var controls = courseTabs(course, tab || "overview");
     var content = renderCourseTab(course, tab || "overview", archived);
-    return '<div class="page-head"><div><button class="button button-ghost button-small" type="button" data-route="courses"><i data-lucide="arrow-left"></i>Cadeiras</button></div><div class="page-actions">' + (!archived ? '<button class="button" type="button" data-action="edit-course" data-id="' + attr(course.id) + '"><i data-lucide="settings-2"></i>Configurar</button><button class="button" type="button" data-action="create-lesson" data-course="' + attr(course.id) + '"><i data-lucide="plus"></i>Nova aula</button><button class="button button-dark" type="button" data-action="create-lesson-from-slides" data-course="' + attr(course.id) + '"><i data-lucide="wand-sparkles"></i>Criar com slides</button>' : '<span class="badge badge-dark"><i data-lucide="archive"></i>Arquivo</span>') + "</div></div>" + hero + controls + content;
+    return '<div class="page-toolbar"><button class="button button-ghost button-small" type="button" data-route="courses"><i data-lucide="arrow-left"></i>Cadeiras</button><div class="page-actions">' + (!archived ? '<button class="button" type="button" data-action="edit-course" data-id="' + attr(course.id) + '"><i data-lucide="settings-2"></i>Configurar</button><button class="button" type="button" data-action="create-lesson" data-course="' + attr(course.id) + '"><i data-lucide="plus"></i>Nova aula</button><button class="button button-dark" type="button" data-action="create-lesson-from-slides" data-course="' + attr(course.id) + '"><i data-lucide="wand-sparkles"></i>Criar com slides</button>' : '<span class="badge badge-dark"><i data-lucide="archive"></i>Arquivo</span>') + "</div></div>" + hero + controls + content;
   }
 
   function lessonTypeLabel(type) {
@@ -3404,9 +3498,74 @@
   }
 
 
+  function repairGeneratedLatex(value) {
+    return String(value || "")
+      .replace(/\u0008/g, "\\b")
+      .replace(/\u000c/g, "\\f")
+      .replace(/\n/g, "\\n")
+      .replace(/\r/g, "\\r")
+      .replace(/\t/g, "\\t")
+      .trim();
+  }
+
+  function normalizeGeneratedContentBlocks(value) {
+    return normalizeContentBlocks(value).map(function (sourceBlock) {
+      var block = Object.assign({}, sourceBlock);
+      var type = String(block.type || "text").toLowerCase();
+      if (type === "text") {
+        var textValue = String(block.text != null ? block.text : block.content || "").trim();
+        return textValue ? { type: "text", text: textValue } : null;
+      }
+      if (type === "heading") {
+        var heading = String(block.text != null ? block.text : block.content || "").trim();
+        return heading ? { type: "heading", level: Number(block.level) === 3 ? 3 : 2, text: heading } : null;
+      }
+      if (type === "list") {
+        var items = asArray(block.items).map(function (item) {
+          var normalized = normalizeGeneratedContentBlocks(item);
+          return normalized.length ? normalized : null;
+        }).filter(Boolean);
+        return items.length ? { type: "list", ordered: !!block.ordered, items: items } : null;
+      }
+      if (type === "latex") {
+        var latex = repairGeneratedLatex(block.latex != null ? block.latex : block.value);
+        return latex ? { type: "latex", latex: latex, display: block.display !== false } : null;
+      }
+      if (type === "code") {
+        var code = String(block.code || "").trim();
+        return code ? { type: "code", language: String(block.language || "text"), code: code } : null;
+      }
+      if (type === "slide-image") {
+        return {
+          type: "slide-image",
+          sourceFile: String(block.sourceFile || block.fileName || "").trim(),
+          slideNumber: Number(block.slideNumber || block.slide || 0) || 0,
+          description: String(block.description || block.alt || "Imagem relevante do slide.").trim(),
+          alt: String(block.alt || block.description || "Imagem do slide").trim(),
+          caption: String(block.caption || "").trim(),
+          materialId: block.materialId || ""
+        };
+      }
+      if (type === "svg") {
+        var svg = sanitizeSvgMarkup(block.svg || block.code || "");
+        if (svg) return { type: "svg", svg: svg, alt: String(block.alt || block.caption || "Diagrama").trim() };
+        var fallback = String(block.alt || block.caption || "").trim();
+        return fallback ? { type: "text", text: "Diagrama: " + fallback } : null;
+      }
+      if (type === "image") {
+        var imageUrl = safeResourceUrl(block.url || block.src || "");
+        if (imageUrl) return { type: "image", url: imageUrl, alt: String(block.alt || block.caption || "Imagem").trim(), caption: String(block.caption || "").trim() };
+        var imageFallback = String(block.description || block.alt || block.caption || "").trim();
+        return imageFallback ? { type: "text", text: "Imagem a consultar: " + imageFallback } : null;
+      }
+      var fallbackText = String(block.text != null ? block.text : block.content || block.alt || block.caption || "").trim();
+      return fallbackText ? { type: "text", text: fallbackText } : null;
+    }).filter(Boolean);
+  }
+
   function attachSlideMaterialReferences(value, materials) {
     materials = asArray(materials);
-    return normalizeContentBlocks(value).map(function (sourceBlock) {
+    return normalizeGeneratedContentBlocks(value).map(function (sourceBlock) {
       var block = Object.assign({}, sourceBlock);
       if (String(block.type || "").toLowerCase() === "slide-image" && !block.materialId && materials.length) {
         var requested = String(block.sourceFile || block.fileName || "").trim().toLowerCase();
@@ -3426,14 +3585,15 @@
   }
 
   function lessonBuilderSchema(kind, lesson) {
-    var commonBlocks = '[{"type":"text","text":"..."},{"type":"latex","latex":"\\\\frac{a}{b}","display":true},{"type":"code","language":"python","code":"..."},{"type":"svg","svg":"<svg viewBox=\\"0 0 640 360\\">...</svg>","alt":"..."},{"type":"slide-image","sourceFile":"nome-do-ficheiro.pptx","slideNumber":12,"description":"imagem ou diagrama exato a usar","alt":"..."}]';
+    var basicBlocks = '[{"type":"text","text":"Parágrafo curto e claro."},{"type":"latex","latex":"\\\\frac{a}{b}","display":true},{"type":"code","language":"python","code":"print(\\"exemplo\\")"},{"type":"slide-image","sourceFile":"nome-do-ficheiro.pptx","slideNumber":12,"description":"diagrama exato a consultar","alt":"Descrição acessível"}]';
+    var notesBlocks = '[{"type":"heading","level":2,"text":"Conceito principal"},{"type":"text","text":"Explicação curta, rigorosa e baseada nas fontes."},{"type":"list","ordered":false,"items":["Primeiro ponto","Segundo ponto"]},{"type":"latex","latex":"N_{\\\\text{píxeis}}=\\\\text{largura}\\\\times\\\\text{altura}","display":true},{"type":"slide-image","sourceFile":"nome-do-ficheiro.pptx","slideNumber":3,"description":"usar apenas se o slide tiver uma imagem necessária","alt":"Descrição da imagem"}]';
     if (kind === "quiz") {
-      return '{\n  "title": "Quiz da aula · ' + lesson.title.replace(/"/g, "\\\"") + '",\n  "questions": [\n    {"gameType":"choice","promptBlocks":' + commonBlocks + ',"options":[' + commonBlocks + ',' + commonBlocks + ',' + commonBlocks + ',' + commonBlocks + '],"correctIndex":0,"explanationBlocks":' + commonBlocks + '},\n    {"gameType":"type-answer","promptBlocks":' + commonBlocks + ',"answerText":"v=d/t","acceptedAnswers":["v=d/t","v=\\frac{d}{t}"],"explanationBlocks":' + commonBlocks + '},\n    {"gameType":"spot-error","promptBlocks":' + commonBlocks + ',"options":[' + commonBlocks + ',' + commonBlocks + ',' + commonBlocks + ',' + commonBlocks + '],"correctIndex":2,"explanationBlocks":' + commonBlocks + '},\n    {"gameType":"order","promptBlocks":' + commonBlocks + ',"orderItems":["Passo C","Passo A","Passo B"],"correctOrder":["Passo A","Passo B","Passo C"],"explanationBlocks":' + commonBlocks + '},\n    {"gameType":"match","promptBlocks":' + commonBlocks + ',"matchPairs":[{"left":"Força","right":"Newton"},{"left":"Energia","right":"Joule"}],"explanationBlocks":' + commonBlocks + '},\n    {"gameType":"memory","promptBlocks":' + commonBlocks + ',"sequence":["Azul","Vermelho","Verde"],"explanationBlocks":' + commonBlocks + '}\n  ]\n}';
+      return '{\n  "title": "Quiz da aula · ' + lesson.title.replace(/"/g, "\\\"") + '",\n  "questions": [\n    {"gameType":"choice","promptBlocks":' + basicBlocks + ',"options":[' + basicBlocks + ',' + basicBlocks + ',' + basicBlocks + ',' + basicBlocks + '],"correctIndex":0,"explanationBlocks":' + basicBlocks + '},\n    {"gameType":"type-answer","promptBlocks":' + basicBlocks + ',"answerText":"v=d/t","acceptedAnswers":["v=d/t","v=\\\\frac{d}{t}"],"explanationBlocks":' + basicBlocks + '},\n    {"gameType":"spot-error","promptBlocks":' + basicBlocks + ',"options":[' + basicBlocks + ',' + basicBlocks + ',' + basicBlocks + ',' + basicBlocks + '],"correctIndex":2,"explanationBlocks":' + basicBlocks + '},\n    {"gameType":"order","promptBlocks":' + basicBlocks + ',"orderItems":["Passo C","Passo A","Passo B"],"correctOrder":["Passo A","Passo B","Passo C"],"explanationBlocks":' + basicBlocks + '},\n    {"gameType":"match","promptBlocks":' + basicBlocks + ',"matchPairs":[{"left":"Força","right":"Newton"},{"left":"Energia","right":"Joule"}],"explanationBlocks":' + basicBlocks + '}\n  ]\n}';
     }
     if (kind === "homework") {
-      return '{\n  "title": "TPC · ' + lesson.title.replace(/"/g, "\\\"") + '",\n  "estimatedMinutes": 30,\n  "instructionsBlocks": ' + commonBlocks + ',\n  "solutionBlocks": ' + commonBlocks + ',\n  "checklist": ["Passo 1", "Passo 2"],\n  "extraTasks": [\n    {"title":"Tarefa adicional pedida pelo professor","blocks":' + commonBlocks + ',"optional":false}\n  ]\n}';
+      return '{\n  "title": "TPC · ' + lesson.title.replace(/"/g, "\\\"") + '",\n  "estimatedMinutes": 30,\n  "instructionsBlocks": ' + basicBlocks + ',\n  "solutionBlocks": ' + basicBlocks + ',\n  "checklist": ["Passo 1", "Passo 2"],\n  "extraTasks": [\n    {"title":"Tarefa adicional pedida pelo professor","blocks":' + basicBlocks + ',"optional":false}\n  ]\n}';
     }
-    return '{\n  "title": "Apontamentos · ' + lesson.title.replace(/"/g, "\\\"") + '",\n  "paper": "lined",\n  "blocks": ' + commonBlocks + '\n}';
+    return '{\n  "title": "Apontamentos · ' + lesson.title.replace(/"/g, "\\\"") + '",\n  "paper": "lined",\n  "blocks": ' + notesBlocks + '\n}';
   }
 
   function buildLessonAIPrompt(lesson, kind, materialIds, includePast) {
@@ -3457,13 +3617,15 @@
       "",
       "REGRAS DE CONTEÚDO",
       "- Devolve APENAS JSON válido, sem texto antes ou depois e sem blocos markdown.",
+      "- O JSON tem de passar diretamente em JSON.parse: aspas internas escapadas, sem comentários, sem vírgulas finais, sem URLs transformados em Markdown e sem texto fora do objeto.",
       "- Português de Portugal.",
       "- Usa texto normal sempre que for suficiente.",
-      "- Para fórmulas, usa blocos type=latex e escreve LaTeX sem delimitadores $, $$, \\( ou \\[. Exemplo: \\\\frac{v^2}{2a}.",
+      "- Para fórmulas, usa blocos type=latex e escreve LaTeX sem delimitadores $, $$, \\( ou \\[.",
+      "- IMPORTANTE: como a resposta é JSON, duplica TODAS as barras invertidas do LaTeX. No JSON escreve \\\\times, \\\\frac e \\\\Delta; nunca uses uma barra simples.",
       "- Para código, usa type=code com language e code. O código será mostrado numa interface estilo IDE.",
-      "- Para diagramas simples, prefere type=svg. Usa SVG puro com viewBox e sem JavaScript, scripts, foreignObject ou ligações externas.",
+      "- Não uses type=svg nas respostas geradas automaticamente. Para um visual existente nos slides, usa type=slide-image; caso contrário, explica-o com texto, lista ou LaTeX.",
       "- Se uma pergunta ou resposta depender de uma imagem específica dos slides, usa type=slide-image com sourceFile, slideNumber, description e alt. Só pede imagens quando forem realmente necessárias, por exemplo gráficos, circuitos, geometria, física, matemática visual ou interpretação de diagramas.",
-      "- Uma resposta, opção ou explicação pode ser composta por texto, imagem pedida, SVG, LaTeX ou código, conforme o conteúdo exigir.",
+      "- Uma resposta, opção ou explicação pode usar texto, heading, list, slide-image, LaTeX ou código, conforme o conteúdo exigir.",
       "- Não inventes imagens que não existem nos slides; quando necessário, descreve exatamente que zona/diagrama deve aparecer.",
       kind === "quiz" ? "- Cria entre 5 e 10 atividades curtas e mistura apenas os gameType adequados à matéria: choice, type-answer, spot-error, order, match ou memory." : "",
       kind === "quiz" ? "- choice e spot-error usam options e correctIndex. type-answer usa answerText e acceptedAnswers. order usa orderItems baralhados e correctOrder. match usa matchPairs. memory usa sequence." : "",
@@ -3471,9 +3633,12 @@
       kind === "homework" ? "- O TPC deve ser diferente do quiz da aula e adequado para fazer em casa. Inclui solução ou critérios de correção." : "",
       kind === "homework" ? "- instructionsBlocks representa a tarefa principal. Usa extraTasks apenas para pedidos adicionais concretos do professor; cada item tem title, blocks e optional." : "",
       kind === "homework" ? "- Dá uma estimativa realista em estimatedMinutes, porque a Twenty vai usar esse valor no timer da sessão de TPC." : "",
-      kind === "notes" ? "- Este conteúdo será ACRESCENTADO depois dos apontamentos já escritos pelo utilizador. Não reescrevas, apagues nem substituas os apontamentos existentes; evita repetir ideias já presentes." : "",
-      kind === "notes" ? "- Organiza a nova continuação por secções e usa fórmulas, código ou diagramas apenas quando melhorarem realmente a compreensão." : "",
-      kind === "notes" && lesson.notes ? "- Apontamentos existentes para não repetires: " + lesson.notes : "",
+      kind === "notes" ? "- Usa entre 8 e 18 blocos. Começa com uma visão geral curta e depois organiza por secções." : "",
+      kind === "notes" ? "- Usa type=heading para títulos, type=text para parágrafos curtos e type=list para enumerações. Não escondas títulos dentro de blocos de texto." : "",
+      kind === "notes" ? "- Evita repetir a mesma definição em várias secções. Cada bloco deve acrescentar informação útil." : "",
+      kind === "notes" ? "- Termina com uma secção 'O essencial para rever' com 4 a 8 pontos realmente importantes." : "",
+      kind === "notes" ? "- Não escrevas 'Continuação', 'Continuação da aula' ou expressões semelhantes, exceto quando forem fornecidos apontamentos existentes." : "",
+      kind === "notes" ? (lesson.notes ? "- Este conteúdo será ACRESCENTADO aos apontamentos existentes. Não os reescrevas nem repitas: " + lesson.notes : "- Não existem apontamentos anteriores: cria os apontamentos desde o início.") : "",
       "",
       "FORMATO EXATO ESPERADO PELA TWENTY",
       lessonBuilderSchema(kind, lesson),
@@ -3500,7 +3665,7 @@
     var ids = materials.map(function (material) { return material.id; });
     var includePast = pastQuestionsForLesson(lesson.id).length > 0;
     var prompt = buildLessonAIPrompt(lesson, kind, ids, includePast);
-    var body = '<form id="lessonBuilderForm" data-kind="' + attr(kind) + '" data-lesson="' + attr(lesson.id) + '"><div class="builder-intro"><span class="metric-icon"><i data-lucide="' + (kind === "quiz" ? "check-check" : kind === "homework" ? "notebook-pen" : "book-open-text") + '"></i></span><div><p class="card-label">Configurar ' + esc(lessonBuilderLabel(kind)) + '</p><h3>' + esc(lesson.title) + '</h3><p>Escolhe as fontes, copia o prompt para a IA juntamente com o PowerPoint e cola aqui o JSON devolvido.</p></div></div><div class="section-heading"><div><h3>Slides da aula</h3><p>O prompt inclui o texto extraído e identifica os ficheiros que deves anexar à IA.</p></div></div>' + lessonBuilderMaterialChoices(lesson) + '<label class="builder-past-toggle"><input type="checkbox" name="includePast" ' + (includePast ? "checked" : "") + '><span><strong>Incluir perguntas de anos anteriores</strong><small>' + pastQuestionsForLesson(lesson.id).length + ' pergunta(s) associada(s) a esta aula</small></span></label><div class="builder-prompt-head"><div><h3>Prompt para a IA</h3><p>O formato inclui texto, imagens dos slides, SVG, LaTeX e código.</p></div><button class="button button-small" type="button" data-action="copy-lesson-builder-prompt"><i data-lucide="copy"></i>Copiar prompt</button></div><textarea id="lessonBuilderPrompt" class="builder-prompt" readonly>' + esc(prompt) + '</textarea><div class="builder-prompt-head"><div><h3>Resposta da IA</h3><p>Cola apenas o JSON. A Twenty valida antes de guardar.</p></div><span class="badge badge-violet">JSON</span></div><textarea id="lessonBuilderResponse" class="builder-response" placeholder="{&#10;  &quot;title&quot;: &quot;...&quot;&#10;}"></textarea><div class="form-error" hidden></div></form>';
+    var body = '<form id="lessonBuilderForm" data-kind="' + attr(kind) + '" data-lesson="' + attr(lesson.id) + '"><div class="builder-intro"><span class="metric-icon"><i data-lucide="' + (kind === "quiz" ? "check-check" : kind === "homework" ? "notebook-pen" : "book-open-text") + '"></i></span><div><p class="card-label">Configurar ' + esc(lessonBuilderLabel(kind)) + '</p><h3>' + esc(lesson.title) + '</h3><p>Escolhe as fontes, copia o prompt para a IA juntamente com o PowerPoint e cola aqui o JSON devolvido.</p></div></div><div class="section-heading"><div><h3>Slides da aula</h3><p>O prompt inclui o texto extraído e identifica os ficheiros que deves anexar à IA.</p></div></div>' + lessonBuilderMaterialChoices(lesson) + '<label class="builder-past-toggle"><input type="checkbox" name="includePast" ' + (includePast ? "checked" : "") + '><span><strong>Incluir perguntas de anos anteriores</strong><small>' + pastQuestionsForLesson(lesson.id).length + ' pergunta(s) associada(s) a esta aula</small></span></label><div class="builder-prompt-head"><div><h3>Prompt para a IA</h3><p>O formato inclui texto estruturado, imagens dos slides, LaTeX e código.</p></div><button class="button button-small" type="button" data-action="copy-lesson-builder-prompt"><i data-lucide="copy"></i>Copiar prompt</button></div><textarea id="lessonBuilderPrompt" class="builder-prompt" readonly>' + esc(prompt) + '</textarea><div class="builder-prompt-head"><div><h3>Resposta da IA</h3><p>Cola apenas o JSON. A Twenty valida antes de guardar.</p></div><span class="badge badge-violet">JSON</span></div><textarea id="lessonBuilderResponse" class="builder-response" placeholder="{&#10;  &quot;title&quot;: &quot;...&quot;&#10;}"></textarea><div class="form-error" hidden></div></form>';
     openModal("Configurar " + lessonBuilderLabel(kind), body, { className: "modal-builder", footer: '<footer class="modal-foot"><button class="button" type="button" data-action="close-modal">Cancelar</button><button class="button button-dark" type="button" data-action="import-lesson-builder"><i data-lucide="check"></i>Criar na Twenty</button></footer>' });
   }
 
@@ -3693,7 +3858,7 @@
     var course = courseById(lesson.courseId);
     var semester = course ? semesterById(course.semesterId) : null;
     var archived = !!(semester && semester.archived);
-    setHeader(lesson.title, course ? course.name : "Aula");
+    setHeader("Aula", course ? course.name : "Conteúdo da cadeira");
     var materials = state.materials.filter(function (item) { return item.lessonId === lesson.id; });
     var questions = pastQuestionsForLesson(lesson.id);
     var quiz = configuredQuizForLesson(lesson.id);
@@ -3711,7 +3876,7 @@
       ? '<div class="lesson-configured-card"><span class="list-icon orange"><i data-lucide="notebook-pen"></i></span><div><strong>' + esc(homework.title) + '</strong><small>' + (homework.estimatedMinutes || 30) + ' min · ' + (homework.done ? 'concluído' : 'por fazer') + ' · conteúdo fechado</small></div><div class="list-actions"><button class="button ' + (homework.done ? 'button-dark' : 'button') + ' button-small" type="button" data-action="view-lesson-homework" data-id="' + attr(homework.id) + '"><i data-lucide="eye"></i>Ver</button>' + (homework.done ? '' : '<button class="button button-dark button-small" type="button" data-action="start-homework-session" data-task="' + attr(homework.id) + '"><i data-lucide="play"></i>Fazer</button>') + '</div></div>'
       : '<div class="lesson-unconfigured"><span class="metric-icon"><i data-lucide="notebook-pen"></i></span><div><strong>TPC ainda não configurado</strong><small>O TPC é separado do quiz e pensado para fazer em casa.</small></div><button class="button button-dark button-small" type="button" data-action="configure-lesson-content" data-kind="homework" data-lesson="' + attr(lesson.id) + '"><i data-lucide="wand-sparkles"></i>✅ Configurar TPC</button></div>';
     var quizStatusCard = onlineComplete ? '' : '<article class="card span-12 beonline-lesson-card"><div class="beonline-lesson-copy"><span class="badge ' + (quiz && lessonEnded ? 'badge-danger' : 'badge-violet') + '">' + (quiz && lessonEnded ? 'Quiz pendente' : quiz ? 'Quiz preparado' : 'Sem quiz') + '</span><h3>Quiz da aula</h3><p>' + esc(quiz && lessonEnded ? 'O quiz está pronto para fazer.' : quiz ? 'Quando a aula estiver a terminar, a Home pode sugerir este quiz.' : 'O quiz só aparece na Home depois de o configurares.') + '</p></div></article>';
-    return '<div class="page-head"><div><button class="button button-ghost button-small" type="button" data-route="course" data-id="' + attr(lesson.courseId) + '"><i data-lucide="arrow-left"></i>' + esc(course ? course.code || course.name : "Cadeira") + '</button><h2 style="margin-top:11px">' + esc(lesson.title) + '</h2><p>' + formatLongDate(lesson.date) + (lesson.start ? ' · ' + esc(lesson.start) + '–' + esc(lesson.end || '') : '') + ' · ' + esc(lessonTypeLabel(lesson.type)) + (lesson.room ? ' · ' + esc(lesson.room) : '') + '</p></div><div class="page-actions">' + (!archived ? '<button class="button" type="button" data-action="edit-lesson" data-id="' + attr(lesson.id) + '"><i data-lucide="pencil"></i>Editar aula</button><button class="button ' + (lesson.mastered ? 'button-yellow' : 'button-dark') + '" type="button" data-action="toggle-mastery" data-id="' + attr(lesson.id) + '"><i data-lucide="badge-check"></i>' + (lesson.mastered ? 'Dominada' : 'Marcar dominada') + '</button>' : '') + '</div></div><div class="bento-grid"><article class="card course-hero span-12" style="--course-color:' + safeColor(course && course.color) + ';min-height:220px"><div class="course-hero-copy"><span class="badge badge-dark">' + esc(lesson.type || 'Aula') + '</span><h2>' + esc(lesson.title) + '</h2><p>' + esc(lesson.description || lesson.topics || 'Adiciona os tópicos dados nesta aula.') + '</p></div><div class="course-score"><strong>' + (lesson.mastered ? '✓' : questions.length) + '</strong><span>' + (lesson.mastered ? 'matéria dominada' : 'perguntas antigas') + '</span></div></article>' + quizStatusCard + '<article class="card span-12"><div class="card-title-row"><div><h3>Slides e PDFs</h3><p class="card-subtitle">Os ficheiros são enviados para o Git e ficam disponíveis nos teus dispositivos.</p></div>' + (!archived ? '<button class="button button-small" type="button" data-action="add-material" data-course="' + attr(lesson.courseId) + '" data-lesson="' + attr(lesson.id) + '"><i data-lucide="file-up"></i>Carregar</button>' : '') + '</div><div style="margin-top:15px">' + materialsHtml + '</div></article><article class="card span-7"><div class="card-title-row"><div><h3>Perguntas de anos anteriores</h3></div><div class="list-actions">' + (!archived ? '<button class="button button-small" type="button" data-action="add-question" data-course="' + attr(lesson.courseId) + '" data-lesson="' + attr(lesson.id) + '"><i data-lucide="plus"></i>Pergunta</button>' : '') + '</div></div><div style="margin-top:15px">' + questionsHtml + '</div></article><article class="card span-5 lesson-config-card"><div class="card-title-row"><div><h3>✅ Quiz da aula</h3><p class="card-subtitle">Um por aula. Depois de criado, fica em visualização.</p></div></div>' + quizHtml + '</article><article class="card span-12 lesson-config-card"><div class="card-title-row"><div><h3>✅ TPC da aula</h3><p class="card-subtitle">Aplicação e prática para fazer em casa, separada do quiz.</p></div></div>' + homeworkHtml + '</article><article class="card span-12 notebook-card"><div class="card-title-row"><div><h3>Apontamentos</h3><p class="card-subtitle">Escreve como num caderno ou gera conteúdo com um prompt estruturado.</p></div><div class="list-actions">' + (!archived ? '<button class="button button-small" type="button" data-action="configure-lesson-content" data-kind="notes" data-lesson="' + attr(lesson.id) + '"><i data-lucide="wand-sparkles"></i>Gerar por prompt</button><button class="button button-dark button-small" type="button" data-action="open-notebook-editor" data-lesson="' + attr(lesson.id) + '"><i data-lucide="pencil"></i>Escrever</button>' : '') + '</div></div><div style="margin-top:15px">' + renderNotebookPage(lesson, false) + '</div><div class="notebook-meta"><span><i data-lucide="notebook"></i>' + esc(notebookPaperLabel(lesson.notesPaper)) + '</span><button class="button button-small" type="button" data-action="course-tab" data-id="' + attr(lesson.courseId) + '" data-tab="notebook"><i data-lucide="library-big"></i>Ver caderno da cadeira</button></div></article></div>';
+    return '<div class="page-toolbar"><button class="button button-ghost button-small" type="button" data-route="course" data-id="' + attr(lesson.courseId) + '"><i data-lucide="arrow-left"></i>' + esc(course ? course.code || course.name : "Cadeira") + '</button><div class="page-actions">' + (!archived ? '<button class="button" type="button" data-action="edit-lesson" data-id="' + attr(lesson.id) + '"><i data-lucide="pencil"></i>Editar aula</button><button class="button ' + (lesson.mastered ? 'button-yellow' : 'button-dark') + '" type="button" data-action="toggle-mastery" data-id="' + attr(lesson.id) + '"><i data-lucide="badge-check"></i>' + (lesson.mastered ? 'Dominada' : 'Marcar dominada') + '</button>' : '') + '</div></div><div class="bento-grid"><article class="card course-hero course-hero-clean span-12" style="--course-color:' + safeColor(course && course.color) + ';min-height:220px"><div class="course-hero-copy"><span class="badge badge-dark">' + esc(lesson.type || 'Aula') + '</span><h2>' + esc(lesson.title) + '</h2><p class="lesson-hero-meta">' + formatLongDate(lesson.date) + (lesson.start ? ' · ' + esc(lesson.start) + '–' + esc(lesson.end || '') : '') + ' · ' + esc(lessonTypeLabel(lesson.type)) + (lesson.room ? ' · ' + esc(lesson.room) : '') + '</p><p>' + esc(lesson.description || lesson.topics || 'Adiciona os tópicos dados nesta aula.') + '</p></div></article>' + quizStatusCard + '<article class="card span-12"><div class="card-title-row"><div><h3>Slides e PDFs</h3><p class="card-subtitle">Os ficheiros são enviados para o Git e ficam disponíveis nos teus dispositivos.</p></div>' + (!archived ? '<button class="button button-small" type="button" data-action="add-material" data-course="' + attr(lesson.courseId) + '" data-lesson="' + attr(lesson.id) + '"><i data-lucide="file-up"></i>Carregar</button>' : '') + '</div><div style="margin-top:15px">' + materialsHtml + '</div></article><article class="card span-7"><div class="card-title-row"><div><h3>Perguntas de anos anteriores</h3></div><div class="list-actions">' + (!archived ? '<button class="button button-small" type="button" data-action="add-question" data-course="' + attr(lesson.courseId) + '" data-lesson="' + attr(lesson.id) + '"><i data-lucide="plus"></i>Pergunta</button>' : '') + '</div></div><div style="margin-top:15px">' + questionsHtml + '</div></article><article class="card span-5 lesson-config-card"><div class="card-title-row"><div><h3>✅ Quiz da aula</h3><p class="card-subtitle">Um por aula. Depois de criado, fica em visualização.</p></div></div>' + quizHtml + '</article><article class="card span-12 lesson-config-card"><div class="card-title-row"><div><h3>✅ TPC da aula</h3><p class="card-subtitle">Aplicação e prática para fazer em casa, separada do quiz.</p></div></div>' + homeworkHtml + '</article><article class="card span-12 notebook-card"><div class="card-title-row"><div><h3>Apontamentos</h3><p class="card-subtitle">Escreve como num caderno ou gera conteúdo com um prompt estruturado.</p></div><div class="list-actions">' + (!archived ? '<button class="button button-small" type="button" data-action="configure-lesson-content" data-kind="notes" data-lesson="' + attr(lesson.id) + '"><i data-lucide="wand-sparkles"></i>Gerar por prompt</button><button class="button button-dark button-small" type="button" data-action="open-notebook-editor" data-lesson="' + attr(lesson.id) + '"><i data-lucide="pencil"></i>Escrever</button>' : '') + '</div></div><div style="margin-top:15px">' + renderNotebookPage(lesson, false) + '</div><div class="notebook-meta"><span><i data-lucide="notebook"></i>' + esc(notebookPaperLabel(lesson.notesPaper)) + '</span><button class="button button-small" type="button" data-action="course-tab" data-id="' + attr(lesson.courseId) + '" data-tab="notebook"><i data-lucide="library-big"></i>Ver caderno da cadeira</button></div></article></div>';
   }
 
   function plannerModeControl(active) {
@@ -3826,7 +3991,7 @@
 
   function calendarToolbar(title, activeView) {
     var unit = activeView === "month" ? "período" : activeView === "week" ? "semana" : activeView === "three" ? "3 dias" : "dia";
-    return '<div class="calendar-toolbar"><div><p class="card-label">Calendário académico</p><h3>' + esc(title) + '</h3></div><div class="calendar-toolbar-actions">' + calendarViewControl(activeView) + '<div class="calendar-nav"><button class="row-button" type="button" data-action="calendar-shift" data-delta="-1" aria-label="' + esc(unit + ' anterior') + '"><i data-lucide="chevron-left"></i></button><button class="button button-small" type="button" data-action="calendar-today">Hoje</button><button class="row-button" type="button" data-action="calendar-shift" data-delta="1" aria-label="' + esc(unit + ' seguinte') + '"><i data-lucide="chevron-right"></i></button></div></div></div>';
+    return '<div class="calendar-toolbar"><div><h3>' + esc(title) + '</h3></div><div class="calendar-toolbar-actions">' + calendarViewControl(activeView) + '<div class="calendar-nav"><button class="row-button" type="button" data-action="calendar-shift" data-delta="-1" aria-label="' + esc(unit + ' anterior') + '"><i data-lucide="chevron-left"></i></button><button class="button button-small" type="button" data-action="calendar-today">Hoje</button><button class="row-button" type="button" data-action="calendar-shift" data-delta="1" aria-label="' + esc(unit + ' seguinte') + '"><i data-lucide="chevron-right"></i></button></div></div></div>';
   }
 
   function renderMonthCalendar() {
@@ -4286,10 +4451,8 @@
     var mode = ["calendar", "study-day"].indexOf(state.settings.plannerView) >= 0 ? state.settings.plannerView : "schedule";
     setHeader(mode === "calendar" ? "Calendário" : mode === "study-day" ? "Dia de estudo" : "Horário", "Agenda académica");
     var primary = mode === "calendar" ? renderCalendarView() : mode === "study-day" ? renderStudyDay() : renderScheduleView();
-    var title = mode === "calendar" ? "Calendário do semestre" : mode === "study-day" ? "Planeamento diário" : "Horário semanal";
-    var copy = mode === "calendar" ? "Aulas, avaliações, eventos, tarefas e blocos de estudo." : mode === "study-day" ? "Arrasta itens para uma hora ou usa Agendar no telemóvel." : "Os períodos do horário determinam a aula em curso.";
-    var actions = mode === "study-day" ? '<button class="button" type="button" data-action="study-planner-settings"><i data-lucide="sliders-horizontal"></i>Configurar</button><button class="button" type="button" data-action="copy-study-day"><i data-lucide="copy"></i>Copiar rotina</button><button class="button" type="button" data-action="add-study-block"><i data-lucide="plus"></i>Bloco</button><button class="button button-dark" type="button" data-action="auto-fill-study-day"><i data-lucide="sparkles"></i>Preencher dia</button>' : '<button class="button" type="button" data-action="add-schedule"><i data-lucide="calendar-plus"></i>Bloco do horário</button><button class="button button-dark" type="button" data-action="create-lesson"><i data-lucide="plus"></i>Preparar aula</button>';
-    return '<div class="page-head"><div><h2>' + title + '</h2><p>' + copy + '</p></div><div class="page-actions">' + plannerModeControl(mode) + actions + '</div></div>' + primary + (mode === "study-day" ? "" : plannerSupportingCards());
+    var actions = mode === "study-day" ? '<button class="button button-small" type="button" data-action="study-planner-settings"><i data-lucide="sliders-horizontal"></i>Configurar</button><button class="button button-small" type="button" data-action="copy-study-day"><i data-lucide="copy"></i>Copiar rotina</button><button class="button button-small" type="button" data-action="add-study-block"><i data-lucide="plus"></i>Bloco</button><button class="button button-dark button-small" type="button" data-action="auto-fill-study-day"><i data-lucide="sparkles"></i>Preencher dia</button>' : '<button class="button button-small" type="button" data-action="add-schedule"><i data-lucide="calendar-plus"></i>Bloco do horário</button><button class="button button-dark button-small" type="button" data-action="create-lesson"><i data-lucide="plus"></i>Preparar aula</button>';
+    return '<div class="planner-command-bar"><div class="planner-command-section"><span>Vista</span>' + plannerModeControl(mode) + '</div><div class="planner-command-section planner-command-actions"><span>Ações</span><div class="page-actions">' + actions + '</div></div></div>' + primary + (mode === "study-day" ? "" : plannerSupportingCards());
   }
 
   function weeklyStudyEstimates() {
@@ -5835,7 +5998,7 @@
       : renderStudyOverview();
     var primary = studyPrimaryTab(tab);
     var isPrimary = ["overview", "practice", "review", "progress"].indexOf(tab) >= 0;
-    var heading = isPrimary ? '<div class="study-core-head study-simple-head"><div><p class="card-label">Centro de estudo</p><h2>' + (tab === "overview" ? 'O que vais fazer agora?' : tab === "practice" ? 'Praticar' : tab === "review" ? 'Rever' : 'Progresso') + '</h2><p>' + (tab === "overview" ? 'Começa pela recomendação ou escolhe uma das três ações.' : tab === "practice" ? 'Quizzes, diagnóstico, flashcards e IA no mesmo sítio.' : tab === "review" ? 'A Twenty organiza a fila; tu só precisas de começar.' : 'Vê o que aconteceu e decide o próximo ajuste.') + '</p></div></div>' : '';
+    var heading = '';
     var subpage = !isPrimary ? '<div class="study-subpage-context"><button type="button" data-route="study" data-tab="' + primary + '"><i data-lucide="arrow-left"></i>Voltar a ' + (primary === "practice" ? 'Praticar' : primary === "review" ? 'Rever' : 'Progresso') + '</button><span>' + (tab === "diagnostic" ? 'Diagnóstico rápido' : tab === "queue" ? 'Fila completa' : tab === "errors" ? 'Banco de erros' : tab === "flashcards" ? 'Flashcards' : tab === "history" ? 'Histórico' : tab === "weekly" ? 'Revisão semanal' : 'IA de estudo') + '</span></div>' : '';
     return '<div class="study-core-shell">' + heading + renderStudyTabs(tab) + subpage + '<section class="study-tab-content">' + content + '</section></div>';
   }
@@ -5891,7 +6054,7 @@
     }).join("");
     var best = courses.map(function (course) { return { course: course, avg: courseAverage(course).value }; }).filter(function (item) { return item.avg != null; }).sort(function (a, b) { return b.avg - a.avg; })[0];
     var known = courses.filter(function (course) { return courseAverage(course).value != null; }).length;
-    return '<div class="page-head"><div><h2>Média e desempenho</h2><p>A média global é ponderada pelos ECTS. Cada cadeira segue o método de avaliação e as regras configuradas.</p></div><div class="page-actions"><button class="button" type="button" data-action="grade-simulator"><i data-lucide="calculator"></i>Simular notas</button><button class="button" type="button" onclick="window.print()"><i data-lucide="printer"></i>Imprimir</button><button class="button button-dark" type="button" data-action="add-grade"><i data-lucide="plus"></i>Adicionar nota</button></div></div><div class="bento-grid"><article class="card card-pink span-5 target-card"><div class="target-copy"><p class="card-label">Média ECTS atual</p><h3 style="font-size:3.4rem">' + (ects.value == null ? "—" : round(ects.value, 2)) + '</h3><p>' + (ects.value == null ? "Adiciona as primeiras notas para iniciar o cálculo." : "Calculada com " + ects.ects + " ECTS que já têm avaliação.") + '</p></div><div class="progress-ring" style="--progress:' + (ects.value == null ? 0 : clamp(ects.value / 20 * 100, 0, 100)) + '%"><strong>' + (ects.value == null ? "0" : Math.round(ects.value / 20 * 100)) + '%</strong></div></article><article class="card card-yellow span-3 metric-card"><div class="metric-top"><p class="card-label">ECTS inscritos</p><span class="metric-icon"><i data-lucide="graduation-cap"></i></span></div><div><p class="metric-value">' + totalEcts + '</p><p class="metric-caption">' + ects.ects + ' já entram na média</p></div></article><article class="card card-mint span-4 metric-card"><div class="metric-top"><p class="card-label">Melhor cadeira</p><span class="metric-icon"><i data-lucide="trophy"></i></span></div><div><p class="metric-value" style="font-size:2.35rem">' + (best ? round(best.avg, 1) : "—") + '</p><p class="metric-caption">' + (best ? esc(best.course.name) : "Ainda sem notas") + '</p></div></article><article class="card span-12"><div class="card-title-row"><div><p class="card-label">Resumo do semestre</p><h3>' + known + ' de ' + courses.length + ' cadeiras com notas</h3></div><span class="badge badge-violet">Meta ' + normalizedTargetGrade(state.profile.targetGrade) + '/20</span></div><div style="overflow:auto;margin-top:13px">' + (courses.length ? '<table class="grade-table"><thead><tr><th>Cadeira</th><th>ECTS</th><th>Avaliado</th><th>Média</th><th></th></tr></thead><tbody>' + courseRows + "</tbody></table>" : emptyState("graduation-cap", "Sem cadeiras", "Configura o semestre para começar o cálculo.", "new-semester", "Criar semestre")) + '</div></article></div>';
+    return '<div class="page-toolbar page-toolbar-end"><div class="page-actions"><button class="button" type="button" data-action="grade-simulator"><i data-lucide="calculator"></i>Simular notas</button><button class="button" type="button" onclick="window.print()"><i data-lucide="printer"></i>Imprimir</button><button class="button button-dark" type="button" data-action="add-grade"><i data-lucide="plus"></i>Adicionar nota</button></div></div><div class="bento-grid"><article class="card card-pink span-5 target-card"><div class="target-copy"><p class="card-label">Média ECTS atual</p><h3 style="font-size:3.4rem">' + (ects.value == null ? "—" : round(ects.value, 2)) + '</h3><p>' + (ects.value == null ? "Adiciona as primeiras notas para iniciar o cálculo." : "Calculada com " + ects.ects + " ECTS que já têm avaliação.") + '</p></div><div class="progress-ring" style="--progress:' + (ects.value == null ? 0 : clamp(ects.value / 20 * 100, 0, 100)) + '%"><strong>' + (ects.value == null ? "0" : Math.round(ects.value / 20 * 100)) + '%</strong></div></article><article class="card card-yellow span-3 metric-card"><div class="metric-top"><p class="card-label">ECTS inscritos</p><span class="metric-icon"><i data-lucide="graduation-cap"></i></span></div><div><p class="metric-value">' + totalEcts + '</p><p class="metric-caption">' + ects.ects + ' já entram na média</p></div></article><article class="card card-mint span-4 metric-card"><div class="metric-top"><p class="card-label">Melhor cadeira</p><span class="metric-icon"><i data-lucide="trophy"></i></span></div><div><p class="metric-value" style="font-size:2.35rem">' + (best ? round(best.avg, 1) : "—") + '</p><p class="metric-caption">' + (best ? esc(best.course.name) : "Ainda sem notas") + '</p></div></article><article class="card span-12"><div class="card-title-row"><div><p class="card-label">Resumo do semestre</p><h3>' + known + ' de ' + courses.length + ' cadeiras com notas</h3></div><span class="badge badge-violet">Meta ' + normalizedTargetGrade(state.profile.targetGrade) + '/20</span></div><div style="overflow:auto;margin-top:13px">' + (courses.length ? '<table class="grade-table"><thead><tr><th>Cadeira</th><th>ECTS</th><th>Avaliado</th><th>Média</th><th></th></tr></thead><tbody>' + courseRows + "</tbody></table>" : emptyState("graduation-cap", "Sem cadeiras", "Configura o semestre para começar o cálculo.", "new-semester", "Criar semestre")) + '</div></article></div>';
   }
 
   function canteenPortugalParts(date) {
@@ -7694,10 +7857,10 @@
     var syncProgress = '<div id="gitSyncInlineProgress" class="sync-inline-progress ' + (syncInfo.state === "syncing" ? "is-active is-indeterminate" : "") + '"><span></span></div>';
     var syncCard = '<article id="gitSyncCard" class="card settings-card card-violet" aria-busy="' + (syncInfo.state === "syncing" ? "true" : "false") + '"><div class="card-title-row"><div><p class="card-label">Git como base de dados</p><h3 id="gitSyncTitle">' + esc(syncDisplay.title) + '</h3><p id="gitSyncDetail" class="card-subtitle">' + esc(syncDisplay.detail) + '</p></div><span class="metric-icon"><i data-lucide="git-commit-horizontal"></i></span></div><div class="settings-row"><div><strong id="gitSyncSummary">' + esc(syncVersionSummary) + '</strong><small>Fusão por campos · fila offline · histórico em commits.</small></div><span id="gitSyncBadge" class="badge ' + syncDisplay.badgeClass + '">' + esc(syncVersionBadge) + '</span></div>' + syncProgress + '<div class="list-actions"><button class="button button-small" type="button" data-action="configure-git-sync"><i data-lucide="settings-2"></i>Configurar</button><button class="button button-dark button-small" type="button" data-action="sync-now"><i data-lucide="refresh-cw"></i>Sincronizar agora</button>' + forceControls + (syncInfo.configured ? '<button class="button button-small" type="button" data-action="disable-git-sync"><i data-lucide="pause"></i>Pausar</button>' : '') + '</div></article>';
     var debugSnapshot = homeDebugSnapshot();
-    var debugCard = '<article class="card settings-card debug-admin-card"><div class="card-title-row"><div><p class="card-label">Ferramentas de desenvolvimento</p><h3>Laboratório da Home</h3><p class="card-subtitle">Simula manhã, aulas coladas, TPC e Report Card sem esperar pela hora real.</p></div><span class="metric-icon"><i data-lucide="flask-conical"></i></span></div><div class="settings-row"><div><strong>' + esc(debugSnapshot.label) + '</strong><small>' + esc(debugSnapshot.time) + ' · motor: ' + esc(debugSnapshot.phase) + '</small></div><span class="badge ' + (homeDebug && homeDebug.active ? "badge-yellow" : "badge-mint") + '">' + (homeDebug && homeDebug.active ? "Simulação ativa" : "Dados reais") + '</span></div><div class="list-actions"><button class="button button-dark button-small" type="button" data-action="debug-start-tutorial"><i data-lucide="play"></i>Tutorial do dia</button><button class="button button-small" type="button" data-action="debug-open-lab"><i data-lucide="bug"></i>Abrir debug</button>' + (homeDebug && homeDebug.active ? '<button class="button button-danger button-small" type="button" data-action="debug-exit"><i data-lucide="x"></i>Sair</button>' : '') + '</div></article>';
+    var debugCard = '<article class="card settings-card debug-admin-card"><div class="card-title-row"><div><p class="card-label">Simulação</p><h3>Data e dia escolar</h3><p class="card-subtitle">Muda a data e a hora sem esperar pelo relógio real.</p></div><span class="metric-icon"><i data-lucide="calendar-clock"></i></span></div><div class="settings-row"><div><strong>' + esc(debugSnapshot.label) + '</strong><small>' + esc(debugSnapshot.time) + ' · ' + esc(debugSnapshot.phase) + '</small></div><span class="badge ' + (homeDebug && homeDebug.active ? "badge-yellow" : "badge-mint") + '">' + (homeDebug && homeDebug.active ? "Simulação ativa" : "Hora real") + '</span></div><div class="list-actions"><button class="button button-dark button-small" type="button" data-action="debug-open-time"><i data-lucide="calendar-clock"></i>Alterar data</button><button class="button button-small" type="button" data-action="debug-start-tutorial"><i data-lucide="play"></i>Simular dia</button><button class="button button-small" type="button" data-action="debug-open-lab"><i data-lucide="flask-conical"></i>Mais cenários</button>' + (homeDebug && homeDebug.active ? '<button class="button button-small" type="button" data-action="debug-exit"><i data-lucide="rotate-ccw"></i>Hora real</button>' : '') + '</div></article>';
     var profileCard = '<article class="card settings-card"><div class="card-title-row"><div><p class="card-label">Perfil académico</p><h3>' + esc(state.profile.name || "Estudante") + '</h3><p class="card-subtitle">' + esc(state.profile.degree || "Curso por configurar") + (state.profile.institution ? " · " + esc(state.profile.institution) : "") + '</p></div><span class="metric-icon"><i data-lucide="user-round"></i></span></div><div class="settings-row"><div><strong>Meta académica</strong><small>Usada nos indicadores de desempenho.</small></div><span class="badge badge-yellow">' + normalizedTargetGrade(state.profile.targetGrade) + '/20</span></div><button class="button button-small" type="button" data-action="edit-profile"><i data-lucide="pencil"></i>Editar perfil</button></article>';
-    var semesterCard = '<article class="card settings-card card-violet"><div class="card-title-row"><div><p class="card-label">Semestre ativo</p><h3>' + esc(semester ? semester.name : "Nenhum") + '</h3><p class="card-subtitle">' + esc(semester ? semester.academicYear : "Cria o próximo semestre") + '</p></div><span class="metric-icon"><i data-lucide="calendar-range"></i></span></div><div class="settings-row"><div><strong>' + activeCourses().length + ' cadeiras</strong><small>' + archived + ' semestre(s) no arquivo.</small></div><span class="badge badge-dark">' + activeCourses().reduce(function (sum, course) { return sum + (Number(course.ects) || 0); }, 0) + ' ECTS</span></div><div class="list-actions"><button class="button button-small" type="button" data-action="new-semester"><i data-lucide="calendar-plus"></i>Novo</button>' + (semester ? '<button class="button button-danger button-small" type="button" data-action="archive-semester"><i data-lucide="archive"></i>Arquivar</button>' : "") + '</div></article>';
-    var quickCard = '<article class="card settings-card card-dark span-12"><div class="card-title-row"><div><p class="card-label">Criação rápida</p><h3>Adicionar conteúdo</h3><p class="card-subtitle">Atalhos para o que normalmente configuras no início da semana.</p></div><span class="metric-icon"><i data-lucide="wand-sparkles"></i></span></div><div class="quick-grid"><button type="button" data-action="create-lesson"><i data-lucide="presentation"></i>Aula</button><button type="button" data-action="add-material"><i data-lucide="file-up"></i>Material</button><button type="button" data-action="add-question"><i data-lucide="message-circle-question"></i>Pergunta</button><button type="button" data-action="add-quiz"><i data-lucide="circle-check-big"></i>Quiz</button><button type="button" data-action="add-grade"><i data-lucide="chart-no-axes-combined"></i>Nota</button><button type="button" data-action="add-assessment"><i data-lucide="file-pen-line"></i>Avaliação</button></div></article>';
+    var semesterCard = '<article class="card settings-card card-violet"><div class="card-title-row"><div><p class="card-label">Semestre ativo</p><h3>' + esc(semester ? semester.name : "Nenhum") + '</h3><p class="card-subtitle">' + esc(semester ? semester.academicYear : "Cria o próximo semestre") + '</p></div><span class="metric-icon"><i data-lucide="calendar-range"></i></span></div><div class="settings-row"><div><strong>' + activeCourses().length + ' cadeiras</strong><small>' + archived + ' semestre(s) no arquivo.</small></div><span class="badge badge-dark">' + activeCourses().reduce(function (sum, course) { return sum + (Number(course.ects) || 0); }, 0) + ' ECTS</span></div><div class="list-actions"><button class="button button-small" type="button" data-action="new-semester"><i data-lucide="calendar-plus"></i>Novo</button>' + (semester ? '<button class="button button-small" type="button" data-action="archive-semester"><i data-lucide="archive"></i>Arquivar</button>' : "") + '</div></article>';
+    var quickCard = '<article class="card settings-card settings-quick-card span-12"><div class="card-title-row"><div><p class="card-label">Criação rápida</p><h3>Adicionar conteúdo</h3><p class="card-subtitle">Escolhe o que queres criar. Cada cartão é uma ação.</p></div><span class="metric-icon"><i data-lucide="wand-sparkles"></i></span></div><div class="quick-grid"><button type="button" data-action="create-lesson"><i data-lucide="presentation"></i><span>Aula</span></button><button type="button" data-action="add-material"><i data-lucide="file-up"></i><span>Material</span></button><button type="button" data-action="add-question"><i data-lucide="message-circle-question"></i><span>Pergunta</span></button><button type="button" data-action="add-quiz"><i data-lucide="circle-check-big"></i><span>Quiz</span></button><button type="button" data-action="add-grade"><i data-lucide="chart-no-axes-combined"></i><span>Nota</span></button><button type="button" data-action="add-assessment"><i data-lucide="file-pen-line"></i><span>Avaliação</span></button></div></article>';
     var jsonCard = '<article class="card settings-card"><div class="card-title-row"><div><p class="card-label">Ficheiro local</p><h3>academic-data.json</h3><p class="card-subtitle">Importação e exportação manual, separada do Git.</p></div><span class="metric-icon"><i data-lucide="braces"></i></span></div><div class="settings-row"><div><strong>Última verificação</strong><small>' + esc(lastCheck) + ' · revisão local ' + (Number(state.meta.revision) || 0) + '</small></div><button class="switch ' + (state.settings.jsonSync ? "is-on" : "") + '" type="button" data-action="toggle-json-sync" aria-label="Ativar sincronização JSON"><span></span></button></div><div class="list-actions"><button class="button button-small" type="button" data-action="reload-json"><i data-lucide="refresh-cw"></i>Reler</button><button class="button button-small" type="button" data-action="export-json"><i data-lucide="download"></i>Exportar</button><button class="button button-small" type="button" data-action="import-json"><i data-lucide="upload"></i>Importar</button></div></article>';
     var storageCard = '<article class="card settings-card"><div class="card-title-row"><div><p class="card-label">Neste dispositivo</p><h3>Armazenamento local</h3><p class="card-subtitle">Documentos, imagens e cache usados por esta instalação.</p></div><span class="metric-icon"><i data-lucide="hard-drive"></i></span></div><div class="settings-row"><div><strong id="storageFileCount">A contar ficheiros…</strong><small>Ficheiros guardados no browser.</small></div><span class="badge badge-mint">Local-first</span></div><button class="button button-small" type="button" data-action="export-json"><i data-lucide="shield-check"></i>Criar backup JSON</button></article>';
     var canteenAIStatus = canteenAIAvailabilityLabel();
@@ -7717,7 +7880,7 @@
     var tutorialCard = '<article class="card settings-card"><div class="card-title-row"><div><p class="card-label">Ajuda</p><h3>Aprender a Twenty</h3><p class="card-subtitle">Revê a visita guiada ou testa um dia escolar completo.</p></div><span class="metric-icon"><i data-lucide="map"></i></span></div><div class="list-actions"><button class="button button-dark button-small" type="button" data-action="show-tutorial"><i data-lucide="map"></i>Visita guiada</button><button class="button button-small" type="button" data-action="debug-start-tutorial"><i data-lucide="play"></i>Simular dia</button></div></article>';
     var planningCard = '<article class="card settings-card"><div class="card-title-row"><div><p class="card-label">Rotina</p><h3>Planeamento de estudo</h3><p class="card-subtitle">' + Number(state.settings.weeklyStudyHours || 16) + ' h/semana · sessões de ' + Number(state.settings.studySessionMinutes || 50) + ' min.</p></div><span class="metric-icon"><i data-lucide="timer-reset"></i></span></div><div class="settings-row"><div><strong>' + esc(state.settings.studyDayStart || "09:00") + '–' + esc(state.settings.studyDayEnd || "19:00") + '</strong><small>Pausa de ' + Number(state.settings.studyBreakMinutes || 10) + ' minutos entre sessões.</small></div><span class="badge badge-violet">Plano ativo</span></div><button class="button button-small" type="button" data-action="study-planner-settings"><i data-lucide="sliders-horizontal"></i>Configurar rotina</button></article>';
     var safetyCard = '<article class="card settings-card span-12 settings-danger-zone"><div class="card-title-row"><div><p class="card-label">Zona de segurança</p><h3>Recomeçar neste dispositivo</h3><p class="card-subtitle">Remove o estado local e os ficheiros deste browser. O repositório Git não é apagado.</p></div><button class="button button-danger" type="button" data-action="reset-app"><i data-lucide="trash-2"></i>Apagar dados locais</button></div></article>';
-    var systemCard = '<article class="card settings-card settings-system-card"><div class="card-title-row"><div><p class="card-label">Resumo</p><h3>Estado da Twenty</h3><p class="card-subtitle">Um olhar rápido antes de entrares nos detalhes.</p></div><span class="metric-icon"><i data-lucide="gauge"></i></span></div><div class="settings-system-grid"><div><span>Git</span><strong>' + esc(syncVersionBadge) + '</strong></div><div><span>Semestre</span><strong>' + activeCourses().length + ' cadeiras</strong></div><div><span>IA Cantina</span><strong>' + esc(canteenAIStatus.label) + '</strong></div><div><span>Dados</span><strong>Revisão ' + (Number(state.meta.revision) || 0) + '</strong></div></div></article>';
+    var systemCard = '<article class="card settings-card settings-system-card"><div class="card-title-row"><div><p class="card-label">Estado</p><h3>Twenty ' + esc(appVersion()) + '</h3><p class="card-subtitle">Versão instalada e serviços principais deste dispositivo.</p></div><span class="metric-icon"><i data-lucide="badge-check"></i></span></div><div class="settings-system-grid"><div><span>Versão</span><strong>' + esc(appVersion()) + '</strong></div><div><span>Git</span><strong>' + esc(syncVersionBadge) + '</strong></div><div><span>Semestre</span><strong>' + activeCourses().length + ' cadeiras</strong></div><div><span>IA Cantina</span><strong>' + esc(canteenAIStatus.label) + '</strong></div><div><span>Dados</span><strong>Revisão ' + (Number(state.meta.revision) || 0) + '</strong></div></div></article>';
 
     var titles = {
       overview: ["Visão geral", "O essencial da tua conta académica e do sistema."],
@@ -7729,17 +7892,17 @@
       developer: ["Laboratório", "Debug, simulação e ferramentas avançadas."]
     };
     var content = {
-      overview: systemCard + profileCard + semesterCard + quickCard,
+      overview: systemCard + profileCard + quickCard,
       personal: renderPersonalSettingsCard(),
-      academic: semesterCard + planningCard + quickCard,
+      academic: semesterCard + planningCard,
       canteen: canteenThemeCard + canteenAICard + canteenAllergenCard,
       data: syncCard + jsonCard + storageCard + safetyCard,
       system: motionCard + campusCard + tutorialCard,
-      developer: debugCard + jsonCard + storageCard + safetyCard
+      developer: debugCard
     }[section];
     var nav = settingsNavButton("overview", "layout-dashboard", "Visão geral", section) + settingsNavButton("personal", "id-card", "Dados pessoais", section) + settingsNavButton("academic", "graduation-cap", "Académico", section) + settingsNavButton("canteen", "utensils", "Cantina", section) + settingsNavButton("data", "database", "Dados e sync", section) + settingsNavButton("system", "sliders-horizontal", "Sistema", section) + settingsNavButton("developer", "flask-conical", "Laboratório", section);
     var sectionIcon = section === "overview" ? "layout-dashboard" : section === "personal" ? "id-card" : section === "academic" ? "graduation-cap" : section === "canteen" ? "utensils" : section === "data" ? "database" : section === "system" ? "sliders-horizontal" : "flask-conical";
-    return '<div class="page-head settings-page-head"><div><p class="settings-eyebrow">Twenty control room</p><h2>Definições</h2><p>Cada área tem agora um propósito claro.</p></div><div class="page-actions"><button class="button button-dark" type="button" data-action="quick-add"><i data-lucide="plus"></i>Adicionar conteúdo</button></div></div><div class="settings-shell"><aside class="settings-nav"><div class="settings-nav-title"><span><i data-lucide="sliders-horizontal"></i></span><div><strong>Definições</strong><small>Escolhe uma área</small></div></div>' + nav + '</aside><section class="settings-panel"><header class="settings-section-head"><div><span>' + esc(titles[section][0]) + '</span><h3>' + esc(titles[section][0]) + '</h3><p>' + esc(titles[section][1]) + '</p></div><i data-lucide="' + sectionIcon + '"></i></header><div class="settings-grid">' + content + '</div></section></div>';
+    return '<div class="settings-command-bar"><div><span class="badge badge-violet"><i data-lucide="badge-check"></i>Twenty ' + esc(appVersion()) + '</span>' + (homeDebug && homeDebug.active ? '<span class="badge badge-yellow"><i data-lucide="calendar-clock"></i>' + esc(debugSnapshot.time) + '</span>' : '') + '</div><div class="page-actions"><button class="button" type="button" data-action="debug-open-time"><i data-lucide="calendar-clock"></i>Alterar data</button><button class="button button-dark" type="button" data-action="quick-add"><i data-lucide="plus"></i>Adicionar conteúdo</button></div></div><div class="settings-shell"><aside class="settings-nav"><div class="settings-nav-title"><span><i data-lucide="sliders-horizontal"></i></span><div><strong>Áreas</strong><small>Twenty ' + esc(appVersion()) + '</small></div></div>' + nav + '<div class="settings-nav-version"><span>Versão instalada</span><strong>' + esc(appVersion()) + '</strong></div></aside><section class="settings-panel"><header class="settings-section-head"><div><span>Área das definições</span><h3>' + esc(titles[section][0]) + '</h3><p>' + esc(titles[section][1]) + '</p></div><i data-lucide="' + sectionIcon + '"></i></header><div class="settings-grid">' + content + '</div></section></div>';
   }
 
   function updateStorageCount() {
@@ -7752,9 +7915,9 @@
   }
 
   function enhanceSettingsActions() {
-    var grid = view.querySelector(".settings-card.card-dark .quick-grid");
+    var grid = view.querySelector(".settings-quick-card .quick-grid");
     if (!grid || grid.querySelector('[data-action="add-past-exam"]')) return;
-    grid.insertAdjacentHTML("beforeend", '<button type="button" data-action="add-past-exam"><i data-lucide="file-json-2"></i>Teste anterior</button><button type="button" data-action="import-courses"><i data-lucide="braces"></i>Cadeiras JSON</button><button type="button" data-action="study-planner-settings"><i data-lucide="sliders-horizontal"></i>Planeamento</button><button type="button" data-route="study" data-tab="weekly"><i data-lucide="clipboard-check"></i>Revisão semanal</button>');
+    grid.insertAdjacentHTML("beforeend", '<button type="button" data-action="add-past-exam"><i data-lucide="file-json-2"></i><span>Teste anterior</span></button><button type="button" data-action="import-courses"><i data-lucide="braces"></i><span>Cadeiras JSON</span></button><button type="button" data-action="study-planner-settings"><i data-lucide="sliders-horizontal"></i><span>Planeamento</span></button><button type="button" data-route="study" data-tab="weekly"><i data-lucide="clipboard-check"></i><span>Revisão semanal</span></button>');
     refreshIcons(grid);
   }
 
@@ -10442,6 +10605,16 @@
       if (Sync) Sync.disable();
       render();
       toast("Sincronização Git pausada neste dispositivo.");
+    } else if (action === "debug-open-time") {
+      openQuickSimulationTime();
+    } else if (action === "debug-time-preset") {
+      var presetInput = modalRoot.querySelector("#debugCustomTime");
+      if (presetInput) {
+        var presetDate = presetInput.value ? new Date(presetInput.value) : activeHomeNow();
+        var presetParts = String(button.dataset.time || "08:20").split(":");
+        presetDate.setHours(Number(presetParts[0]) || 0, Number(presetParts[1]) || 0, 0, 0);
+        presetInput.value = debugLocalDateTimeValue(presetDate);
+      }
     } else if (action === "debug-open-lab") {
       openHomeDebugLab();
     } else if (action === "debug-start-tutorial") {
@@ -10674,7 +10847,7 @@
       }, 60000);
       if (!state.profile.onboardingComplete || !state.currentSemesterId || !activeCourses().length) startOnboarding(state.semesters.length ? "new-semester" : "first");
       if ("serviceWorker" in navigator && location.protocol !== "file:") {
-        navigator.serviceWorker.register("sw.js?v=33.1-paths-fix", { updateViaCache: "none" }).then(function () {
+        navigator.serviceWorker.register("sw.js?v=33.3-interface-architecture", { updateViaCache: "none" }).then(function () {
           if (Sync && Sync.getStatus().configured) Sync.startAutoSync();
         }).catch(function () {
           if (Sync && Sync.getStatus().configured) Sync.startAutoSync();

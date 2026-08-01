@@ -5428,3 +5428,300 @@ button[data-action-pending="true"], button[aria-busy="true"] {
     border-radius: 18px;
   }
 }
+
+/* =========================================================
+   Twenty v0.33.3 · arquitetura visual e definições
+   Um título por página, vistas separadas de ações e controlos claros
+   ========================================================= */
+
+/* Horas com a tipografia normal da aplicação, nunca com a fonte da Cantina. */
+.top-context-time strong,
+.campus-day-time strong,
+.campus-class-time {
+  font-family: var(--font) !important;
+  font-weight: 850 !important;
+  letter-spacing: -.035em !important;
+}
+
+/* Barras de ação sem repetirem o título que já vive na topbar. */
+.page-toolbar {
+  min-height: 42px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+.page-toolbar-end { justify-content: flex-end; }
+.page-toolbar .page-actions { margin-left: auto; }
+
+.course-hero-clean {
+  grid-template-columns: minmax(0, 1fr);
+  min-height: 190px;
+}
+.course-hero-clean .course-hero-copy { max-width: 830px; }
+.lesson-hero-meta {
+  margin: 9px 0 0 !important;
+  color: rgba(24,25,31,.68) !important;
+  font-size: .62rem !important;
+  font-weight: 850 !important;
+}
+
+/* Calendário: as vistas e as ações deixam de parecer a mesma coisa. */
+.planner-command-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  margin-bottom: 16px;
+  padding: 11px 13px;
+  border: 1px solid var(--line);
+  border-radius: 20px;
+  background: rgba(255,255,255,.76);
+  box-shadow: 0 10px 28px rgba(44,39,72,.055);
+}
+.planner-command-section {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.planner-command-section > span {
+  color: var(--muted);
+  font-size: .51rem;
+  font-weight: 950;
+  letter-spacing: .09em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+.planner-command-actions {
+  padding-left: 18px;
+  border-left: 1px solid var(--line);
+}
+.planner-command-actions .page-actions { justify-content: flex-end; }
+.calendar-toolbar > div:first-child h3 { margin: 0; }
+
+/* Tabs de estudo: quatro botões claramente interativos, não labels soltas. */
+.study-tabs {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(118px, 1fr));
+  gap: 7px;
+  padding: 6px;
+  border-radius: 20px;
+  background: #f1eef7;
+  box-shadow: inset 0 0 0 1px rgba(52,45,83,.07), 0 10px 28px rgba(41,38,67,.045);
+}
+.study-tabs button {
+  width: 100%;
+  min-height: 46px;
+  border: 1px solid rgba(52,45,83,.065);
+  background: rgba(255,255,255,.78);
+  color: #676171;
+  box-shadow: 0 3px 9px rgba(45,40,68,.035);
+}
+.study-tabs button:hover {
+  border-color: rgba(134,119,244,.2);
+  background: #fff;
+}
+.study-tabs button.is-active {
+  border-color: var(--ink);
+  background: var(--ink);
+  color: #fff;
+}
+
+/* Definições: sem hero duplicado e com versão/data sempre acessíveis. */
+.settings-command-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  margin-bottom: 15px;
+  padding: 10px 12px;
+  border: 1px solid rgba(30,31,40,.075);
+  border-radius: 19px;
+  background: rgba(255,255,255,.74);
+  box-shadow: 0 10px 28px rgba(46,40,80,.055);
+}
+.settings-command-bar > div:first-child {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 7px;
+}
+.settings-command-bar .badge svg { width: 13px; height: 13px; }
+.settings-nav-version {
+  display: grid;
+  gap: 2px;
+  margin-top: 4px;
+  padding: 11px;
+  border-top: 1px solid rgba(30,31,40,.07);
+}
+.settings-nav-version span {
+  color: var(--muted);
+  font-size: .48rem;
+  font-weight: 800;
+}
+.settings-nav-version strong { font-size: .61rem; }
+.settings-section-head span { color: #6558ca; }
+.settings-section-head p { max-width: 680px; }
+
+/* Um único tratamento de destaque claro, com contraste legível. */
+.settings-system-card {
+  grid-column: span 2;
+  color: var(--text);
+  background: linear-gradient(135deg, #eee9ff 0%, #fff8e9 100%);
+  border-color: rgba(111,92,200,.13);
+}
+.settings-system-card .card-label,
+.settings-system-card .card-subtitle { color: #655e72; }
+.settings-system-card .metric-icon {
+  color: #6d60d0;
+  background: rgba(255,255,255,.7);
+}
+.settings-system-grid {
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+}
+.settings-system-grid div {
+  border-color: rgba(75,62,130,.09);
+  background: rgba(255,255,255,.6);
+}
+.settings-system-grid span { color: #746d81; }
+.settings-system-grid strong { color: #2e2a39; }
+
+/* Criação rápida: os cartões deixam de parecer blocos brancos partidos. */
+.settings-quick-card {
+  background: linear-gradient(145deg, #fbf9ff, #f6fff9);
+  border-color: rgba(105,88,188,.12);
+}
+.quick-grid button {
+  position: relative;
+  min-height: 108px;
+  color: #2d2939;
+  border: 1px dashed rgba(100,82,184,.25);
+  background: rgba(255,255,255,.82);
+  box-shadow: 0 8px 20px rgba(54,46,91,.045);
+}
+.quick-grid button::after {
+  content: "+";
+  position: absolute;
+  right: 12px;
+  top: 10px;
+  width: 22px;
+  height: 22px;
+  display: grid;
+  place-items: center;
+  border-radius: 999px;
+  color: #6d60d0;
+  background: #eee9ff;
+  font-size: .84rem;
+  font-weight: 900;
+}
+.quick-grid button svg {
+  width: 38px;
+  height: 38px;
+  padding: 9px;
+  border-radius: 13px;
+  color: #6759cd;
+  background: #eee9ff;
+}
+.quick-grid button span {
+  display: block;
+  font-size: .7rem;
+  font-weight: 900;
+}
+.quick-grid button:hover {
+  border-style: solid;
+  border-color: rgba(100,82,184,.34);
+  color: #282433;
+  background: #fff;
+}
+
+/* Arquivar não usa a mesma gravidade visual que apagar dados. */
+.settings-danger-zone .button-danger { box-shadow: 0 8px 18px rgba(190,51,74,.12); }
+
+/* Data/hora de simulação: controlo direto, legível e utilizável em touch. */
+.simulation-time-card { display: grid; gap: 16px; }
+.simulation-time-status {
+  display: grid;
+  grid-template-columns: auto minmax(0,1fr) auto;
+  align-items: center;
+  gap: 12px;
+  padding: 14px;
+  border: 1px solid rgba(117,96,211,.12);
+  border-radius: 19px;
+  background: linear-gradient(135deg,#f0ecff,#fff9e9);
+}
+.simulation-time-status strong,
+.simulation-time-status small { display: block; }
+.simulation-time-status small { margin-top: 3px; color: var(--muted); font-size: .57rem; font-weight: 680; }
+.simulation-date-field { display: grid; gap: 7px; }
+.simulation-date-field > span { font-size: .58rem; font-weight: 900; }
+.simulation-date-field input {
+  min-height: 52px;
+  width: 100%;
+  padding: 0 14px;
+  border: 1px solid var(--line);
+  border-radius: 15px;
+  color: var(--text);
+  background: #fff;
+  font: inherit;
+  font-size: .78rem;
+  font-weight: 800;
+}
+.simulation-presets {
+  display: grid;
+  grid-template-columns: repeat(4,minmax(0,1fr));
+  gap: 8px;
+}
+.simulation-presets button {
+  min-height: 76px;
+  display: grid;
+  justify-items: center;
+  align-content: center;
+  gap: 7px;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  color: #554e63;
+  background: #fff;
+  font: inherit;
+  font-size: .56rem;
+  font-weight: 850;
+  cursor: pointer;
+}
+.simulation-presets button:hover { border-color: rgba(117,96,211,.28); background: #f8f5ff; }
+.simulation-presets svg { width: 18px; color: #7567df; }
+
+@media (max-width: 980px) {
+  .planner-command-bar { align-items: stretch; flex-direction: column; }
+  .planner-command-actions { padding: 11px 0 0; border-left: 0; border-top: 1px solid var(--line); }
+  .planner-command-actions .page-actions { justify-content: flex-start; }
+  .settings-system-grid { grid-template-columns: repeat(3,minmax(0,1fr)); }
+  .settings-nav-version { display: none; }
+}
+
+@media (max-width: 680px) {
+  .page-toolbar { align-items: stretch; flex-direction: column; }
+  .page-toolbar .page-actions { width: 100%; margin-left: 0; }
+  .page-toolbar .page-actions .button { flex: 1; }
+  .planner-command-section { align-items: stretch; flex-direction: column; }
+  .planner-command-section > span { padding-left: 3px; }
+  .planner-command-actions .page-actions { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); width: 100%; }
+  .planner-command-actions .button { width: 100%; }
+  .study-tabs { grid-template-columns: repeat(4,minmax(82px,1fr)); }
+  .study-tabs button { min-height: 44px; padding: 0 8px; font-size: .64rem; }
+  .study-tabs button svg { width: 15px; }
+  .settings-command-bar { align-items: stretch; flex-direction: column; }
+  .settings-command-bar .page-actions { display: grid; grid-template-columns: 1fr 1fr; width: 100%; }
+  .settings-command-bar .button { width: 100%; }
+  .settings-system-grid { grid-template-columns: repeat(2,minmax(0,1fr)); }
+  .simulation-presets { grid-template-columns: repeat(2,minmax(0,1fr)); }
+}
+
+@media (max-width: 430px) {
+  .planner-command-actions .page-actions { grid-template-columns: 1fr; }
+  .study-tabs { grid-template-columns: repeat(4,minmax(72px,1fr)); gap: 4px; padding: 4px; }
+  .study-tabs button { gap: 5px; padding: 0 6px; font-size: .58rem; }
+  .study-tabs button svg { width: 14px; }
+  .settings-command-bar .page-actions { grid-template-columns: 1fr; }
+}
