@@ -253,7 +253,7 @@
       var text = cleanText(paragraphs.join("\n")).slice(0, 6000);
       slides.push({ number: number, title: title, text: text });
       if (onProgress) onProgress({
-        progress: 5 + Math.round(((index + 1) / paths.length) * 25),
+        progress: 5 + Math.round(((index + 1) / slideEntries.length) * 25),
         text: "A extrair o slide " + (index + 1) + " de " + slideEntries.length + "…"
       });
     }

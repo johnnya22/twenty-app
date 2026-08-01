@@ -1,16 +1,16 @@
 "use strict";
 
-var CACHE = "twenty-study-os-v33-0-lesson-from-slides";
+var CACHE = "twenty-study-os-v33-1-paths-fix";
 var APP_SHELL = [
   "./",
   "./index.html",
-  "./styles.css?v=33.0-lesson-from-slides",
-  "./sync.js?v=33.0-lesson-from-slides",
-  "./db.js?v=33.0-lesson-from-slides",
-  "./ai.js?v=33.0-lesson-from-slides",
-  "./ai-worker.js?v=33.0-lesson-from-slides",
-  "./app.js?v=33.0-lesson-from-slides",
-  "./lucide.min.js?v=33.0-lesson-from-slides",
+  "./styles.css?v=33.1-paths-fix",
+  "./sync.js?v=33.1-paths-fix",
+  "./db.js?v=33.1-paths-fix",
+  "./ai.js?v=33.1-paths-fix",
+  "./ai-worker.js?v=33.1-paths-fix",
+  "./app.js?v=33.1-paths-fix",
+  "./lucide.min.js?v=33.1-paths-fix",
   "./manifest.webmanifest",
   "./icon.svg",
   "./icon-192.png",
