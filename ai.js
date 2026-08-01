@@ -10,6 +10,9 @@
     warning: "",
     busy: false
   };
+  var pdfModulePromise = null;
+  var PDFJS_MODULE_URL = "https://cdn.jsdelivr.net/npm/pdfjs-dist@6.1.200/build/pdf.min.mjs";
+  var PDFJS_WORKER_URL = "https://cdn.jsdelivr.net/npm/pdfjs-dist@6.1.200/build/pdf.worker.min.mjs";
 
   var MODELS = {
     fast: {
@@ -271,6 +274,101 @@
     };
   }
 
+  async function loadPdfModule() {
+    if (window.pdfjsLib && typeof window.pdfjsLib.getDocument === "function") return window.pdfjsLib;
+    if (!pdfModulePromise) {
+      pdfModulePromise = import(PDFJS_MODULE_URL).then(function (module) {
+        if (module && module.GlobalWorkerOptions) module.GlobalWorkerOptions.workerSrc = PDFJS_WORKER_URL;
+        return module;
+      }).catch(function (error) {
+        pdfModulePromise = null;
+        throw new Error("Não foi possível carregar o leitor de PDF. Confirma a ligação à Internet e tenta novamente.");
+      });
+    }
+    return pdfModulePromise;
+  }
+
+  function pdfTextLines(items) {
+    var rows = [];
+    (items || []).forEach(function (item) {
+      var text = cleanText(item && item.str || "");
+      if (!text) return;
+      var transform = item && item.transform || [];
+      var y = Number(transform[5]);
+      var x = Number(transform[4]);
+      if (!Number.isFinite(y)) y = 0;
+      if (!Number.isFinite(x)) x = rows.length;
+      var row = rows.find(function (entry) { return Math.abs(entry.y - y) < 2.5; });
+      if (!row) { row = { y: y, parts: [] }; rows.push(row); }
+      row.parts.push({ x: x, text: text });
+    });
+    return rows.sort(function (a, b) { return b.y - a.y; }).map(function (row) {
+      return row.parts.sort(function (a, b) { return a.x - b.x; }).map(function (part) { return part.text; }).join(" ").replace(/\s+/g, " ").trim();
+    }).filter(Boolean);
+  }
+
+  async function extractPdf(file, onProgress) {
+    if (!file) throw new Error("Escolhe um PDF primeiro.");
+    if (!/\.pdf$/i.test(file.name || "") && !/application\/pdf/i.test(file.type || "")) throw new Error("Este ficheiro não é um PDF.");
+    if (file.size > 25 * 1024 * 1024) throw new Error("Este PDF tem mais de 25 MB. Comprime-o ou divide-o antes de o carregar.");
+    var localError = null;
+    if (window.TwentyPDF && typeof window.TwentyPDF.extract === "function") {
+      try {
+        return await window.TwentyPDF.extract(file, onProgress);
+      } catch (error) {
+        localError = error;
+        console.warn("Twenty local PDF extraction fallback:", error);
+        if (onProgress) onProgress({ progress: 3, text: "A tentar o leitor de compatibilidade…" });
+      }
+    }
+    try {
+      if (onProgress) onProgress({ progress: 2, text: "A abrir o PDF…" });
+      var pdfjs = await loadPdfModule();
+      var bytes = new Uint8Array(await file.arrayBuffer());
+      var task = pdfjs.getDocument({ data: bytes, isEvalSupported: false, useSystemFonts: true });
+      var documentRef = await task.promise;
+      var slides = [];
+      for (var pageNumber = 1; pageNumber <= documentRef.numPages; pageNumber += 1) {
+        var page = await documentRef.getPage(pageNumber);
+        var content = await page.getTextContent();
+        var lines = pdfTextLines(content && content.items);
+        var title = cleanText(lines[0] || "Página " + pageNumber).slice(0, 180);
+        var text = cleanText(lines.join("\n")).slice(0, 8000);
+        slides.push({ number: pageNumber, title: title, text: text, sourceType: "pdf-page" });
+        if (onProgress) onProgress({
+          progress: 5 + Math.round((pageNumber / documentRef.numPages) * 25),
+          text: "A extrair a página " + pageNumber + " de " + documentRef.numPages + "…"
+        });
+      }
+      var withText = slides.filter(function (page) { return page.text; });
+      if (!withText.length) throw new Error("O PDF não tem texto selecionável. PDFs digitalizados vão precisar de OCR numa atualização futura.");
+      var totalText = withText.reduce(function (sum, page) { return sum + page.text.length; }, 0);
+      if (totalText > 650000) throw new Error("Este PDF tem texto a mais para processar com segurança. Divide-o em duas partes.");
+      return {
+        id: uid("pdf"),
+        fileName: file.name,
+        fileSize: file.size,
+        slideCount: slides.length,
+        slides: slides,
+        extractedAt: new Date().toISOString(),
+        sourceType: "pdf",
+        extractor: "pdfjs-fallback"
+      };
+    } catch (error) {
+      var localMessage = localError && localError.message ? localError.message : "";
+      var remoteMessage = error && error.message ? error.message : "";
+      if (localMessage && remoteMessage) throw new Error(localMessage + " O leitor de compatibilidade também falhou: " + remoteMessage);
+      throw error;
+    }
+  }
+
+  async function extractDocument(file, onProgress) {
+    if (!file) throw new Error("Escolhe um PDF ou PowerPoint primeiro.");
+    if (/\.pptx$/i.test(file.name || "") || /presentation|powerpoint/i.test(file.type || "")) return extractPptx(file, onProgress);
+    if (/\.pdf$/i.test(file.name || "") || /application\/pdf/i.test(file.type || "")) return extractPdf(file, onProgress);
+    throw new Error("A Twenty consegue extrair texto de ficheiros .pptx e .pdf.");
+  }
+
   function chunkSlides(slides) {
     var chunks = [];
     var current = [];
@@ -513,7 +611,7 @@
 
   async function generateStudyPack(source, options, onProgress) {
     options = options || {};
-    if (!source || !Array.isArray(source.slides) || !source.slides.length) throw new Error("Importa um PowerPoint antes de gerar conteúdo.");
+    if (!source || !Array.isArray(source.slides) || !source.slides.length) throw new Error("Importa um PDF ou PowerPoint antes de gerar conteúdo.");
     if (!supportsWebGPU()) throw new Error("WebGPU não está disponível. Usa o Chrome atualizado no S24 Ultra ou no Mac.");
     try { if (navigator.storage && navigator.storage.persist) await navigator.storage.persist(); } catch (_) { /* opcional */ }
 
@@ -626,6 +724,8 @@
     recommendedMode: recommendedMode,
     selectedModel: selectedModel,
     extractPptx: extractPptx,
+    extractPdf: extractPdf,
+    extractDocument: extractDocument,
     generateStudyPack: generateStudyPack,
     resetWorker: resetWorker,
     getRuntime: function () { return { ...runtime }; }

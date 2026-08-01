@@ -1,16 +1,17 @@
 "use strict";
 
-var CACHE = "twenty-study-os-v33-3-interface-architecture";
+var CACHE = "twenty-study-os-v33-4-source-selection";
 var APP_SHELL = [
   "./",
   "./index.html",
-  "./styles.css?v=33.3-interface-architecture",
-  "./sync.js?v=33.3-interface-architecture",
-  "./db.js?v=33.3-interface-architecture",
-  "./ai.js?v=33.3-interface-architecture",
-  "./ai-worker.js?v=33.3-interface-architecture",
-  "./app.js?v=33.3-interface-architecture",
-  "./lucide.min.js?v=33.3-interface-architecture",
+  "./styles.css?v=33.4-source-selection",
+  "./sync.js?v=33.4-source-selection",
+  "./db.js?v=33.4-source-selection",
+  "./pdf-local.js?v=33.4-source-selection",
+  "./ai.js?v=33.4-source-selection",
+  "./ai-worker.js?v=33.4-source-selection",
+  "./app.js?v=33.4-source-selection",
+  "./lucide.min.js?v=33.4-source-selection",
   "./manifest.webmanifest",
   "./icon.svg",
   "./icon-192.png",
@@ -70,7 +71,7 @@ self.addEventListener("fetch", function (event) {
   var request = event.request;
   if (request.method !== "GET" || request.url.indexOf("blob:") === 0) return;
   var url = new URL(request.url);
-  if (url.hostname === "cdn.jsdelivr.net" && url.pathname.indexOf("/mathjax@") >= 0) {
+  if (url.hostname === "cdn.jsdelivr.net" && (url.pathname.indexOf("/mathjax@") >= 0 || url.pathname.indexOf("/pdfjs-dist@6.1.200/") >= 0)) {
     event.respondWith(caches.match(request).then(function (cached) {
       if (cached) return cached;
       return fetch(request).then(function (response) {

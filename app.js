@@ -35,6 +35,7 @@
   var aiTransferRequest = null;
   var lessonSlideImportContext = null;
   var lessonSlideDraft = null;
+  var lessonBuilderDraft = null;
   var aiProgress = { active: false, progress: null, title: "", detail: "" };
   var CANTEEN_API_URL = "https://sas.unl.pt/wp-json/wp/v2/pages/326?_fields=acf,link";
   var CANTEEN_INFO_API_URL = "https://sas.unl.pt/wp-json/wp/v2/pages/309?_fields=acf,link,modified";
@@ -1155,7 +1156,7 @@
     base.aiProjects = base.aiProjects.map(function (project) {
       return Object.assign({
         id: uid("aiproject"), semesterId: base.currentSemesterId, courseId: null, quizId: null,
-        title: "Projeto de IA", fileName: "", fileSize: 0, slideCount: 0, slides: [], summary: "",
+        title: "Projeto de IA", fileName: "", fileSize: 0, slideCount: 0, slides: [], blobId: null, sourceType: "", summary: "",
         notes: null, flashcards: [], quizQuestions: [], output: "all", difficulty: "auto",
         questionCount: 10, modelMode: "fast", modelId: "", createdAt: "", warning: ""
       }, project, {
@@ -1658,7 +1659,7 @@
 
   function appVersion() {
     var meta = document.querySelector('meta[name="twenty-version"]');
-    return meta && meta.content ? String(meta.content) : "0.33.3";
+    return meta && meta.content ? String(meta.content) : "0.33.4";
   }
 
   function routeKey(value) {
@@ -3161,13 +3162,15 @@
     return '<span class="badge badge-pink">' + esc(material.academicYear) + "</span>";
   }
 
-  function isPptxMaterial(material) {
-    return !!material && (/powerpoint|presentation/i.test(material.mimeType || "") || /\.pptx$/i.test(material.fileName || ""));
+  function isAITextMaterial(material) {
+    return !!material && (/powerpoint|presentation|application\/pdf/i.test(material.mimeType || "") || /\.(?:pptx|pdf)$/i.test(material.fileName || material.title || ""));
   }
+
+  function isPptxMaterial(material) { return isAITextMaterial(material); }
 
   function lessonMaterialsWithSlides(lessonId) {
     return state.materials.filter(function (item) {
-      return item.lessonId === lessonId && isPptxMaterial(item) && asArray(item.slides).length;
+      return item.lessonId === lessonId && isAITextMaterial(item) && asArray(item.slides).length;
     });
   }
 
@@ -3197,7 +3200,7 @@
     }
     var available = lessonAIAvailableLessons(lesson.courseId);
     if (!available.length) {
-      openModal(output === "quiz" ? "Criar quiz com IA" : "Criar apontamentos com IA", '<div class="lesson-ai-empty"><span class="metric-icon"><i data-lucide="presentation"></i></span><div><span class="badge badge-violet"><i data-lucide="sparkles"></i>Twenty AI</span><h3>Primeiro adiciona um PowerPoint</h3><p>Carrega um ficheiro .pptx nesta aula. A Twenty extrai os slides, sincroniza o ficheiro e depois deixa-te escolher as aulas usadas pela IA.</p></div></div>', { footer: '<footer class="modal-foot"><button class="button" type="button" data-action="close-modal">Cancelar</button><button class="button button-dark" type="button" data-action="add-material" data-course="' + attr(lesson.courseId) + '" data-lesson="' + attr(lesson.id) + '"><i data-lucide="file-up"></i>Carregar PowerPoint</button></footer>' });
+      openModal(output === "quiz" ? "Criar quiz com IA" : "Criar apontamentos com IA", '<div class="lesson-ai-empty"><span class="metric-icon"><i data-lucide="presentation"></i></span><div><span class="badge badge-violet"><i data-lucide="sparkles"></i>Twenty AI</span><h3>Primeiro adiciona um PDF ou PowerPoint</h3><p>Carrega um ficheiro .pdf ou .pptx nesta aula. A Twenty guarda-o no dispositivo, extrai o texto e deixa-te escolher as páginas ou slides usados pela IA.</p></div></div>', { footer: '<footer class="modal-foot"><button class="button" type="button" data-action="close-modal">Cancelar</button><button class="button button-dark" type="button" data-action="add-material" data-course="' + attr(lesson.courseId) + '" data-lesson="' + attr(lesson.id) + '"><i data-lucide="file-up"></i>Carregar PDF ou PowerPoint</button></footer>' });
       return;
     }
     output = output === "notes" ? "notes" : "quiz";
@@ -3209,7 +3212,7 @@
     }
     var lessonRows = available.map(function (item) {
       var count = lessonMaterialsWithSlides(item.id).reduce(function (sum, material) { return sum + asArray(material.slides).length; }, 0);
-      return '<label class="lesson-ai-choice"><input type="checkbox" name="lessonIds" value="' + attr(item.id) + '" ' + (selected[item.id] ? "checked" : "") + '><span><strong>' + esc(item.title) + '</strong><small>' + formatDate(item.date) + ' · ' + count + ' slides</small></span></label>';
+      return '<label class="lesson-ai-choice"><input type="checkbox" name="lessonIds" value="' + attr(item.id) + '" ' + (selected[item.id] ? "checked" : "") + '><span><strong>' + esc(item.title) + '</strong><small>' + formatDate(item.date) + ' · ' + count + ' páginas/slides</small></span></label>';
     }).join("");
     var pastCount = state.questions.filter(function (question) { return asArray(question.lessonIds).some(function (id) { return available.some(function (lessonItem) { return lessonItem.id === id; }); }); }).length;
     var body = '<form id="lessonAIForm" data-lesson="' + attr(lesson.id) + '" data-output="' + output + '"><div class="lesson-ai-modal-intro"><span class="metric-icon"><i data-lucide="' + (output === "quiz" ? "brain" : "notebook-pen") + '"></i></span><div><h3>' + (output === "quiz" ? "Gerar quiz a partir das aulas" : "Gerar apontamentos a partir das aulas") + '</h3><p>Escolhe exatamente que aulas entram como fonte. A geração é guardada nesta aula e sincronizada no Git.</p></div></div><div class="field"><label>Aulas usadas pela IA</label><div class="lesson-ai-choices">' + lessonRows + '</div></div><label class="lesson-ai-toggle"><input type="checkbox" name="includePast" ' + (pastCount ? "checked" : "") + '><span><strong>Incluir perguntas de anos anteriores</strong><small>' + pastCount + ' pergunta(s) disponíveis nas aulas escolhidas. No quiz, também entram como perguntas reais.</small></span></label><div class="form-grid"><div class="field"><label>Modelo</label><select name="modelMode"><option value="auto">Automático · estável</option><option value="fast">Rápido · 0.5B</option><option value="quality">Qualidade · 1.5B</option></select></div>' + (output === "quiz" ? '<div class="field"><label>Número de perguntas IA</label><select name="questionCount"><option>5</option><option selected>10</option><option>15</option><option>20</option></select></div><div class="field"><label>Dificuldade</label><select name="difficulty"><option value="auto">Automática</option><option value="easy">Fácil</option><option value="medium">Média</option><option value="hard">Difícil</option></select></div>' : '') + '</div><div class="form-note"><strong>Primeira geração:</strong> o modelo pode demorar a descarregar. Não precisas de manter esta janela aberta depois de terminar.</div></form>';
@@ -3298,31 +3301,51 @@
     context = context || {};
     if (!file || !file.size) return null;
     if (file.size > 25 * 1024 * 1024) throw new Error("O ficheiro tem mais de 25 MB.");
-    if (!Sync || !Sync.getStatus().configured) throw new Error("Configura primeiro o Git em Admin & dados para sincronizar o ficheiro.");
-    if (!navigator.onLine) throw new Error("Precisas de Internet para enviar o ficheiro. A aula ainda não foi alterada.");
     var materialId = context.id || uid("material");
+    setManualSyncActivity("A guardar neste dispositivo…", "A criar uma cópia local segura do material.", 4, true);
     var blobId = await DB.putFile(file, { courseId: context.courseId, lessonId: context.lessonId });
     var extracted = null;
-    if (/\.pptx$/i.test(file.name || "") && AI) {
-      setManualSyncActivity("A extrair os slides…", "A preparar o PowerPoint para a IA.", 4, true);
-      extracted = await AI.extractPptx(file, function (report) {
-        setManualSyncActivity("A extrair os slides…", report.text || "A ler o PowerPoint.", Math.min(30, Number(report.progress) || 4), true);
-      });
+    var extractionError = "";
+    if (/\.(?:pptx|pdf)$/i.test(file.name || "") && AI && AI.extractDocument) {
+      try {
+        setManualSyncActivity("A extrair o conteúdo…", "A preparar páginas e slides para a IA.", 12, true);
+        extracted = await AI.extractDocument(file, function (report) {
+          setManualSyncActivity("A extrair o conteúdo…", report.text || "A ler o documento.", Math.min(44, 12 + Math.round((Number(report.progress) || 0) * .32)), true);
+        });
+      } catch (error) {
+        extractionError = error && error.message ? error.message : "Não foi possível extrair o texto deste material.";
+        console.warn("Material text extraction deferred:", error);
+      }
     }
-    setManualSyncActivity("A enviar o material…", "A iniciar o upload para o repositório privado.", 32, true);
-    var remoteFile = await Sync.uploadFile(file, {
-      id: materialId,
-      name: file.name,
-      onProgress: function (report) {
-        var progress = report.progress == null ? null : 32 + Math.round(report.progress * 0.58);
-        var detail = report.total ? formatBytes(report.loaded) + " de " + formatBytes(report.total) + " enviados" : "A enviar o ficheiro…";
-        setManualSyncActivity("A enviar o material…", detail, progress, true);
-      },
-      onUploadComplete: function () { setManualSyncActivity("A confirmar no GitHub…", "A aguardar a confirmação do commit do ficheiro.", 92, true); },
-      onReady: function (request) { aiTransferRequest = request; }
-    });
+    var remoteFile = null;
+    if (Sync && Sync.getStatus().configured && navigator.onLine) {
+      try {
+        setManualSyncActivity("A sincronizar o material…", "A enviar uma cópia opcional para o repositório privado.", 48, true);
+        remoteFile = await Sync.uploadFile(file, {
+          id: materialId,
+          name: file.name,
+          onProgress: function (report) {
+            var progress = report.progress == null ? null : 48 + Math.round(report.progress * .44);
+            var detail = report.total ? formatBytes(report.loaded) + " de " + formatBytes(report.total) + " enviados" : "A enviar o ficheiro…";
+            setManualSyncActivity("A sincronizar o material…", detail, progress, true);
+          },
+          onUploadComplete: function () { setManualSyncActivity("A confirmar no GitHub…", "A aguardar a confirmação do ficheiro.", 94, true); },
+          onReady: function (request) { aiTransferRequest = request; }
+        });
+      } catch (uploadError) {
+        console.warn("Material remote sync deferred:", uploadError);
+        remoteFile = null;
+      }
+    }
     aiTransferRequest = null;
-    return { id: materialId, blobId: blobId, remoteFile: remoteFile, slides: extracted ? extracted.slides : [], slideCount: extracted ? extracted.slideCount : 0 };
+    return {
+      id: materialId,
+      blobId: blobId,
+      remoteFile: remoteFile,
+      slides: extracted ? extracted.slides : [],
+      slideCount: extracted ? extracted.slideCount : 0,
+      extractionError: extractionError
+    };
   }
 
   async function syncExistingMaterial(id) {
@@ -3335,17 +3358,18 @@
     }
     try {
       var uploaded = await uploadMaterialFile(record.blob, { id: material.id, courseId: material.courseId, lessonId: material.lessonId });
-      material.source = "remote";
+      material.source = uploaded.remoteFile ? "remote" : "local";
       material.remoteFile = uploaded.remoteFile;
       material.slides = uploaded.slides;
       material.slideCount = uploaded.slideCount;
+      material.extractionError = uploaded.extractionError || "";
       material.fileName = material.fileName || record.name;
       material.mimeType = material.mimeType || record.type;
       await save(true);
       if (Sync && Sync.getStatus().configured) { try { await Sync.syncNow(state, defaultState()); } catch (_) {} }
       finishManualSyncActivity(true);
       render();
-      toast("Material sincronizado com o Git.");
+      toast(uploaded.remoteFile ? "Material sincronizado com o Git." : "Material guardado localmente; a sincronização remota ficou pendente.", uploaded.remoteFile ? undefined : "warning");
     } catch (error) {
       finishManualSyncActivity(false);
       toast(error.message || "Não foi possível sincronizar o material.", "error");
@@ -3358,7 +3382,7 @@
     var icon = kind === "slides" ? "presentation" : kind === "notes" ? "notebook-pen" : "file-text";
     var synced = !!(material.remoteFile && material.remoteFile.path);
     var aiReady = isPptxMaterial(material) && asArray(material.slides).length && lesson;
-    return '<article class="material-card"><div class="material-preview"><i data-lucide="' + icon + '"></i>' + materialYearBadge(material, course) + '</div><h4>' + esc(material.title) + '</h4><p>' + esc(lesson ? lesson.title : "Biblioteca da cadeira") + (material.fileName ? " · " + esc(material.fileName) : "") + '</p><div class="material-actions"><span class="badge ' + (synced ? 'badge-mint' : 'badge-yellow') + '">' + (synced ? 'Sincronizado' : 'Local') + '</span><span class="list-actions">' + (aiReady && !archived ? '<button class="row-button row-button-ai" type="button" data-action="configure-lesson-content" data-kind="quiz" data-lesson="' + attr(lesson.id) + '" aria-label="Configurar quiz da aula"><i data-lucide="sparkles"></i></button>' : '') + (!synced && material.blobId && !archived ? '<button class="row-button" type="button" data-action="sync-material" data-id="' + attr(material.id) + '" aria-label="Sincronizar ficheiro com o Git"><i data-lucide="cloud-upload"></i></button>' : '') + '<button class="row-button" type="button" data-action="open-material" data-id="' + attr(material.id) + '" aria-label="Abrir material"><i data-lucide="eye"></i></button>' + (!archived ? '<button class="row-button" type="button" data-action="delete-entity" data-kind="materials" data-id="' + attr(material.id) + '" aria-label="Remover material"><i data-lucide="trash-2"></i></button>' : "") + '</span></div>' + (aiReady ? '<small class="material-ai-ready"><i data-lucide="brain"></i>' + asArray(material.slides).length + ' slides prontos para IA</small>' : '') + '</article>';
+    return '<article class="material-card"><div class="material-preview"><i data-lucide="' + icon + '"></i>' + materialYearBadge(material, course) + '</div><h4>' + esc(material.title) + '</h4><p>' + esc(lesson ? lesson.title : "Biblioteca da cadeira") + (material.fileName ? " · " + esc(material.fileName) : "") + '</p><div class="material-actions"><span class="badge ' + (synced ? 'badge-mint' : 'badge-yellow') + '">' + (synced ? 'Sincronizado' : 'Local') + '</span><span class="list-actions">' + (aiReady && !archived ? '<button class="row-button row-button-ai" type="button" data-action="configure-lesson-content" data-kind="quiz" data-lesson="' + attr(lesson.id) + '" aria-label="Configurar quiz da aula"><i data-lucide="sparkles"></i></button>' : '') + (!synced && material.blobId && !archived ? '<button class="row-button" type="button" data-action="sync-material" data-id="' + attr(material.id) + '" aria-label="Sincronizar ficheiro com o Git"><i data-lucide="cloud-upload"></i></button>' : '') + '<button class="row-button" type="button" data-action="open-material" data-id="' + attr(material.id) + '" aria-label="Abrir material"><i data-lucide="eye"></i></button>' + (!archived ? '<button class="row-button" type="button" data-action="delete-entity" data-kind="materials" data-id="' + attr(material.id) + '" aria-label="Remover material"><i data-lucide="trash-2"></i></button>' : "") + '</span></div>' + (aiReady ? '<small class="material-ai-ready"><i data-lucide="brain"></i>' + asArray(material.slides).length + ' páginas/slides prontos para IA</small>' : '') + '</article>';
   }
 
   function renderCourseMaterials(course, archived) {
@@ -3427,15 +3451,20 @@
       var lesson = lessonById(quiz.lessonId);
       var hasPast = lesson && pastQuestionsForLesson(lesson.id).length;
       var origin = quiz.configuredFromPrompt ? "Prompt IA" : quiz.generatedFromPastQuestions ? "Perguntas anteriores" : "Manual";
-      var actions = '<button class="button button-dark" type="button" data-action="start-quiz" data-id="' + attr(quiz.id) + '"><i data-lucide="play"></i>Começar</button>';
+      var completed = lesson ? lessonQuizCompleted(quiz, lesson) : !!quiz.completedOnce;
+      var actions = '';
       if (lesson) {
-        actions = '<button class="button" type="button" data-action="view-lesson-quiz" data-lesson="' + attr(lesson.id) + '"><i data-lucide="eye"></i>Ver</button>' + actions;
-      } else if (!archived) {
-        actions += '<button class="button" type="button" data-action="add-quiz-question" data-id="' + attr(quiz.id) + '"><i data-lucide="plus"></i>Manual</button>' + (hasPast ? '<button class="button" type="button" data-action="add-past-to-quiz" data-id="' + attr(quiz.id) + '"><i data-lucide="history"></i>Anteriores</button>' : '') + '<button class="button button-danger" type="button" data-action="delete-entity" data-kind="quizzes" data-id="' + attr(quiz.id) + '"><i data-lucide="trash-2"></i></button>';
+        actions += '<button class="button" type="button" data-action="view-lesson-quiz" data-lesson="' + attr(lesson.id) + '"><i data-lucide="eye"></i>Ver</button>';
+        if (!archived && !completed) {
+          actions += '<button class="button" type="button" data-action="edit-lesson-quiz" data-lesson="' + attr(lesson.id) + '"><i data-lucide="pencil"></i>Editar</button><button class="button button-danger" type="button" data-action="delete-entity" data-kind="quizzes" data-id="' + attr(quiz.id) + '"><i data-lucide="trash-2"></i>Apagar</button><button class="button button-dark" type="button" data-action="start-quiz" data-id="' + attr(quiz.id) + '"><i data-lucide="play"></i>Começar</button>';
+        }
+      } else {
+        actions += '<button class="button button-dark" type="button" data-action="start-quiz" data-id="' + attr(quiz.id) + '"><i data-lucide="play"></i>Começar</button>';
+        if (!archived) actions += '<button class="button" type="button" data-action="add-quiz-question" data-id="' + attr(quiz.id) + '"><i data-lucide="plus"></i>Manual</button>' + (hasPast ? '<button class="button" type="button" data-action="add-past-to-quiz" data-id="' + attr(quiz.id) + '"><i data-lucide="history"></i>Anteriores</button>' : '') + '<button class="button button-danger" type="button" data-action="delete-entity" data-kind="quizzes" data-id="' + attr(quiz.id) + '"><i data-lucide="trash-2"></i></button>';
       }
-      return '<article class="card span-4"><div class="card-title-row"><div><div class="question-meta"><span class="badge badge-violet">' + asArray(quiz.questions).length + ' pergunta(s)</span><span class="badge">' + origin + '</span>' + (lesson ? '<span class="badge badge-mint"><i data-lucide="lock-keyhole"></i> Aula</span>' : '') + '</div><h3 style="margin-top:11px">' + esc(quiz.title) + '</h3><p class="card-subtitle">' + esc(lesson ? lesson.title : "Quiz geral da cadeira") + '</p></div><span class="metric-icon"><i data-lucide="sparkles"></i></span></div><div class="live-actions" style="margin-top:21px">' + actions + '</div></article>';
+      return '<article class="card span-4"><div class="card-title-row"><div><div class="question-meta"><span class="badge badge-violet">' + asArray(quiz.questions).length + ' pergunta(s)</span><span class="badge">' + origin + '</span>' + (lesson ? '<span class="badge ' + (completed ? 'badge-mint' : 'badge-yellow') + '"><i data-lucide="' + (completed ? 'lock-keyhole' : 'pencil-line') + '"></i>' + (completed ? ' Só leitura' : ' Editável') + '</span>' : '') + '</div><h3 style="margin-top:11px">' + esc(quiz.title) + '</h3><p class="card-subtitle">' + esc(lesson ? lesson.title : "Quiz geral da cadeira") + '</p></div><span class="metric-icon"><i data-lucide="sparkles"></i></span></div><div class="live-actions" style="margin-top:21px">' + actions + '</div></article>';
     }).join("");
-    return '<div class="page-head"><div><h2>Quizzes da cadeira</h2><p>Os quizzes associados a aulas ficam bloqueados depois de configurados. Os quizzes gerais continuam editáveis.</p></div>' + (!archived ? '<div class="page-actions"><button class="button button-dark" type="button" data-action="add-quiz" data-course="' + attr(course.id) + '"><i data-lucide="plus"></i>Novo quiz geral</button></div>' : "") + '</div><div class="bento-grid">' + (quizzes.length ? html : '<div class="span-12">' + emptyState("sparkles", "Ainda não há quizzes", "Configura um quiz em cada aula ou cria um quiz geral para a cadeira.", "add-quiz", "Criar quiz geral") + "</div>") + "</div>";
+    return '<div class="page-head"><div><h2>Quizzes da cadeira</h2><p>Os Quiz-Aula podem ser editados e apagados até à primeira conclusão; depois ficam apenas para consulta.</p></div>' + (!archived ? '<div class="page-actions"><button class="button button-dark" type="button" data-action="add-quiz" data-course="' + attr(course.id) + '"><i data-lucide="plus"></i>Novo quiz geral</button></div>' : "") + '</div><div class="bento-grid">' + (quizzes.length ? html : '<div class="span-12">' + emptyState("sparkles", "Ainda não há quizzes", "Configura um quiz em cada aula ou cria um quiz geral para a cadeira.", "add-quiz", "Criar quiz geral") + "</div>") + "</div>";
   }
 
   function renderCourseGrades(course, archived) {
@@ -3470,7 +3499,7 @@
 
   function lessonSlides(lessonId) {
     return state.materials.filter(function (material) {
-      return material.lessonId === lessonId && (material.kind === "slides" || /\.pptx$/i.test(material.fileName || material.title || ""));
+      return material.lessonId === lessonId && (material.kind === "slides" || material.kind === "pdf" || /\.(?:pptx|pdf)$/i.test(material.fileName || material.title || ""));
     });
   }
 
@@ -3480,21 +3509,31 @@
     return "apontamentos";
   }
 
-  function lessonBuilderSourceText(lesson, materialIds, includePast) {
-    var materials = lessonSlides(lesson.id).filter(function (material) { return materialIds.indexOf(material.id) >= 0; });
-    var chunks = materials.map(function (material) {
-      var slides = asArray(material.slides).slice(0, 120).map(function (slide) {
-        return '[Slide ' + (slide.number || "?") + '] ' + [slide.title, slide.text].filter(Boolean).join(" — ");
+  function lessonBuilderSourceKey(materialId, slideNumber) {
+    return String(materialId || "") + "::" + String(Number(slideNumber) || 0);
+  }
+
+  function lessonBuilderSourceText(lesson, sourceKeys, includePast) {
+    sourceKeys = asArray(sourceKeys).map(String);
+    var selected = new Set(sourceKeys);
+    var chunks = lessonSlides(lesson.id).map(function (material) {
+      var chosen = asArray(material.slides).filter(function (slide) {
+        return selected.has(lessonBuilderSourceKey(material.id, slide.number));
+      });
+      if (!chosen.length) return "";
+      var label = /\.pdf$/i.test(material.fileName || "") ? "PÁGINA" : "SLIDE";
+      var text = chosen.map(function (slide) {
+        return '[' + label + ' ' + (slide.number || "?") + '] ' + [slide.title, slide.text].filter(Boolean).join(" — ");
       }).filter(Boolean).join("\n");
-      return 'FICHEIRO: ' + (material.fileName || material.title || "Slides") + '\n' + (slides || "O texto dos slides não está extraído; analisa o ficheiro PPTX anexado.");
-    });
+      return 'FICHEIRO: ' + (material.fileName || material.title || "Material") + '\n' + text;
+    }).filter(Boolean);
     if (includePast) {
       var past = pastQuestionsForLesson(lesson.id).map(function (question) {
         return '- ' + question.prompt + (question.answer ? '\n  Resposta guardada: ' + question.answer : "");
       });
       if (past.length) chunks.push('PERGUNTAS DE ANOS ANTERIORES:\n' + past.join("\n"));
     }
-    return chunks.join("\n\n").slice(0, 30000);
+    return chunks.join("\n\n").slice(0, 50000);
   }
 
 
@@ -3585,8 +3624,8 @@
   }
 
   function lessonBuilderSchema(kind, lesson) {
-    var basicBlocks = '[{"type":"text","text":"Parágrafo curto e claro."},{"type":"latex","latex":"\\\\frac{a}{b}","display":true},{"type":"code","language":"python","code":"print(\\"exemplo\\")"},{"type":"slide-image","sourceFile":"nome-do-ficheiro.pptx","slideNumber":12,"description":"diagrama exato a consultar","alt":"Descrição acessível"}]';
-    var notesBlocks = '[{"type":"heading","level":2,"text":"Conceito principal"},{"type":"text","text":"Explicação curta, rigorosa e baseada nas fontes."},{"type":"list","ordered":false,"items":["Primeiro ponto","Segundo ponto"]},{"type":"latex","latex":"N_{\\\\text{píxeis}}=\\\\text{largura}\\\\times\\\\text{altura}","display":true},{"type":"slide-image","sourceFile":"nome-do-ficheiro.pptx","slideNumber":3,"description":"usar apenas se o slide tiver uma imagem necessária","alt":"Descrição da imagem"}]';
+    var basicBlocks = '[{"type":"text","text":"Parágrafo curto e claro."},{"type":"latex","latex":"\\\\frac{a}{b}","display":true},{"type":"code","language":"python","code":"print(\\"exemplo\\")"},{"type":"slide-image","sourceFile":"nome-do-ficheiro.pdf-ou-pptx","slideNumber":12,"description":"diagrama exato a consultar","alt":"Descrição acessível"}]';
+    var notesBlocks = '[{"type":"heading","level":2,"text":"Conceito principal"},{"type":"text","text":"Explicação curta, rigorosa e baseada nas fontes."},{"type":"list","ordered":false,"items":["Primeiro ponto","Segundo ponto"]},{"type":"latex","latex":"N_{\\\\text{píxeis}}=\\\\text{largura}\\\\times\\\\text{altura}","display":true},{"type":"slide-image","sourceFile":"nome-do-ficheiro.pdf-ou-pptx","slideNumber":3,"description":"usar apenas se o slide tiver uma imagem necessária","alt":"Descrição da imagem"}]';
     if (kind === "quiz") {
       return '{\n  "title": "Quiz da aula · ' + lesson.title.replace(/"/g, "\\\"") + '",\n  "questions": [\n    {"gameType":"choice","promptBlocks":' + basicBlocks + ',"options":[' + basicBlocks + ',' + basicBlocks + ',' + basicBlocks + ',' + basicBlocks + '],"correctIndex":0,"explanationBlocks":' + basicBlocks + '},\n    {"gameType":"type-answer","promptBlocks":' + basicBlocks + ',"answerText":"v=d/t","acceptedAnswers":["v=d/t","v=\\\\frac{d}{t}"],"explanationBlocks":' + basicBlocks + '},\n    {"gameType":"spot-error","promptBlocks":' + basicBlocks + ',"options":[' + basicBlocks + ',' + basicBlocks + ',' + basicBlocks + ',' + basicBlocks + '],"correctIndex":2,"explanationBlocks":' + basicBlocks + '},\n    {"gameType":"order","promptBlocks":' + basicBlocks + ',"orderItems":["Passo C","Passo A","Passo B"],"correctOrder":["Passo A","Passo B","Passo C"],"explanationBlocks":' + basicBlocks + '},\n    {"gameType":"match","promptBlocks":' + basicBlocks + ',"matchPairs":[{"left":"Força","right":"Newton"},{"left":"Energia","right":"Joule"}],"explanationBlocks":' + basicBlocks + '}\n  ]\n}';
     }
@@ -3596,9 +3635,9 @@
     return '{\n  "title": "Apontamentos · ' + lesson.title.replace(/"/g, "\\\"") + '",\n  "paper": "lined",\n  "blocks": ' + notesBlocks + '\n}';
   }
 
-  function buildLessonAIPrompt(lesson, kind, materialIds, includePast) {
+  function buildLessonAIPrompt(lesson, kind, sourceKeys, includePast) {
     var course = courseById(lesson.courseId);
-    var sourceText = lessonBuilderSourceText(lesson, materialIds, includePast);
+    var sourceText = lessonBuilderSourceText(lesson, sourceKeys, includePast);
     var purpose = kind === "quiz"
       ? "Cria um quiz curto para confirmar imediatamente o que foi aprendido nesta aula. As perguntas devem ser claras, úteis e baseadas exclusivamente nas fontes."
       : kind === "homework"
@@ -3644,16 +3683,35 @@
       lessonBuilderSchema(kind, lesson),
       "",
       "FONTES",
-      sourceText || "Não existe texto extraído. Analisa o PowerPoint anexado à conversa.",
+      sourceText || "Não existe texto extraído nas páginas/slide selecionados.",
     ].filter(function (line) { return line !== "" || true; }).join("\n");
   }
 
   function lessonBuilderMaterialChoices(lesson) {
     var materials = lessonSlides(lesson.id);
-    if (!materials.length) return '<div class="builder-empty"><i data-lucide="presentation"></i><p><strong>Sem PowerPoint nesta aula</strong><small>Carrega primeiro os slides. Depois volta aqui para criar o prompt.</small></p><button class="button button-small" type="button" data-action="add-material" data-course="' + attr(lesson.courseId) + '" data-lesson="' + attr(lesson.id) + '"><i data-lucide="file-up"></i>Carregar slides</button></div>';
+    if (!materials.length) return '<div class="builder-empty"><i data-lucide="presentation"></i><p><strong>Sem PDF ou PowerPoint nesta aula</strong><small>Carrega primeiro um ficheiro .pdf ou .pptx. A Twenty extrai o texto por página/slide.</small></p><button class="button button-small" type="button" data-action="add-material" data-course="' + attr(lesson.courseId) + '" data-lesson="' + attr(lesson.id) + '"><i data-lucide="file-up"></i>Carregar material</button></div>';
     return '<div class="builder-source-list">' + materials.map(function (material) {
-      return '<label class="builder-source"><input type="checkbox" name="materialIds" value="' + attr(material.id) + '" checked><span class="list-icon"><i data-lucide="presentation"></i></span><span><strong>' + esc(material.title || material.fileName || "PowerPoint") + '</strong><small>' + (material.slideCount || asArray(material.slides).length || 0) + ' slides · ' + (material.remoteFile ? "sincronizado" : "local") + '</small></span></label>';
+      var pages = asArray(material.slides);
+      var isPdf = /\.pdf$/i.test(material.fileName || "") || /application\/pdf/i.test(material.mimeType || "");
+      var unit = isPdf ? "página" : "slide";
+      var icon = isPdf ? "file-text" : "presentation";
+      var selection = pages.length ? '<div class="builder-page-grid">' + pages.map(function (slide) {
+        return '<label class="builder-page-choice"><input type="checkbox" name="sourceSlides" value="' + attr(lessonBuilderSourceKey(material.id, slide.number)) + '" data-material="' + attr(material.id) + '" checked><span><b>' + (isPdf ? 'P' : 'S') + esc(slide.number || "?") + '</b><small>' + esc(slide.title || ((isPdf ? "Página " : "Slide ") + slide.number)) + '</small></span></label>';
+      }).join("") + '</div>' : '<div class="builder-source-warning"><i data-lucide="triangle-alert"></i><span><strong>Texto ainda não extraído</strong><small>Volta a carregar este ficheiro para preparar as páginas para IA.</small></span></div>';
+      return '<section class="builder-material" data-builder-material="' + attr(material.id) + '"><header><span class="list-icon"><i data-lucide="' + icon + '"></i></span><span><strong>' + esc(material.title || material.fileName || "Material") + '</strong><small>' + pages.length + ' ' + unit + '(s) com texto · imagens numa atualização futura</small></span><div class="builder-page-actions"><button type="button" data-action="builder-select-pages" data-material="' + attr(material.id) + '" data-mode="all">Todas</button><button type="button" data-action="builder-select-pages" data-material="' + attr(material.id) + '" data-mode="none">Nenhuma</button></div></header>' + selection + '</section>';
     }).join("") + '</div>';
+  }
+
+  function lessonBuilderSelectedKeys(form) {
+    return Array.from(form.querySelectorAll('[name="sourceSlides"]:checked')).map(function (input) { return input.value; });
+  }
+
+  function lessonBuilderSelectionCount(form) {
+    var selected = lessonBuilderSelectedKeys(form).length;
+    var output = form.querySelector('[data-builder-selection-count]');
+    if (output) output.textContent = selected + (selected === 1 ? " página/slide selecionado" : " páginas/slides selecionados");
+    var next = modalRoot.querySelector('[data-action="copy-lesson-builder-prompt"]');
+    if (next) next.disabled = selected === 0;
   }
 
   function openLessonBuilder(lessonId, kind) {
@@ -3661,24 +3719,30 @@
     if (!lesson) return;
     if (kind === "quiz" && configuredQuizForLesson(lesson.id)) { viewLessonQuiz(lesson.id); return; }
     if (kind === "homework" && homeworkForLesson(lesson.id)) { viewLessonHomework(homeworkForLesson(lesson.id).id); return; }
-    var materials = lessonSlides(lesson.id);
-    var ids = materials.map(function (material) { return material.id; });
+    lessonBuilderDraft = { lessonId: lesson.id, kind: kind, sourceKeys: [], includePast: false, prompt: "" };
     var includePast = pastQuestionsForLesson(lesson.id).length > 0;
-    var prompt = buildLessonAIPrompt(lesson, kind, ids, includePast);
-    var body = '<form id="lessonBuilderForm" data-kind="' + attr(kind) + '" data-lesson="' + attr(lesson.id) + '"><div class="builder-intro"><span class="metric-icon"><i data-lucide="' + (kind === "quiz" ? "check-check" : kind === "homework" ? "notebook-pen" : "book-open-text") + '"></i></span><div><p class="card-label">Configurar ' + esc(lessonBuilderLabel(kind)) + '</p><h3>' + esc(lesson.title) + '</h3><p>Escolhe as fontes, copia o prompt para a IA juntamente com o PowerPoint e cola aqui o JSON devolvido.</p></div></div><div class="section-heading"><div><h3>Slides da aula</h3><p>O prompt inclui o texto extraído e identifica os ficheiros que deves anexar à IA.</p></div></div>' + lessonBuilderMaterialChoices(lesson) + '<label class="builder-past-toggle"><input type="checkbox" name="includePast" ' + (includePast ? "checked" : "") + '><span><strong>Incluir perguntas de anos anteriores</strong><small>' + pastQuestionsForLesson(lesson.id).length + ' pergunta(s) associada(s) a esta aula</small></span></label><div class="builder-prompt-head"><div><h3>Prompt para a IA</h3><p>O formato inclui texto estruturado, imagens dos slides, LaTeX e código.</p></div><button class="button button-small" type="button" data-action="copy-lesson-builder-prompt"><i data-lucide="copy"></i>Copiar prompt</button></div><textarea id="lessonBuilderPrompt" class="builder-prompt" readonly>' + esc(prompt) + '</textarea><div class="builder-prompt-head"><div><h3>Resposta da IA</h3><p>Cola apenas o JSON. A Twenty valida antes de guardar.</p></div><span class="badge badge-violet">JSON</span></div><textarea id="lessonBuilderResponse" class="builder-response" placeholder="{&#10;  &quot;title&quot;: &quot;...&quot;&#10;}"></textarea><div class="form-error" hidden></div></form>';
-    openModal("Configurar " + lessonBuilderLabel(kind), body, { className: "modal-builder", footer: '<footer class="modal-foot"><button class="button" type="button" data-action="close-modal">Cancelar</button><button class="button button-dark" type="button" data-action="import-lesson-builder"><i data-lucide="check"></i>Criar na Twenty</button></footer>' });
+    var body = '<form id="lessonBuilderForm" data-kind="' + attr(kind) + '" data-lesson="' + attr(lesson.id) + '" data-step="sources"><div class="builder-intro"><span class="metric-icon"><i data-lucide="' + (kind === "quiz" ? "check-check" : kind === "homework" ? "notebook-pen" : "book-open-text") + '"></i></span><div><p class="card-label">Passo 1 de 2 · Fontes</p><h3>' + esc(lesson.title) + '</h3><p>Seleciona apenas as páginas ou slides que queres usar. O texto extraído dessas escolhas será colocado no prompt.</p></div></div><div class="builder-selection-summary"><i data-lucide="scan-text"></i><span><strong data-builder-selection-count>0 páginas/slides selecionados</strong><small>PDF e PowerPoint são suportados. Nesta versão entram no prompt apenas texto e referências; imagens virão depois.</small></span></div>' + lessonBuilderMaterialChoices(lesson) + '<label class="builder-past-toggle"><input type="checkbox" name="includePast" ' + (includePast ? "checked" : "") + '><span><strong>Incluir perguntas de anos anteriores</strong><small>' + pastQuestionsForLesson(lesson.id).length + ' pergunta(s) associada(s) a esta aula</small></span></label></form>';
+    openModal("Criar " + lessonBuilderLabel(kind) + " com IA", body, { className: "modal-builder", footer: '<footer class="modal-foot"><button class="button" type="button" data-action="close-modal">Cancelar</button><button class="button button-dark" type="button" data-action="copy-lesson-builder-prompt"><i data-lucide="copy-check"></i>Copiar prompt e continuar</button></footer>' });
+    var form = modalRoot.querySelector("#lessonBuilderForm");
+    if (form) lessonBuilderSelectionCount(form);
+  }
+
+  function openLessonBuilderPasteStep() {
+    if (!lessonBuilderDraft) return;
+    var lesson = lessonById(lessonBuilderDraft.lessonId);
+    if (!lesson) return;
+    var sourceCount = lessonBuilderDraft.sourceKeys.length;
+    var body = '<form id="lessonBuilderForm" data-kind="' + attr(lessonBuilderDraft.kind) + '" data-lesson="' + attr(lesson.id) + '" data-step="response"><div class="builder-intro"><span class="metric-icon"><i data-lucide="clipboard-paste"></i></span><div><p class="card-label">Passo 2 de 2 · Resultado</p><h3>Cola a resposta da IA</h3><p>O prompt já foi copiado e não é mostrado aqui. Cola-o no teu assistente de IA e traz apenas o JSON devolvido.</p></div></div><div class="builder-copied-state"><i data-lucide="circle-check-big"></i><span><strong>Prompt copiado</strong><small>' + sourceCount + ' página(s)/slide(s) incluídos · ' + esc(lessonBuilderLabel(lessonBuilderDraft.kind)) + '</small></span><button class="button button-small" type="button" data-action="lesson-builder-back"><i data-lucide="arrow-left"></i>Alterar fontes</button></div><label class="field builder-response-field"><span>Resposta JSON da IA</span><textarea id="lessonBuilderResponse" class="builder-response" autofocus placeholder="{&#10;  &quot;title&quot;: &quot;...&quot;&#10;}"></textarea></label><div id="lessonBuilderProcessing" class="builder-processing" hidden><div class="builder-processing-head"><span class="sync-activity-spinner"></span><span><strong>A processar os apontamentos…</strong><small data-builder-processing-detail>A validar a resposta da IA.</small></span><b data-builder-processing-value>0%</b></div><div class="sync-progress-track"><span data-builder-processing-bar></span></div></div><div class="form-error" hidden></div></form>';
+    openModal("Importar " + lessonBuilderLabel(lessonBuilderDraft.kind), body, { className: "modal-builder", footer: '<footer class="modal-foot"><button class="button" type="button" data-action="lesson-builder-back">Voltar</button><button class="button button-dark" type="button" data-action="import-lesson-builder"><i data-lucide="sparkles"></i>Processar e criar</button></footer>' });
+    var response = modalRoot.querySelector("#lessonBuilderResponse");
+    if (response) setTimeout(function () { response.focus(); }, 30);
   }
 
   function refreshLessonBuilderPrompt() {
     var form = modalRoot.querySelector("#lessonBuilderForm");
-    if (!form) return;
-    var lesson = lessonById(form.dataset.lesson);
-    if (!lesson) return;
-    var ids = Array.from(form.querySelectorAll('[name="materialIds"]:checked')).map(function (input) { return input.value; });
-    var includePast = !!form.querySelector('[name="includePast"]:checked');
-    var target = form.querySelector("#lessonBuilderPrompt");
-    if (target) target.value = buildLessonAIPrompt(lesson, form.dataset.kind, ids, includePast);
+    if (form && form.dataset.step === "sources") lessonBuilderSelectionCount(form);
   }
+
 
   function normalizeAIQuizQuestion(question, materials) {
     question = question && typeof question === "object" ? question : {};
@@ -3718,73 +3782,263 @@
     return normalized;
   }
 
+  function updateLessonBuilderProcessing(progress, detail) {
+    var panel = modalRoot.querySelector("#lessonBuilderProcessing");
+    if (!panel) return;
+    panel.hidden = false;
+    var value = clamp(Number(progress) || 0, 0, 100);
+    var bar = panel.querySelector("[data-builder-processing-bar]");
+    var label = panel.querySelector("[data-builder-processing-value]");
+    var copy = panel.querySelector("[data-builder-processing-detail]");
+    if (bar) bar.style.width = value + "%";
+    if (label) label.textContent = Math.round(value) + "%";
+    if (copy && detail) copy.textContent = detail;
+  }
+
+  function lessonBuilderPaint() {
+    return new Promise(function (resolve) {
+      requestAnimationFrame(function () { setTimeout(resolve, 35); });
+    });
+  }
+
   async function importLessonBuilder() {
     var form = modalRoot.querySelector("#lessonBuilderForm");
-    if (!form) return;
+    if (!form || form.dataset.step !== "response") return;
     var errorBox = form.querySelector(".form-error");
+    var submitButton = modalRoot.querySelector('[data-action="import-lesson-builder"]');
+    if (errorBox) { errorBox.hidden = true; errorBox.textContent = ""; }
+    if (submitButton) submitButton.disabled = true;
     try {
-      var lesson = lessonById(form.dataset.lesson);
+      if (!lessonBuilderDraft) throw new Error("A seleção de fontes expirou. Volta ao primeiro passo.");
+      var lesson = lessonById(lessonBuilderDraft.lessonId);
       if (!lesson) throw new Error("Aula não encontrada.");
-      var payload = parseJSONReply(form.querySelector("#lessonBuilderResponse").value);
-      var kind = form.dataset.kind;
-      var selectedMaterialIds = Array.from(form.querySelectorAll('[name="materialIds"]:checked')).map(function (input) { return input.value; });
+      var rawResponse = String(form.querySelector("#lessonBuilderResponse").value || "").trim();
+      if (!rawResponse) throw new Error("Cola primeiro a resposta JSON da IA.");
+      updateLessonBuilderProcessing(12, "A validar a resposta da IA.");
+      await lessonBuilderPaint();
+      var payload = parseJSONReply(rawResponse);
+      updateLessonBuilderProcessing(38, "A organizar o conteúdo e as referências.");
+      await lessonBuilderPaint();
+      var kind = lessonBuilderDraft.kind;
+      var selectedMaterialIds = Array.from(new Set(lessonBuilderDraft.sourceKeys.map(function (key) { return String(key).split("::")[0]; })));
       var selectedMaterials = lessonSlides(lesson.id).filter(function (material) { return selectedMaterialIds.indexOf(material.id) >= 0; });
       if (kind === "quiz") {
         if (configuredQuizForLesson(lesson.id)) throw new Error("Esta aula já tem um quiz configurado.");
         var questions = asArray(payload.questions).map(function (question) { return normalizeAIQuizQuestion(question, selectedMaterials); });
         if (!questions.length) throw new Error("O JSON não contém perguntas.");
-        state.quizzes.push({ id: uid("quiz"), semesterId: lesson.semesterId, courseId: lesson.courseId, lessonId: lesson.id, title: String(payload.title || "Quiz da aula · " + lesson.title), questions: questions, configuredFromPrompt: true, lockedContent: true, createdAt: new Date().toISOString(), lastScore: null });
+        state.quizzes.push({ id: uid("quiz"), semesterId: lesson.semesterId, courseId: lesson.courseId, lessonId: lesson.id, title: String(payload.title || "Quiz da aula · " + lesson.title), questions: questions, configuredFromPrompt: true, lockedContent: false, createdAt: new Date().toISOString(), lastScore: null, completedOnce: false });
       } else if (kind === "homework") {
         if (homeworkForLesson(lesson.id)) throw new Error("Esta aula já tem um TPC configurado.");
         var instructions = attachSlideMaterialReferences(payload.instructionsBlocks || payload.contentBlocks || payload.instructions || "", selectedMaterials);
         if (!instructions.length) throw new Error("O JSON não contém instruções para o TPC.");
-        state.tasks.push({ id: uid("task"), semesterId: lesson.semesterId, courseId: lesson.courseId, lessonId: lesson.id, title: String(payload.title || "TPC · " + lesson.title), type: "homework", dueDate: lesson.date || todayISO(), dueTime: "20:30", priority: "normal", done: false, estimatedMinutes: clamp(payload.estimatedMinutes || 30, 5, 240), contentBlocks: instructions, solutionBlocks: attachSlideMaterialReferences(payload.solutionBlocks || payload.solution || "", selectedMaterials), checklist: asArray(payload.checklist).map(String).filter(Boolean), extraTasks: asArray(payload.extraTasks).map(function (item, index) { if (typeof item === "string") return { title: item, blocks: [], optional: false }; item = item && typeof item === "object" ? item : {}; return { title: String(item.title || ("Tarefa extra " + (index + 1))), blocks: attachSlideMaterialReferences(item.blocks || item.contentBlocks || item.instructions || "", selectedMaterials), optional: !!item.optional }; }), configuredFromPrompt: true, lockedContent: true, createdAt: new Date().toISOString() });
+        state.tasks.push({ id: uid("task"), semesterId: lesson.semesterId, courseId: lesson.courseId, lessonId: lesson.id, title: String(payload.title || "TPC · " + lesson.title), type: "homework", dueDate: lesson.date || todayISO(), dueTime: "20:30", priority: "normal", done: false, completedOnce: false, submissionStatus: "todo", estimatedMinutes: clamp(payload.estimatedMinutes || 30, 5, 240), contentBlocks: instructions, solutionBlocks: attachSlideMaterialReferences(payload.solutionBlocks || payload.solution || "", selectedMaterials), checklist: asArray(payload.checklist).map(String).filter(Boolean), extraTasks: asArray(payload.extraTasks).map(function (item, index) { if (typeof item === "string") return { title: item, blocks: [], optional: false }; item = item && typeof item === "object" ? item : {}; return { title: String(item.title || ("Tarefa extra " + (index + 1))), blocks: attachSlideMaterialReferences(item.blocks || item.contentBlocks || item.instructions || "", selectedMaterials), optional: !!item.optional }; }), configuredFromPrompt: true, lockedContent: false, createdAt: new Date().toISOString() });
       } else {
         var blocks = attachSlideMaterialReferences(payload.blocks || payload.notesBlocks || payload.contentBlocks || payload.notes || "", selectedMaterials);
         if (!blocks.length) throw new Error("O JSON não contém apontamentos.");
         var generatedHtml = sanitizeNotebookHTML(blocksToNotebookHTML(blocks));
         var existingHtml = sanitizeNotebookHTML(lesson.notesHtml || (lesson.notes ? '<p>' + nl2br(lesson.notes) + '</p>' : ''));
-        var aiContinuation = '<div class="notebook-ai-continuation" data-ai-added-at="' + attr(new Date().toISOString()) + '"><p class="notebook-ai-label"><span>✦</span> Continuação adicionada com IA</p>' + generatedHtml + '</div>';
-        lesson.notesHtml = sanitizeNotebookHTML((existingHtml ? existingHtml + '<p><br></p>' : '') + aiContinuation + '<p><br></p>');
-        lesson.notes = contentBlocksPlainText([{ type: "text", text: lesson.notes || "" }]) + (lesson.notes ? "\n\n" : "") + contentBlocksPlainText(blocks);
+        var label = existingHtml ? "Continuação adicionada com IA" : "Apontamentos gerados com IA";
+        var aiContent = '<div class="notebook-ai-continuation" data-ai-added-at="' + attr(new Date().toISOString()) + '"><p class="notebook-ai-label"><span>✦</span> ' + label + '</p>' + generatedHtml + '</div>';
+        lesson.notesHtml = sanitizeNotebookHTML((existingHtml ? existingHtml + '<p><br></p>' : '') + aiContent + '<p><br></p>');
+        lesson.notes = (lesson.notes || "") + (lesson.notes ? "\n\n" : "") + contentBlocksPlainText(blocks);
         lesson.notesPaper = ["lined", "grid", "blank"].indexOf(payload.paper) >= 0 ? payload.paper : (lesson.notesPaper || "lined");
         lesson.notesUpdatedAt = new Date().toISOString();
       }
+      updateLessonBuilderProcessing(74, "A guardar na aula.");
+      await lessonBuilderPaint();
       ensureBeOnlineTasks();
       await save(true);
+      updateLessonBuilderProcessing(100, "Conteúdo criado com sucesso.");
+      await lessonBuilderPaint();
+      lessonBuilderDraft = null;
       closeModal();
       render();
-      toast((kind === "quiz" ? "Quiz da aula" : kind === "homework" ? "TPC" : "Apontamentos") + " criado(s) e sincronizado(s).");
+      toast((kind === "quiz" ? "Quiz da aula" : kind === "homework" ? "TPC" : "Apontamentos") + " criado(s).");
+    } catch (error) {
+      if (errorBox) { errorBox.hidden = false; errorBox.textContent = error.message; }
+      else toast(error.message, "error");
+      var panel = modalRoot.querySelector("#lessonBuilderProcessing");
+      if (panel) panel.hidden = true;
+      if (submitButton) submitButton.disabled = false;
+    }
+  }
+
+
+  function lessonQuizCompleted(quiz, lesson) {
+    return !!(quiz && (quiz.completedOnce || quiz.lastScore != null || quiz.lastCompletedAt)) || !!(lesson && lessonIsBeOnline(lesson));
+  }
+
+  function lessonHomeworkCompleted(task) {
+    return !!(task && (task.done || task.completedOnce || ["submitted", "confirmed", "graded", "done"].indexOf(String(task.submissionStatus || "")) >= 0));
+  }
+
+  function quizEditorLines(values) {
+    return asArray(values).map(function (value) { return String(value || "").trim(); }).filter(Boolean).join("\n");
+  }
+
+  function quizEditorPairs(values) {
+    return asArray(values).map(function (pair) {
+      return String(pair && pair.left || "").trim() + " => " + String(pair && pair.right || "").trim();
+    }).filter(function (line) { return line !== " => "; }).join("\n");
+  }
+
+  function lessonQuizQuestionEditorCard(question, index) {
+    question = question || { gameType: "choice", prompt: "", options: ["", ""], answerIndex: 0, explanation: "" };
+    var type = normalizeClassGameType(question.gameType || question.mode);
+    var options = asArray(question.optionBlocks).length ? question.optionBlocks.map(contentBlocksPlainText) : asArray(question.options);
+    var prompt = contentBlocksPlainText(question.promptBlocks || question.prompt || "");
+    var explanation = contentBlocksPlainText(question.explanationBlocks || question.explanation || "");
+    var typeOptions = [
+      ["choice", "Escolha múltipla"], ["spot-error", "Encontrar o erro"], ["type-answer", "Resposta escrita"],
+      ["order", "Ordenar"], ["match", "Correspondências"], ["memory", "Memória"]
+    ].map(function (entry) { return '<option value="' + entry[0] + '" ' + (type === entry[0] ? "selected" : "") + '>' + entry[1] + '</option>'; }).join("");
+    return '<article class="quiz-edit-question" data-question-index="' + index + '"><header><span><b>Pergunta ' + (index + 1) + '</b><small>Editável até o quiz ser concluído</small></span><button class="row-button" type="button" data-action="lesson-quiz-remove-question" aria-label="Remover pergunta"><i data-lucide="trash-2"></i></button></header><div class="form-grid"><div class="field"><label>Tipo</label><select data-quiz-edit-type>' + typeOptions + '</select></div><div class="field field-full"><label>Enunciado</label><textarea data-quiz-edit-prompt required>' + esc(prompt) + '</textarea></div><div class="field field-full quiz-edit-specific" data-for-types="choice spot-error"><label>Opções <small>uma por linha</small></label><textarea data-quiz-edit-options>' + esc(quizEditorLines(options)) + '</textarea></div><div class="field quiz-edit-specific" data-for-types="choice spot-error"><label>Resposta certa <small>número da opção</small></label><input data-quiz-edit-answer-index type="number" min="1" value="' + attr(Number(question.answerIndex) + 1 || 1) + '"></div><div class="field field-full quiz-edit-specific" data-for-types="type-answer"><label>Resposta principal</label><input data-quiz-edit-answer-text value="' + attr(question.answerText || "") + '"></div><div class="field field-full quiz-edit-specific" data-for-types="type-answer"><label>Respostas aceites <small>uma por linha</small></label><textarea data-quiz-edit-accepted>' + esc(quizEditorLines(question.acceptedAnswers)) + '</textarea></div><div class="field field-full quiz-edit-specific" data-for-types="order"><label>Itens apresentados <small>um por linha</small></label><textarea data-quiz-edit-order-items>' + esc(quizEditorLines(question.orderItems)) + '</textarea></div><div class="field field-full quiz-edit-specific" data-for-types="order"><label>Ordem correta <small>um por linha</small></label><textarea data-quiz-edit-correct-order>' + esc(quizEditorLines(question.correctOrder)) + '</textarea></div><div class="field field-full quiz-edit-specific" data-for-types="match"><label>Pares <small>formato: conceito =&gt; resposta</small></label><textarea data-quiz-edit-pairs>' + esc(quizEditorPairs(question.matchPairs)) + '</textarea></div><div class="field field-full quiz-edit-specific" data-for-types="memory"><label>Sequência <small>um elemento por linha</small></label><textarea data-quiz-edit-sequence>' + esc(quizEditorLines(question.sequence)) + '</textarea></div><div class="field field-full"><label>Explicação</label><textarea data-quiz-edit-explanation>' + esc(explanation) + '</textarea></div></div></article>';
+  }
+
+  function updateQuizEditorQuestionTypes(root) {
+    (root || modalRoot).querySelectorAll(".quiz-edit-question").forEach(function (card) {
+      var select = card.querySelector("[data-quiz-edit-type]");
+      var type = select ? select.value : "choice";
+      card.querySelectorAll(".quiz-edit-specific").forEach(function (field) {
+        field.hidden = String(field.dataset.forTypes || "").split(/\s+/).indexOf(type) < 0;
+      });
+    });
+  }
+
+  function openLessonQuizEditor(lessonId) {
+    var lesson = lessonById(lessonId);
+    var quiz = configuredQuizForLesson(lessonId);
+    if (!lesson || !quiz) return;
+    if (lessonQuizCompleted(quiz, lesson)) { viewLessonQuiz(lessonId); toast("O quiz concluído fica apenas em visualização.", "warning"); return; }
+    var questions = asArray(quiz.questions);
+    var body = '<form id="lessonQuizEditor" data-lesson="' + attr(lesson.id) + '" data-quiz="' + attr(quiz.id) + '"><div class="view-only-banner is-editable"><i data-lucide="pencil-line"></i><span><strong>Podes editar este quiz</strong><small>Depois da primeira conclusão, o conteúdo fica bloqueado e disponível apenas para consulta.</small></span></div><div class="field"><label>Título do quiz</label><input name="title" required value="' + attr(quiz.title || "Quiz da aula · " + lesson.title) + '"></div><div id="lessonQuizQuestionList" class="quiz-edit-list">' + questions.map(lessonQuizQuestionEditorCard).join("") + '</div><button class="button button-small" type="button" data-action="lesson-quiz-add-question"><i data-lucide="plus"></i>Adicionar pergunta</button><div class="form-error" hidden></div></form>';
+    openModal("Editar Quiz-Aula", body, { className: "modal-wide", footer: '<footer class="modal-foot"><button class="button button-danger" type="button" data-action="delete-entity" data-kind="quizzes" data-id="' + attr(quiz.id) + '"><i data-lucide="trash-2"></i>Apagar</button><span class="modal-foot-spacer"></span><button class="button" type="button" data-action="close-modal">Cancelar</button><button class="button button-dark" type="button" data-action="save-lesson-quiz"><i data-lucide="check"></i>Guardar alterações</button></footer>' });
+    updateQuizEditorQuestionTypes(modalRoot);
+  }
+
+  function parseEditorLines(value) {
+    return String(value || "").split(/\n+/).map(function (line) { return line.trim(); }).filter(Boolean);
+  }
+
+  async function saveLessonQuizEditor() {
+    var form = modalRoot.querySelector("#lessonQuizEditor");
+    if (!form) return;
+    var lesson = lessonById(form.dataset.lesson);
+    var quiz = state.quizzes.find(function (item) { return item.id === form.dataset.quiz; });
+    var errorBox = form.querySelector(".form-error");
+    try {
+      if (!lesson || !quiz) throw new Error("Quiz não encontrado.");
+      if (lessonQuizCompleted(quiz, lesson)) throw new Error("Este quiz já foi concluído e não pode ser alterado.");
+      var title = String(form.elements.title.value || "").trim();
+      if (!title) throw new Error("Escreve o título do quiz.");
+      var materials = lessonSlides(lesson.id);
+      var questions = Array.from(form.querySelectorAll(".quiz-edit-question")).map(function (card) {
+        var type = card.querySelector("[data-quiz-edit-type]").value;
+        var raw = {
+          gameType: type,
+          prompt: card.querySelector("[data-quiz-edit-prompt]").value,
+          explanation: card.querySelector("[data-quiz-edit-explanation]").value
+        };
+        if (type === "choice" || type === "spot-error") {
+          raw.options = parseEditorLines(card.querySelector("[data-quiz-edit-options]").value);
+          raw.correctIndex = Math.max(0, Number(card.querySelector("[data-quiz-edit-answer-index]").value || 1) - 1);
+        } else if (type === "type-answer") {
+          raw.answerText = card.querySelector("[data-quiz-edit-answer-text]").value;
+          raw.acceptedAnswers = parseEditorLines(card.querySelector("[data-quiz-edit-accepted]").value);
+        } else if (type === "order") {
+          raw.orderItems = parseEditorLines(card.querySelector("[data-quiz-edit-order-items]").value);
+          raw.correctOrder = parseEditorLines(card.querySelector("[data-quiz-edit-correct-order]").value);
+        } else if (type === "match") {
+          raw.matchPairs = parseEditorLines(card.querySelector("[data-quiz-edit-pairs]").value).map(function (line) {
+            var parts = line.split(/\s*(?:=>|→)\s*/);
+            return { left: parts.shift() || "", right: parts.join(" => ") || "" };
+          });
+        } else if (type === "memory") {
+          raw.sequence = parseEditorLines(card.querySelector("[data-quiz-edit-sequence]").value);
+        }
+        return normalizeAIQuizQuestion(raw, materials);
+      });
+      if (!questions.length) throw new Error("O quiz precisa de pelo menos uma pergunta.");
+      quiz.title = title;
+      quiz.questions = questions;
+      quiz.updatedAt = new Date().toISOString();
+      quiz.lockedContent = false;
+      await save(true);
+      closeModal(); render(); toast("Quiz atualizado.");
     } catch (error) {
       if (errorBox) { errorBox.hidden = false; errorBox.textContent = error.message; }
       else toast(error.message, "error");
     }
   }
 
+  function openLessonHomeworkEditor(taskId) {
+    var task = state.tasks.find(function (item) { return item.id === taskId; });
+    if (!task) return;
+    if (lessonHomeworkCompleted(task)) { viewLessonHomework(task.id); toast("O TPC concluído fica apenas em visualização.", "warning"); return; }
+    var extras = asArray(task.extraTasks).map(function (item) { return item.title || contentBlocksPlainText(item.blocks); }).filter(Boolean);
+    var body = '<form id="lessonHomeworkEditor" data-task="' + attr(task.id) + '"><div class="view-only-banner is-editable"><i data-lucide="pencil-line"></i><span><strong>Podes editar este TPC</strong><small>Depois de concluído ou entregue, fica bloqueado e apenas para consulta.</small></span></div><div class="form-grid"><div class="field field-full"><label>Título</label><input name="title" required value="' + attr(task.title || "") + '"></div><div class="field"><label>Prazo</label><input name="dueDate" type="date" value="' + attr(task.dueDate || "") + '"></div><div class="field"><label>Hora</label><input name="dueTime" type="time" value="' + attr(task.dueTime || "20:30") + '"></div><div class="field"><label>Duração estimada</label><input name="estimatedMinutes" type="number" min="5" max="240" step="5" value="' + attr(task.estimatedMinutes || 30) + '"></div><div class="field field-full"><label>Instruções</label><textarea name="instructions" required>' + esc(contentBlocksPlainText(task.contentBlocks)) + '</textarea></div><div class="field field-full"><label>Checklist <small>um passo por linha</small></label><textarea name="checklist">' + esc(quizEditorLines(task.checklist)) + '</textarea></div><div class="field field-full"><label>Tarefas adicionais <small>uma por linha</small></label><textarea name="extraTasks">' + esc(quizEditorLines(extras)) + '</textarea></div><div class="field field-full"><label>Solução ou critérios de correção</label><textarea name="solution">' + esc(contentBlocksPlainText(task.solutionBlocks)) + '</textarea></div></div><div class="form-error" hidden></div></form>';
+    openModal("Editar TPC", body, { className: "modal-wide", footer: '<footer class="modal-foot"><button class="button button-danger" type="button" data-action="delete-entity" data-kind="tasks" data-id="' + attr(task.id) + '"><i data-lucide="trash-2"></i>Apagar</button><span class="modal-foot-spacer"></span><button class="button" type="button" data-action="close-modal">Cancelar</button><button class="button button-dark" type="button" data-action="save-lesson-homework"><i data-lucide="check"></i>Guardar alterações</button></footer>' });
+  }
+
+  async function saveLessonHomeworkEditor() {
+    var form = modalRoot.querySelector("#lessonHomeworkEditor");
+    if (!form) return;
+    var task = state.tasks.find(function (item) { return item.id === form.dataset.task; });
+    var errorBox = form.querySelector(".form-error");
+    try {
+      if (!task) throw new Error("TPC não encontrado.");
+      if (lessonHomeworkCompleted(task)) throw new Error("Este TPC já foi concluído e não pode ser alterado.");
+      var data = new FormData(form);
+      var title = String(data.get("title") || "").trim();
+      var instructions = String(data.get("instructions") || "").trim();
+      if (!title || !instructions) throw new Error("Preenche o título e as instruções.");
+      task.title = title;
+      task.dueDate = String(data.get("dueDate") || "");
+      task.dueTime = String(data.get("dueTime") || "");
+      task.estimatedMinutes = clamp(data.get("estimatedMinutes") || 30, 5, 240);
+      task.contentBlocks = [{ type: "text", text: instructions }];
+      task.checklist = parseEditorLines(data.get("checklist"));
+      task.extraTasks = parseEditorLines(data.get("extraTasks")).map(function (title) { return { title: title, blocks: [], optional: false }; });
+      var solution = String(data.get("solution") || "").trim();
+      task.solutionBlocks = solution ? [{ type: "text", text: solution }] : [];
+      task.updatedAt = new Date().toISOString();
+      task.lockedContent = false;
+      await save(true);
+      closeModal(); render(); toast("TPC atualizado.");
+    } catch (error) {
+      if (errorBox) { errorBox.hidden = false; errorBox.textContent = error.message; }
+      else toast(error.message, "error");
+    }
+  }
+
+
   function viewLessonQuiz(lessonId) {
     var quiz = configuredQuizForLesson(lessonId);
     var lesson = lessonById(lessonId);
     if (!quiz || !lesson) return;
-    var body = '<div class="view-only-banner"><i data-lucide="lock-keyhole"></i><span><strong>Conteúdo fechado</strong><small>Há apenas um quiz por aula. Depois de concluído, fica disponível apenas para consulta.</small></span></div><div class="quiz-preview-list">' + asArray(quiz.questions).map(function (question, index) {
+    var completed = lessonQuizCompleted(quiz, lesson);
+    var body = '<div class="view-only-banner ' + (completed ? '' : 'is-editable') + '"><i data-lucide="' + (completed ? 'lock-keyhole' : 'pencil-line') + '"></i><span><strong>' + (completed ? 'Quiz concluído · apenas visualização' : 'Quiz pronto e ainda editável') + '</strong><small>' + (completed ? 'O conteúdo foi congelado para manter o registo da tentativa.' : 'Podes editar ou apagar até o concluíres pela primeira vez.') + '</small></span></div><div class="quiz-preview-list">' + asArray(quiz.questions).map(function (question, index) {
       var options = asArray(question.optionBlocks).length ? question.optionBlocks : asArray(question.options);
-      return '<article class="quiz-preview-card"><p class="card-label">Pergunta ' + (index + 1) + '</p>' + renderContentBlocks(question.promptBlocks || question.prompt) + '<div class="quiz-preview-options">' + options.map(function (option, optionIndex) { return '<div class="quiz-preview-option ' + (optionIndex === Number(question.answerIndex) ? "is-correct" : "") + '"><span>' + String.fromCharCode(65 + optionIndex) + '</span>' + renderQuizOptionContent(option) + '</div>'; }).join("") + '</div><details><summary>Ver explicação</summary>' + renderContentBlocks(question.explanationBlocks || question.explanation) + '</details></article>';
+      var answerContent = options.length ? '<div class="quiz-preview-options">' + options.map(function (option, optionIndex) { return '<div class="quiz-preview-option ' + (optionIndex === Number(question.answerIndex) ? "is-correct" : "") + '"><span>' + String.fromCharCode(65 + optionIndex) + '</span>' + renderQuizOptionContent(option) + '</div>'; }).join("") + '</div>' : '<div class="form-note">' + esc(classGameLabel(question)) + '</div>';
+      return '<article class="quiz-preview-card"><p class="card-label">Pergunta ' + (index + 1) + '</p>' + renderContentBlocks(question.promptBlocks || question.prompt) + answerContent + '<details><summary>Ver explicação</summary>' + renderContentBlocks(question.explanationBlocks || question.explanation) + '</details></article>';
     }).join("") + '</div>';
-    var completed = lessonIsBeOnline(lesson);
-    var footer = '<footer class="modal-foot"><button class="button' + (completed ? ' button-dark' : '') + '" type="button" data-action="close-modal">Fechar</button>' + (completed ? '' : '<button class="button button-dark" type="button" data-action="start-quiz" data-id="' + attr(quiz.id) + '"><i data-lucide="play"></i>Fazer quiz</button>') + '</footer>';
+    var footer = '<footer class="modal-foot">' + (!completed ? '<button class="button button-danger" type="button" data-action="delete-entity" data-kind="quizzes" data-id="' + attr(quiz.id) + '"><i data-lucide="trash-2"></i>Apagar</button><button class="button" type="button" data-action="edit-lesson-quiz" data-lesson="' + attr(lesson.id) + '"><i data-lucide="pencil"></i>Editar</button><span class="modal-foot-spacer"></span>' : '') + '<button class="button' + (completed ? ' button-dark' : '') + '" type="button" data-action="close-modal">Fechar</button>' + (completed ? '' : '<button class="button button-dark" type="button" data-action="start-quiz" data-id="' + attr(quiz.id) + '"><i data-lucide="play"></i>Fazer quiz</button>') + '</footer>';
     openModal("Quiz da aula", body, { className: "modal-wide", footer: footer });
   }
+
 
   function viewLessonHomework(taskId) {
     var task = state.tasks.find(function (item) { return item.id === taskId; });
     if (!task) return;
-    var lesson = lessonById(task.lessonId);
+    var completed = lessonHomeworkCompleted(task);
     var checklist = asArray(task.checklist).length ? '<div class="homework-checklist"><p class="card-label">Checklist</p>' + task.checklist.map(function (item) { return '<span><i data-lucide="square"></i>' + esc(item) + '</span>'; }).join("") + '</div>' : '';
     var extras = asArray(task.extraTasks).length ? '<div class="homework-extra-list"><p class="card-label">Tarefas adicionais</p>' + task.extraTasks.map(function (item) { return '<article><div><i data-lucide="' + (item.optional ? 'circle-dashed' : 'circle-check-big') + '"></i><strong>' + esc(item.title) + '</strong>' + (item.optional ? '<span class="badge">Opcional</span>' : '') + '</div>' + renderContentBlocks(item.blocks) + '</article>'; }).join("") + '</div>' : '';
     var solution = asArray(task.solutionBlocks).length ? '<details class="homework-solution"><summary>Ver solução / critérios de correção</summary>' + renderContentBlocks(task.solutionBlocks) + '</details>' : '';
-    var body = '<div class="view-only-banner"><i data-lucide="lock-keyhole"></i><span><strong>TPC da aula</strong><small>O conteúdo fica em modo de visualização depois de criado.</small></span></div><div class="question-meta"><span class="badge badge-violet">' + esc(task.estimatedMinutes || 30) + ' min</span><span class="badge">' + esc(relativeDate(task.dueDate)) + '</span></div><h3 style="margin:16px 0 8px">' + esc(task.title) + '</h3>' + renderContentBlocks(task.contentBlocks) + checklist + extras + solution;
-    var footer = '<footer class="modal-foot"><button class="button' + (task.done ? ' button-dark' : '') + '" type="button" data-action="close-modal">Fechar</button>' + (task.done ? '' : '<button class="button button-dark" type="button" data-action="start-homework-session" data-task="' + attr(task.id) + '"><i data-lucide="play"></i>Fazer TPC</button>') + '</footer>';
+    var body = '<div class="view-only-banner ' + (completed ? '' : 'is-editable') + '"><i data-lucide="' + (completed ? 'lock-keyhole' : 'pencil-line') + '"></i><span><strong>' + (completed ? 'TPC concluído · apenas visualização' : 'TPC pronto e ainda editável') + '</strong><small>' + (completed ? 'O conteúdo foi congelado depois da conclusão/entrega.' : 'Podes editar ou apagar enquanto ainda não o concluíste.') + '</small></span></div><div class="question-meta"><span class="badge badge-violet">' + esc(task.estimatedMinutes || 30) + ' min</span><span class="badge">' + esc(relativeDate(task.dueDate)) + '</span></div><h3 style="margin:16px 0 8px">' + esc(task.title) + '</h3>' + renderContentBlocks(task.contentBlocks) + checklist + extras + solution;
+    var footer = '<footer class="modal-foot">' + (!completed ? '<button class="button button-danger" type="button" data-action="delete-entity" data-kind="tasks" data-id="' + attr(task.id) + '"><i data-lucide="trash-2"></i>Apagar</button><button class="button" type="button" data-action="edit-lesson-homework" data-id="' + attr(task.id) + '"><i data-lucide="pencil"></i>Editar</button><span class="modal-foot-spacer"></span>' : '') + '<button class="button' + (completed ? ' button-dark' : '') + '" type="button" data-action="close-modal">Fechar</button>' + (completed ? '' : '<button class="button button-dark" type="button" data-action="start-homework-session" data-task="' + attr(task.id) + '"><i data-lucide="play"></i>Fazer TPC</button>') + '</footer>';
     openModal("TPC", body, { className: "modal-wide", footer: footer });
   }
+
 
   function notebookPaperLabel(value) {
     return value === "grid" ? "Quadriculado" : value === "blank" ? "Branco" : "Pautado";
@@ -3869,14 +4123,16 @@
     var oldMaterials = materials.filter(function (item) { return semester && item.academicYear && item.academicYear !== semester.academicYear; });
     var materialsHtml = materials.length ? '<div class="material-grid">' + currentMaterials.concat(oldMaterials).map(function (item) { return renderMaterialCard(item, course || { semesterId: null }, archived); }).join("") + '</div>' : emptyState("file-up", "Ainda sem material", "Carrega os slides ou PDF desta aula. O ficheiro ficará sincronizado.", "add-material", "Carregar material");
     var questionsHtml = questions.length ? questions.map(function (item) { return renderQuestionCard(item, archived); }).join("") : emptyState("message-circle-question", "Sem perguntas anteriores", "Associa perguntas de testes antigos a esta aula.", "add-question", "Associar pergunta");
+    var quizComplete = lessonQuizCompleted(quiz, lesson);
+    var homeworkComplete = lessonHomeworkCompleted(homework);
     var quizHtml = quiz
-      ? '<div class="lesson-configured-card"><span class="list-icon yellow"><i data-lucide="check-check"></i></span><div><strong>' + esc(quiz.title) + '</strong><small>' + asArray(quiz.questions).length + ' perguntas' + (quiz.lastScore != null ? ' · resultado ' + quiz.lastScore + '%' : '') + ' · conteúdo fechado</small></div><div class="list-actions"><button class="button ' + (onlineComplete ? 'button-dark' : 'button') + ' button-small" type="button" data-action="view-lesson-quiz" data-lesson="' + attr(lesson.id) + '"><i data-lucide="eye"></i>Ver</button>' + (onlineComplete ? '' : '<button class="button button-dark button-small" type="button" data-action="start-quiz" data-id="' + attr(quiz.id) + '"><i data-lucide="play"></i>Fazer</button>') + '</div></div>'
-      : '<div class="lesson-unconfigured"><span class="metric-icon"><i data-lucide="check-check"></i></span><div><strong>Quiz ainda não configurado</strong><small>Escolhe os slides, copia o prompt para a IA e cola o JSON devolvido.</small></div><button class="button button-dark button-small" type="button" data-action="configure-lesson-content" data-kind="quiz" data-lesson="' + attr(lesson.id) + '"><i data-lucide="wand-sparkles"></i>✅ Configurar quiz</button></div>';
+      ? '<div class="lesson-configured-card"><span class="list-icon yellow"><i data-lucide="check-check"></i></span><div><strong>' + esc(quiz.title) + '</strong><small>' + asArray(quiz.questions).length + ' perguntas' + (quiz.lastScore != null ? ' · resultado ' + quiz.lastScore + '%' : '') + ' · ' + (quizComplete ? 'apenas visualização' : 'editável') + '</small></div><div class="list-actions"><button class="button button-small" type="button" data-action="view-lesson-quiz" data-lesson="' + attr(lesson.id) + '"><i data-lucide="eye"></i>Ver</button>' + (quizComplete ? '' : '<button class="row-button" type="button" data-action="edit-lesson-quiz" data-lesson="' + attr(lesson.id) + '" aria-label="Editar quiz"><i data-lucide="pencil"></i></button><button class="row-button is-danger" type="button" data-action="delete-entity" data-kind="quizzes" data-id="' + attr(quiz.id) + '" aria-label="Apagar quiz"><i data-lucide="trash-2"></i></button><button class="button button-dark button-small" type="button" data-action="start-quiz" data-id="' + attr(quiz.id) + '"><i data-lucide="play"></i>Fazer</button>') + '</div></div>'
+      : '<div class="lesson-unconfigured"><span class="metric-icon"><i data-lucide="check-check"></i></span><div><strong>Quiz ainda não configurado</strong><small>Seleciona páginas/slides, copia o prompt e cola o JSON devolvido.</small></div><button class="button button-dark button-small" type="button" data-action="configure-lesson-content" data-kind="quiz" data-lesson="' + attr(lesson.id) + '"><i data-lucide="wand-sparkles"></i>Configurar quiz</button></div>';
     var homeworkHtml = homework
-      ? '<div class="lesson-configured-card"><span class="list-icon orange"><i data-lucide="notebook-pen"></i></span><div><strong>' + esc(homework.title) + '</strong><small>' + (homework.estimatedMinutes || 30) + ' min · ' + (homework.done ? 'concluído' : 'por fazer') + ' · conteúdo fechado</small></div><div class="list-actions"><button class="button ' + (homework.done ? 'button-dark' : 'button') + ' button-small" type="button" data-action="view-lesson-homework" data-id="' + attr(homework.id) + '"><i data-lucide="eye"></i>Ver</button>' + (homework.done ? '' : '<button class="button button-dark button-small" type="button" data-action="start-homework-session" data-task="' + attr(homework.id) + '"><i data-lucide="play"></i>Fazer</button>') + '</div></div>'
-      : '<div class="lesson-unconfigured"><span class="metric-icon"><i data-lucide="notebook-pen"></i></span><div><strong>TPC ainda não configurado</strong><small>O TPC é separado do quiz e pensado para fazer em casa.</small></div><button class="button button-dark button-small" type="button" data-action="configure-lesson-content" data-kind="homework" data-lesson="' + attr(lesson.id) + '"><i data-lucide="wand-sparkles"></i>✅ Configurar TPC</button></div>';
-    var quizStatusCard = onlineComplete ? '' : '<article class="card span-12 beonline-lesson-card"><div class="beonline-lesson-copy"><span class="badge ' + (quiz && lessonEnded ? 'badge-danger' : 'badge-violet') + '">' + (quiz && lessonEnded ? 'Quiz pendente' : quiz ? 'Quiz preparado' : 'Sem quiz') + '</span><h3>Quiz da aula</h3><p>' + esc(quiz && lessonEnded ? 'O quiz está pronto para fazer.' : quiz ? 'Quando a aula estiver a terminar, a Home pode sugerir este quiz.' : 'O quiz só aparece na Home depois de o configurares.') + '</p></div></article>';
-    return '<div class="page-toolbar"><button class="button button-ghost button-small" type="button" data-route="course" data-id="' + attr(lesson.courseId) + '"><i data-lucide="arrow-left"></i>' + esc(course ? course.code || course.name : "Cadeira") + '</button><div class="page-actions">' + (!archived ? '<button class="button" type="button" data-action="edit-lesson" data-id="' + attr(lesson.id) + '"><i data-lucide="pencil"></i>Editar aula</button><button class="button ' + (lesson.mastered ? 'button-yellow' : 'button-dark') + '" type="button" data-action="toggle-mastery" data-id="' + attr(lesson.id) + '"><i data-lucide="badge-check"></i>' + (lesson.mastered ? 'Dominada' : 'Marcar dominada') + '</button>' : '') + '</div></div><div class="bento-grid"><article class="card course-hero course-hero-clean span-12" style="--course-color:' + safeColor(course && course.color) + ';min-height:220px"><div class="course-hero-copy"><span class="badge badge-dark">' + esc(lesson.type || 'Aula') + '</span><h2>' + esc(lesson.title) + '</h2><p class="lesson-hero-meta">' + formatLongDate(lesson.date) + (lesson.start ? ' · ' + esc(lesson.start) + '–' + esc(lesson.end || '') : '') + ' · ' + esc(lessonTypeLabel(lesson.type)) + (lesson.room ? ' · ' + esc(lesson.room) : '') + '</p><p>' + esc(lesson.description || lesson.topics || 'Adiciona os tópicos dados nesta aula.') + '</p></div></article>' + quizStatusCard + '<article class="card span-12"><div class="card-title-row"><div><h3>Slides e PDFs</h3><p class="card-subtitle">Os ficheiros são enviados para o Git e ficam disponíveis nos teus dispositivos.</p></div>' + (!archived ? '<button class="button button-small" type="button" data-action="add-material" data-course="' + attr(lesson.courseId) + '" data-lesson="' + attr(lesson.id) + '"><i data-lucide="file-up"></i>Carregar</button>' : '') + '</div><div style="margin-top:15px">' + materialsHtml + '</div></article><article class="card span-7"><div class="card-title-row"><div><h3>Perguntas de anos anteriores</h3></div><div class="list-actions">' + (!archived ? '<button class="button button-small" type="button" data-action="add-question" data-course="' + attr(lesson.courseId) + '" data-lesson="' + attr(lesson.id) + '"><i data-lucide="plus"></i>Pergunta</button>' : '') + '</div></div><div style="margin-top:15px">' + questionsHtml + '</div></article><article class="card span-5 lesson-config-card"><div class="card-title-row"><div><h3>✅ Quiz da aula</h3><p class="card-subtitle">Um por aula. Depois de criado, fica em visualização.</p></div></div>' + quizHtml + '</article><article class="card span-12 lesson-config-card"><div class="card-title-row"><div><h3>✅ TPC da aula</h3><p class="card-subtitle">Aplicação e prática para fazer em casa, separada do quiz.</p></div></div>' + homeworkHtml + '</article><article class="card span-12 notebook-card"><div class="card-title-row"><div><h3>Apontamentos</h3><p class="card-subtitle">Escreve como num caderno ou gera conteúdo com um prompt estruturado.</p></div><div class="list-actions">' + (!archived ? '<button class="button button-small" type="button" data-action="configure-lesson-content" data-kind="notes" data-lesson="' + attr(lesson.id) + '"><i data-lucide="wand-sparkles"></i>Gerar por prompt</button><button class="button button-dark button-small" type="button" data-action="open-notebook-editor" data-lesson="' + attr(lesson.id) + '"><i data-lucide="pencil"></i>Escrever</button>' : '') + '</div></div><div style="margin-top:15px">' + renderNotebookPage(lesson, false) + '</div><div class="notebook-meta"><span><i data-lucide="notebook"></i>' + esc(notebookPaperLabel(lesson.notesPaper)) + '</span><button class="button button-small" type="button" data-action="course-tab" data-id="' + attr(lesson.courseId) + '" data-tab="notebook"><i data-lucide="library-big"></i>Ver caderno da cadeira</button></div></article></div>';
+      ? '<div class="lesson-configured-card"><span class="list-icon orange"><i data-lucide="notebook-pen"></i></span><div><strong>' + esc(homework.title) + '</strong><small>' + (homework.estimatedMinutes || 30) + ' min · ' + (homeworkComplete ? 'apenas visualização' : 'editável e por fazer') + '</small></div><div class="list-actions"><button class="button button-small" type="button" data-action="view-lesson-homework" data-id="' + attr(homework.id) + '"><i data-lucide="eye"></i>Ver</button>' + (homeworkComplete ? '' : '<button class="row-button" type="button" data-action="edit-lesson-homework" data-id="' + attr(homework.id) + '" aria-label="Editar TPC"><i data-lucide="pencil"></i></button><button class="row-button is-danger" type="button" data-action="delete-entity" data-kind="tasks" data-id="' + attr(homework.id) + '" aria-label="Apagar TPC"><i data-lucide="trash-2"></i></button><button class="button button-dark button-small" type="button" data-action="start-homework-session" data-task="' + attr(homework.id) + '"><i data-lucide="play"></i>Fazer</button>') + '</div></div>'
+      : '<div class="lesson-unconfigured"><span class="metric-icon"><i data-lucide="notebook-pen"></i></span><div><strong>TPC ainda não configurado</strong><small>O TPC é separado do quiz e pensado para fazer em casa.</small></div><button class="button button-dark button-small" type="button" data-action="configure-lesson-content" data-kind="homework" data-lesson="' + attr(lesson.id) + '"><i data-lucide="wand-sparkles"></i>Configurar TPC</button></div>';
+
+    return '<div class="page-toolbar"><button class="button button-ghost button-small" type="button" data-route="course" data-id="' + attr(lesson.courseId) + '"><i data-lucide="arrow-left"></i>' + esc(course ? course.code || course.name : "Cadeira") + '</button><div class="page-actions">' + (!archived ? '<button class="button" type="button" data-action="edit-lesson" data-id="' + attr(lesson.id) + '"><i data-lucide="pencil"></i>Editar aula</button><button class="button ' + (lesson.mastered ? 'button-yellow' : 'button-dark') + '" type="button" data-action="toggle-mastery" data-id="' + attr(lesson.id) + '"><i data-lucide="badge-check"></i>' + (lesson.mastered ? 'Dominada' : 'Marcar dominada') + '</button>' : '') + '</div></div><div class="bento-grid"><article class="card course-hero course-hero-clean span-12" style="--course-color:' + safeColor(course && course.color) + ';min-height:220px"><div class="course-hero-copy"><span class="badge badge-dark">' + esc(lesson.type || 'Aula') + '</span><h2>' + esc(lesson.title) + '</h2><p class="lesson-hero-meta">' + formatLongDate(lesson.date) + (lesson.start ? ' · ' + esc(lesson.start) + '–' + esc(lesson.end || '') : '') + ' · ' + esc(lessonTypeLabel(lesson.type)) + (lesson.room ? ' · ' + esc(lesson.room) : '') + '</p><p>' + esc(lesson.description || lesson.topics || 'Adiciona os tópicos dados nesta aula.') + '</p></div></article><article class="card span-12"><div class="card-title-row"><div><h3>Slides e PDFs</h3><p class="card-subtitle">Os ficheiros ficam primeiro neste dispositivo e sincronizam com o Git quando estiver configurado.</p></div>' + (!archived ? '<button class="button button-small" type="button" data-action="add-material" data-course="' + attr(lesson.courseId) + '" data-lesson="' + attr(lesson.id) + '"><i data-lucide="file-up"></i>Carregar</button>' : '') + '</div><div style="margin-top:15px">' + materialsHtml + '</div></article><article class="card span-7"><div class="card-title-row"><div><h3>Perguntas de anos anteriores</h3></div><div class="list-actions">' + (!archived ? '<button class="button button-small" type="button" data-action="add-question" data-course="' + attr(lesson.courseId) + '" data-lesson="' + attr(lesson.id) + '"><i data-lucide="plus"></i>Pergunta</button>' : '') + '</div></div><div style="margin-top:15px">' + questionsHtml + '</div></article><article class="card span-5 lesson-config-card"><div class="card-title-row"><div><h3>✅ Quiz da aula</h3><p class="card-subtitle">Um por aula. Podes editar até à primeira conclusão.</p></div></div>' + quizHtml + '</article><article class="card span-12 lesson-config-card"><div class="card-title-row"><div><h3>✅ TPC da aula</h3><p class="card-subtitle">Podes editar até o TPC ser concluído ou entregue.</p></div></div>' + homeworkHtml + '</article><article class="card span-12 notebook-card"><div class="card-title-row"><div><h3>Apontamentos</h3><p class="card-subtitle">Escreve livremente ou cria apontamentos escolhendo páginas e slides específicos.</p></div><div class="list-actions">' + (!archived ? '<button class="button button-small" type="button" data-action="configure-lesson-content" data-kind="notes" data-lesson="' + attr(lesson.id) + '"><i data-lucide="wand-sparkles"></i>Criar com IA</button><button class="button button-dark button-small" type="button" data-action="open-notebook-editor" data-lesson="' + attr(lesson.id) + '"><i data-lucide="pencil"></i>Escrever</button>' : '') + '</div></div><div style="margin-top:15px">' + renderNotebookPage(lesson, false) + '</div><div class="notebook-meta"><span><i data-lucide="notebook"></i>' + esc(notebookPaperLabel(lesson.notesPaper)) + '</span><button class="button button-small" type="button" data-action="course-tab" data-id="' + attr(lesson.courseId) + '" data-tab="notebook"><i data-lucide="library-big"></i>Ver caderno da cadeira</button></div></article></div>';
   }
 
   function plannerModeControl(active) {
@@ -4566,14 +4822,15 @@
     var outputCount = asArray(project.quizQuestions).length + asArray(project.flashcards).length + asArray(project.notes && project.notes.sections).length;
     var hasOutput = outputCount > 0 || !!project.summary;
     var hasFile = !!(project.remoteFile && project.remoteFile.path);
-    var badge = hasOutput ? (project.modelMode === "quality" ? "IA qualidade" : "IA pronta") : hasFile ? "PPT sincronizado" : "Só neste dispositivo";
+    var hasOriginal = hasFile || !!project.blobId;
+    var badge = hasOutput ? (project.modelMode === "quality" ? "IA qualidade" : "IA pronta") : hasFile ? "Ficheiro sincronizado" : "Só neste dispositivo";
     var badgeClass = hasOutput ? "badge-violet" : hasFile ? "badge-mint" : "badge-yellow";
     var icon = hasOutput ? "brain" : "presentation";
     var actions = '<button class="button button-dark button-small" type="button" data-action="ai-open-project" data-id="' + attr(project.id) + '"><i data-lucide="arrow-up-right"></i>Abrir</button>';
-    if (hasFile) actions += '<button class="button button-small" type="button" data-action="ai-download-pptx" data-id="' + attr(project.id) + '"><i data-lucide="download"></i>PPT</button>';
+    if (hasOriginal) actions += '<button class="button button-small" type="button" data-action="ai-download-pptx" data-id="' + attr(project.id) + '"><i data-lucide="download"></i>Ficheiro</button>';
     if (!hasOutput) actions += '<button class="button button-small" type="button" data-action="ai-use-project" data-id="' + attr(project.id) + '"><i data-lucide="sparkles"></i>Gerar</button>';
     else if (project.quizId) actions += '<button class="button button-small" type="button" data-action="ai-start-quiz" data-id="' + attr(project.id) + '"><i data-lucide="play"></i>Quiz</button>';
-    return '<article class="card ai-project-card span-4"><div class="card-title-row"><div><span class="badge ' + badgeClass + '">' + esc(badge) + '</span><h3 style="margin-top:12px">' + esc(project.title || project.fileName || "Slides") + '</h3><p class="card-subtitle">' + esc(course ? course.code || course.name : "Sem cadeira") + ' · ' + Number(project.slideCount || 0) + ' slides</p></div><span class="metric-icon"><i data-lucide="' + icon + '"></i></span></div><div class="ai-project-stats"><span><i data-lucide="cloud-check"></i>' + (hasFile ? "Guardado no Git" : "Local") + '</span><span><i data-lucide="hard-drive"></i>' + esc(formatBytes(project.fileSize || project.remoteFile && project.remoteFile.size || 0)) + '</span></div><div class="list-actions">' + actions + '</div></article>';
+    return '<article class="card ai-project-card span-4"><div class="card-title-row"><div><span class="badge ' + badgeClass + '">' + esc(badge) + '</span><h3 style="margin-top:12px">' + esc(project.title || project.fileName || "Slides") + '</h3><p class="card-subtitle">' + esc(course ? course.code || course.name : "Sem cadeira") + ' · ' + Number(project.slideCount || 0) + ' páginas/slides</p></div><span class="metric-icon"><i data-lucide="' + icon + '"></i></span></div><div class="ai-project-stats"><span><i data-lucide="cloud-check"></i>' + (hasFile ? "Guardado no Git" : "Local") + '</span><span><i data-lucide="hard-drive"></i>' + esc(formatBytes(project.fileSize || project.remoteFile && project.remoteFile.size || 0)) + '</span></div><div class="list-actions">' + actions + '</div></article>';
   }
 
   function renderStudyAI() {
@@ -4587,19 +4844,19 @@
     var outputValue = state.settings.aiOutput || "all";
     var difficultyValue = state.settings.aiDifficulty || "auto";
     var questionValue = Number(state.settings.aiQuestionCount) || 10;
-    var draftHtml = aiDraft ? '<div class="ai-file-ready"><span class="ai-file-icon"><i data-lucide="presentation"></i></span><div><strong>' + esc(aiDraft.fileName) + '</strong><small>' + Number(aiDraft.slideCount || 0) + ' slides · ' + formatBytes(aiDraft.fileSize || 0) + ' · ' + (aiDraft.remoteFile && aiDraft.remoteFile.path ? 'sincronizado no Git' : 'só neste dispositivo') + '</small></div><button class="icon-button" type="button" data-action="ai-clear-draft" aria-label="Fechar PowerPoint selecionado"><i data-lucide="x"></i></button></div>' : '<button class="ai-upload-zone" type="button" data-action="ai-pick-pptx"><span class="ai-upload-icon"><i data-lucide="upload-cloud"></i></span><strong>Escolher e sincronizar PowerPoint</strong><small>.pptx · até 25 MB · upload com progresso para o repositório privado</small></button>';
+    var draftHtml = aiDraft ? '<div class="ai-file-ready"><span class="ai-file-icon"><i data-lucide="presentation"></i></span><div><strong>' + esc(aiDraft.fileName) + '</strong><small>' + Number(aiDraft.slideCount || 0) + ' páginas/slides · ' + formatBytes(aiDraft.fileSize || 0) + ' · ' + (aiDraft.remoteFile && aiDraft.remoteFile.path ? 'sincronizado no Git' : 'só neste dispositivo') + '</small></div><button class="icon-button" type="button" data-action="ai-clear-draft" aria-label="Fechar Material selecionado"><i data-lucide="x"></i></button></div>' : '<button class="ai-upload-zone" type="button" data-action="ai-pick-pptx"><span class="ai-upload-icon"><i data-lucide="upload-cloud"></i></span><strong>Escolher PDF ou PowerPoint</strong><small>.pdf ou .pptx · até 25 MB · guardado localmente primeiro</small></button>';
     var modelWarning = supported ? '<span class="badge badge-mint"><i data-lucide="cpu"></i>WebGPU disponível</span>' : '<span class="badge badge-yellow"><i data-lucide="triangle-alert"></i>WebGPU indisponível</span>';
     var supportCopy = supported ? 'O modelo corre no browser e fica guardado neste dispositivo depois do primeiro download.' : 'Abre esta página no Chrome atualizado. Sem WebGPU, a geração local não consegue arrancar neste dispositivo.';
-    var projectHtml = projects.length ? projects.map(renderAIProjectCard).join("") : '<div class="span-12">' + emptyState("brain", "Ainda não tens projetos de IA", "Envia um PowerPoint para o Git e cria apontamentos, quizzes e flashcards sem API.", "ai-pick-pptx", "Escolher PowerPoint") + '</div>';
+    var projectHtml = projects.length ? projects.map(renderAIProjectCard).join("") : '<div class="span-12">' + emptyState("brain", "Ainda não tens projetos de IA", "Importa um PDF ou PowerPoint e cria apontamentos, quizzes e flashcards sem API.", "ai-pick-pptx", "Escolher material") + '</div>';
 
-    return '<div class="page-head"><div><button class="button button-ghost button-small" type="button" data-route="study" data-tab="practice"><i data-lucide="arrow-left"></i>Praticar</button><h2 style="margin-top:11px">Transforma slides em estudo.</h2><p>Apontamentos, resumo, quiz e flashcards gerados localmente no browser.</p></div><div class="page-actions">' + modelWarning + '<button class="button" type="button" data-action="ai-pick-pptx"><i data-lucide="file-plus-2"></i>Importar .pptx</button></div></div><div class="bento-grid ai-page"><article class="card card-violet span-12 ai-hero"><div><p class="card-label">Twenty AI · offline depois do download</p><h2>Dos slides para o modo estudo.</h2><p>' + esc(supportCopy) + '</p></div><div class="ai-hero-model"><span>Recomendado neste dispositivo</span><strong>' + esc(recommendation.label) + '</strong><small>' + esc(recommendation.size || "") + '</small></div></article>' + renderAIProgress() + '<article class="card span-7 ai-generator-card"><div class="card-title-row"><div><p class="card-label">1 · Importar</p><h3>PowerPoint</h3><p class="card-subtitle">A Twenty extrai o texto e envia o .pptx para a pasta data/files do repositório privado.</p></div><span class="metric-icon"><i data-lucide="presentation"></i></span></div>' + draftHtml + '<form id="aiGeneratorForm" class="form-grid ai-generator-form"><div class="field"><label>Cadeira</label><select name="courseId"><option value="">Sem cadeira específica</option>' + courseOptions(courseValue) + '</select></div><div class="field"><label>Modelo</label><select name="modelMode"><option value="auto" ' + (modelValue === "auto" ? 'selected' : '') + '>Automático · recomendado</option><option value="fast" ' + (modelValue === "fast" ? 'selected' : '') + '>Rápido · Qwen 0.5B</option><option value="quality" ' + (modelValue === "quality" ? 'selected' : '') + '>Qualidade · Qwen 1.5B</option></select></div><div class="field"><label>O que criar</label><select name="output"><option value="all" ' + (outputValue === "all" ? 'selected' : '') + '>Tudo</option><option value="notes" ' + (outputValue === "notes" ? 'selected' : '') + '>Apontamentos completos</option><option value="summary" ' + (outputValue === "summary" ? 'selected' : '') + '>Resumo rápido</option><option value="quiz" ' + (outputValue === "quiz" ? 'selected' : '') + '>Quiz</option><option value="flashcards" ' + (outputValue === "flashcards" ? 'selected' : '') + '>Flashcards</option></select></div><div class="field"><label>Dificuldade</label><select name="difficulty"><option value="auto" ' + (difficultyValue === "auto" ? 'selected' : '') + '>Automática</option><option value="easy" ' + (difficultyValue === "easy" ? 'selected' : '') + '>Fácil</option><option value="medium" ' + (difficultyValue === "medium" ? 'selected' : '') + '>Média</option><option value="hard" ' + (difficultyValue === "hard" ? 'selected' : '') + '>Difícil</option></select></div><div class="field field-full"><label>Número de perguntas / flashcards</label><div class="ai-range-row"><input name="questionCount" type="range" min="5" max="30" step="5" value="' + questionValue + '" data-role="ai-question-range"><output id="aiQuestionCountOutput">' + questionValue + '</output></div></div></form><button class="button button-dark ai-generate-button" type="button" data-action="ai-generate" ' + (!aiDraft || aiBusy || !supported ? 'disabled' : '') + '><i data-lucide="sparkles"></i>' + (aiBusy ? 'A gerar…' : 'Gerar material de estudo') + '</button><p class="form-note"><strong>Primeira utilização:</strong> o modelo pode ocupar centenas de MB. Depois fica em cache neste dispositivo. Slides compostos apenas por imagens ainda não têm OCR.</p></article><article class="card span-5 ai-device-card"><div class="card-title-row"><div><p class="card-label">Como funciona</p><h3>Privado por defeito</h3></div><span class="metric-icon"><i data-lucide="shield-check"></i></span></div><div class="ai-steps"><div><span>1</span><p><strong>Extrai texto</strong><small>JSZip abre o .pptx no browser.</small></p></div><div><span>2</span><p><strong>Gera localmente</strong><small>WebLLM usa a GPU com WebGPU.</small></p></div><div><span>3</span><p><strong>Guarda na Twenty</strong><small>PowerPoint, apontamentos e quiz sincronizam com o Git; o modelo continua local.</small></p></div></div><div class="form-note"><strong>Modelo recomendado:</strong> ' + esc(recommendation.label) + ' (' + esc(recommendation.size || "tamanho variável") + '). Podes escolher manualmente antes de gerar.</div></article><section class="span-12 section-block"><div class="section-heading"><div><h3>Apresentações sincronizadas</h3><p>Os PowerPoints aparecem em todos os teus dispositivos; os resultados da IA ficam associados ao mesmo ficheiro.</p></div><span class="badge badge-violet">' + projects.length + '</span></div><div class="bento-grid">' + projectHtml + '</div></section></div>';
+    return '<div class="page-head"><div><button class="button button-ghost button-small" type="button" data-route="study" data-tab="practice"><i data-lucide="arrow-left"></i>Praticar</button><h2 style="margin-top:11px">Transforma slides em estudo.</h2><p>Apontamentos, resumo, quiz e flashcards gerados localmente no browser.</p></div><div class="page-actions">' + modelWarning + '<button class="button" type="button" data-action="ai-pick-pptx"><i data-lucide="file-plus-2"></i>Importar PDF/PPTX</button></div></div><div class="bento-grid ai-page"><article class="card card-violet span-12 ai-hero"><div><p class="card-label">Twenty AI · offline depois do download</p><h2>Dos slides para o modo estudo.</h2><p>' + esc(supportCopy) + '</p></div><div class="ai-hero-model"><span>Recomendado neste dispositivo</span><strong>' + esc(recommendation.label) + '</strong><small>' + esc(recommendation.size || "") + '</small></div></article>' + renderAIProgress() + '<article class="card span-7 ai-generator-card"><div class="card-title-row"><div><p class="card-label">1 · Importar</p><h3>PDF ou PowerPoint</h3><p class="card-subtitle">A Twenty extrai o texto por página/slide e guarda o ficheiro primeiro neste dispositivo.</p></div><span class="metric-icon"><i data-lucide="presentation"></i></span></div>' + draftHtml + '<form id="aiGeneratorForm" class="form-grid ai-generator-form"><div class="field"><label>Cadeira</label><select name="courseId"><option value="">Sem cadeira específica</option>' + courseOptions(courseValue) + '</select></div><div class="field"><label>Modelo</label><select name="modelMode"><option value="auto" ' + (modelValue === "auto" ? 'selected' : '') + '>Automático · recomendado</option><option value="fast" ' + (modelValue === "fast" ? 'selected' : '') + '>Rápido · Qwen 0.5B</option><option value="quality" ' + (modelValue === "quality" ? 'selected' : '') + '>Qualidade · Qwen 1.5B</option></select></div><div class="field"><label>O que criar</label><select name="output"><option value="all" ' + (outputValue === "all" ? 'selected' : '') + '>Tudo</option><option value="notes" ' + (outputValue === "notes" ? 'selected' : '') + '>Apontamentos completos</option><option value="summary" ' + (outputValue === "summary" ? 'selected' : '') + '>Resumo rápido</option><option value="quiz" ' + (outputValue === "quiz" ? 'selected' : '') + '>Quiz</option><option value="flashcards" ' + (outputValue === "flashcards" ? 'selected' : '') + '>Flashcards</option></select></div><div class="field"><label>Dificuldade</label><select name="difficulty"><option value="auto" ' + (difficultyValue === "auto" ? 'selected' : '') + '>Automática</option><option value="easy" ' + (difficultyValue === "easy" ? 'selected' : '') + '>Fácil</option><option value="medium" ' + (difficultyValue === "medium" ? 'selected' : '') + '>Média</option><option value="hard" ' + (difficultyValue === "hard" ? 'selected' : '') + '>Difícil</option></select></div><div class="field field-full"><label>Número de perguntas / flashcards</label><div class="ai-range-row"><input name="questionCount" type="range" min="5" max="30" step="5" value="' + questionValue + '" data-role="ai-question-range"><output id="aiQuestionCountOutput">' + questionValue + '</output></div></div></form><button class="button button-dark ai-generate-button" type="button" data-action="ai-generate" ' + (!aiDraft || aiBusy || !supported ? 'disabled' : '') + '><i data-lucide="sparkles"></i>' + (aiBusy ? 'A gerar…' : 'Gerar material de estudo') + '</button><p class="form-note"><strong>Primeira utilização:</strong> o modelo pode ocupar centenas de MB. Depois fica em cache neste dispositivo. Slides compostos apenas por imagens ainda não têm OCR.</p></article><article class="card span-5 ai-device-card"><div class="card-title-row"><div><p class="card-label">Como funciona</p><h3>Privado por defeito</h3></div><span class="metric-icon"><i data-lucide="shield-check"></i></span></div><div class="ai-steps"><div><span>1</span><p><strong>Extrai texto</strong><small>O leitor adequado extrai texto do PDF ou PowerPoint.</small></p></div><div><span>2</span><p><strong>Gera localmente</strong><small>WebLLM usa a GPU com WebGPU.</small></p></div><div><span>3</span><p><strong>Guarda na Twenty</strong><small>O material, apontamentos e quiz podem sincronizar com o Git; o modelo continua local.</small></p></div></div><div class="form-note"><strong>Modelo recomendado:</strong> ' + esc(recommendation.label) + ' (' + esc(recommendation.size || "tamanho variável") + '). Podes escolher manualmente antes de gerar.</div></article><section class="span-12 section-block"><div class="section-heading"><div><h3>Materiais de IA</h3><p>PDFs e PowerPoints ficam associados aos resultados da IA e podem sincronizar entre dispositivos.</p></div><span class="badge badge-violet">' + projects.length + '</span></div><div class="bento-grid">' + projectHtml + '</div></section></div>';
   }
 
 
   function beginLessonFromSlides(courseId) {
     var course = courseById(courseId);
     if (!course) { toast("Escolhe uma cadeira válida.", "warning"); return; }
-    if (!AI || !AI.extractPptx || !AI.generateStudyPack) { toast("A IA local ainda não está disponível neste browser.", "warning"); return; }
+    if (!AI || !AI.extractDocument || !AI.generateStudyPack) { toast("A IA local ainda não está disponível neste browser.", "warning"); return; }
     if (AI.supportsWebGPU && !AI.supportsWebGPU()) {
       toast("Para analisar os slides, abre a Twenty no Chrome atualizado com WebGPU.", "warning");
       return;
@@ -4655,8 +4912,8 @@
     var questionPreview = questions.length ? questions.slice(0, 4).map(lessonSlideQuestionPreview).join("") + (questions.length > 4 ? '<small class="lesson-slide-more">+' + (questions.length - 4) + ' perguntas no Quiz-Aula</small>' : '') : '<p class="form-note">Não foram geradas perguntas válidas. Podes criar a aula sem quiz.</p>';
     var syncCopy = draft.remoteFile ? 'Sincronizado no Git e guardado localmente.' : 'Guardado neste dispositivo. Poderás sincronizá-lo mais tarde.';
     var body = '<form id="lessonFromSlidesForm" class="lesson-from-slides-form" data-course="' + attr(course.id) + '">'
-      + '<section class="lesson-slide-source"><span class="metric-icon"><i data-lucide="presentation"></i></span><div><p class="card-label">PowerPoint analisado</p><h3>' + esc(draft.fileName) + '</h3><small>' + Number(draft.extracted.slideCount || 0) + ' slides · ' + esc(syncCopy) + '</small></div><span class="badge badge-violet"><i data-lucide="sparkles"></i>IA local</span></section>'
-      + '<div class="lesson-slide-review-grid"><section class="lesson-slide-review-main"><div class="section-heading"><div><h3>1 · Aula</h3><p>Revê o que a IA percebeu antes de guardar.</p></div></div><div class="form-grid"><div class="field field-full"><label>Título da aula</label><input name="title" required maxlength="100" value="' + attr(plan.title || draft.fileName.replace(/\.pptx$/i, "")) + '"></div><div class="field field-full"><label>Descrição</label><textarea name="description" rows="4" required>' + esc(plan.description || (notes && notes.overview) || "") + '</textarea></div><div class="field"><label>Data</label><input name="date" type="date" required value="' + attr(preset.date || todayISO()) + '"></div><div class="field"><label>Tipo</label><select name="type"><option value="T" ' + (preset.type === "T" ? "selected" : "") + '>Teórica</option><option value="TP" ' + (preset.type === "TP" ? "selected" : "") + '>Teórico-prática</option><option value="P" ' + (preset.type === "P" ? "selected" : "") + '>Prática</option><option value="LAB" ' + (preset.type === "LAB" ? "selected" : "") + '>Laboratório</option><option value="OT" ' + (preset.type === "OT" ? "selected" : "") + '>Orientação</option></select></div><div class="field"><label>Início</label><input name="start" type="time" value="' + attr(preset.start || "") + '"></div><div class="field"><label>Fim</label><input name="end" type="time" value="' + attr(preset.end || "") + '"></div><div class="field field-full"><label>Sala</label><input name="room" maxlength="80" value="' + attr(preset.room || "") + '"></div></div><div class="lesson-slide-objective-card"><strong>Objetivos identificados</strong>' + objectiveHtml + '</div></section>'
+      + '<section class="lesson-slide-source"><span class="metric-icon"><i data-lucide="presentation"></i></span><div><p class="card-label">Material analisado</p><h3>' + esc(draft.fileName) + '</h3><small>' + Number(draft.extracted.slideCount || 0) + ' páginas/slides · ' + esc(syncCopy) + '</small></div><span class="badge badge-violet"><i data-lucide="sparkles"></i>IA local</span></section>'
+      + '<div class="lesson-slide-review-grid"><section class="lesson-slide-review-main"><div class="section-heading"><div><h3>1 · Aula</h3><p>Revê o que a IA percebeu antes de guardar.</p></div></div><div class="form-grid"><div class="field field-full"><label>Título da aula</label><input name="title" required maxlength="100" value="' + attr(plan.title || draft.fileName.replace(/\.(?:pptx|pdf)$/i, "")) + '"></div><div class="field field-full"><label>Descrição</label><textarea name="description" rows="4" required>' + esc(plan.description || (notes && notes.overview) || "") + '</textarea></div><div class="field"><label>Data</label><input name="date" type="date" required value="' + attr(preset.date || todayISO()) + '"></div><div class="field"><label>Tipo</label><select name="type"><option value="T" ' + (preset.type === "T" ? "selected" : "") + '>Teórica</option><option value="TP" ' + (preset.type === "TP" ? "selected" : "") + '>Teórico-prática</option><option value="P" ' + (preset.type === "P" ? "selected" : "") + '>Prática</option><option value="LAB" ' + (preset.type === "LAB" ? "selected" : "") + '>Laboratório</option><option value="OT" ' + (preset.type === "OT" ? "selected" : "") + '>Orientação</option></select></div><div class="field"><label>Início</label><input name="start" type="time" value="' + attr(preset.start || "") + '"></div><div class="field"><label>Fim</label><input name="end" type="time" value="' + attr(preset.end || "") + '"></div><div class="field field-full"><label>Sala</label><input name="room" maxlength="80" value="' + attr(preset.room || "") + '"></div></div><div class="lesson-slide-objective-card"><strong>Objetivos identificados</strong>' + objectiveHtml + '</div></section>'
       + '<aside class="lesson-slide-review-side"><section class="lesson-slide-option is-enabled"><label class="lesson-slide-toggle"><input type="checkbox" name="includeQuiz" ' + (questions.length ? "checked" : "") + '><span><strong>Criar Quiz-Aula</strong><small>' + questions.length + ' perguntas · minijogos adaptados ao conteúdo</small></span></label><div class="field"><label>Título do quiz</label><input name="quizTitle" maxlength="120" value="' + attr(plan.quizTitle || ("Quiz da aula · " + (plan.title || "Nova aula"))) + '"></div><div class="lesson-slide-question-list">' + questionPreview + '</div></section><section class="lesson-slide-option is-enabled"><label class="lesson-slide-toggle"><input type="checkbox" name="includeHomework" checked><span><strong>Criar TPC</strong><small>Fica ligado à aula e entra nas mailboxes.</small></span></label><div class="field"><label>Título do TPC</label><input name="homeworkTitle" maxlength="120" value="' + attr(homework.title || ("TPC · " + (plan.title || "Nova aula"))) + '"></div><div class="field"><label>Instruções</label><textarea name="homeworkInstructions" rows="4">' + esc(homework.instructions || "") + '</textarea></div><div class="form-grid"><div class="field"><label>Prazo</label><input name="homeworkDueDate" type="date" value="' + attr(dueDate) + '"></div><div class="field"><label>Tempo estimado</label><input name="homeworkMinutes" type="number" min="5" max="240" step="5" value="' + attr(homework.estimatedMinutes || 30) + '"></div></div><div class="field"><label>Passos · um por linha</label><textarea name="homeworkSteps" rows="4">' + esc(asArray(homework.steps).join("\n")) + '</textarea></div></section></aside></div><div class="form-error" hidden></div></form>';
     var footer = '<footer class="modal-foot"><button class="button" type="button" data-action="cancel-lesson-from-slides">Cancelar</button><button class="button button-dark" type="button" data-action="confirm-lesson-from-slides"><i data-lucide="sparkles"></i>Criar aula completa</button></footer>';
     openModal("Criar aula a partir dos slides", body, { className: "modal-lesson-from-slides", footer: footer });
@@ -4668,18 +4925,18 @@
     if (!file || !context || !AI) return;
     var course = courseById(context.courseId);
     if (!course) return;
-    if (!/\.pptx$/i.test(file.name || "")) { toast("Escolhe um ficheiro PowerPoint .pptx.", "warning"); return; }
-    if (file.size > 25 * 1024 * 1024) { toast("O PowerPoint tem mais de 25 MB.", "warning"); return; }
+    if (!/\.(?:pptx|pdf)$/i.test(file.name || "")) { toast("Escolhe um PDF ou PowerPoint (.pdf ou .pptx).", "warning"); return; }
+    if (file.size > 25 * 1024 * 1024) { toast("O ficheiro tem mais de 25 MB.", "warning"); return; }
     aiBusy = true;
     var temporaryBlobId = null;
     var temporaryRemoteFile = null;
-    setManualSyncActivity("A abrir os slides…", "A Twenty está a extrair o texto do PowerPoint.", 3, true);
+    setManualSyncActivity("A abrir o material…", "A Twenty está a extrair o texto do PDF ou PowerPoint.", 3, true);
     try {
-      var extracted = await AI.extractPptx(file, function (report) {
-        setManualSyncActivity("A analisar os slides…", report.text || "A ler o PowerPoint.", Math.min(24, Number(report.progress) || 5), true);
+      var extracted = await AI.extractDocument(file, function (report) {
+        setManualSyncActivity("A analisar o material…", report.text || "A ler o documento.", Math.min(24, Number(report.progress) || 5), true);
       });
       var hasText = asArray(extracted.slides).some(function (slide) { return String(slide.text || "").trim().length > 20; });
-      if (!hasText) throw new Error("Não encontrei texto selecionável nos slides. PowerPoints compostos apenas por imagens ainda precisam de OCR.");
+      if (!hasText) throw new Error("Não encontrei texto selecionável. PDFs digitalizados ou slides compostos apenas por imagens ainda precisam de OCR.");
       var materialId = uid("material");
       var blobId = await DB.putFile(file, { courseId: course.id, lessonId: null, source: "lesson-from-slides" });
       temporaryBlobId = blobId;
@@ -4692,7 +4949,7 @@
             name: file.name,
             onProgress: function (report) {
               var progress = report.progress == null ? null : 25 + Math.round(report.progress * 0.22);
-              setManualSyncActivity("A guardar os slides…", report.total ? formatBytes(report.loaded) + " de " + formatBytes(report.total) : "A enviar o PowerPoint…", progress, true);
+              setManualSyncActivity("A guardar os slides…", report.total ? formatBytes(report.loaded) + " de " + formatBytes(report.total) : "A enviar o ficheiro…", progress, true);
             },
             onReady: function (request) { aiTransferRequest = request; }
           });
@@ -4884,54 +5141,60 @@
   }
 
   async function handleAIPptxFile(file) {
-    if (!file || !AI) return;
-    if (!Sync || !Sync.getStatus().configured) {
-      toast("Configura primeiro o Git em Admin & dados para sincronizar o PowerPoint.", "warning");
-      if (pptxInput) pptxInput.value = "";
-      return;
-    }
-    if (!navigator.onLine) {
-      toast("Precisas de Internet para enviar o PowerPoint para o repositório privado.", "warning");
+    if (!file || !AI || !AI.extractDocument) return;
+    if (!/\.(?:pptx|pdf)$/i.test(file.name || "")) {
+      toast("Escolhe um PDF ou PowerPoint (.pdf ou .pptx).", "warning");
       if (pptxInput) pptxInput.value = "";
       return;
     }
     aiBusy = true;
     aiDraft = null;
     var projectId = uid("aiproject");
-    setAIProgress("A abrir o PowerPoint…", "A preparar o leitor de slides.", 2);
+    var blobId = null;
+    setAIProgress("A abrir o material…", "A preparar o leitor de PDF ou PowerPoint.", 2);
     if (route.name !== "study" || route.tab !== "ai") setRoute("study", null, "ai");
     else render();
     try {
-      var extracted = await AI.extractPptx(file, function (report) {
-        var progress = report.progress == null ? null : Math.min(30, Number(report.progress));
-        setAIProgress("A extrair os slides…", report.text || "A ler o PowerPoint.", progress);
+      var extracted = await AI.extractDocument(file, function (report) {
+        var progress = report.progress == null ? null : Math.min(32, Number(report.progress));
+        setAIProgress("A extrair o conteúdo…", report.text || "A ler o documento.", progress);
       });
-      setAIProgress("A enviar o PowerPoint…", "A iniciar o upload seguro para o repositório privado.", 34);
-      var remoteFile = await Sync.uploadFile(file, {
-        id: projectId,
-        name: file.name,
-        onProgress: function (report) {
-          var progress = report.progress == null ? null : 34 + Math.round(report.progress * 0.52);
-          var detail = report.total ? formatBytes(report.loaded) + " de " + formatBytes(report.total) + " enviados" : "A enviar o ficheiro…";
-          setAIProgress("A enviar o PowerPoint…", detail, progress);
-        },
-        onUploadComplete: function () {
-          setAIProgress("A confirmar no GitHub…", "O upload terminou. A aguardar a criação do commit do ficheiro.", 88);
-        },
-        onReady: function (request) { aiTransferRequest = request; }
-      });
+      setAIProgress("A guardar neste dispositivo…", "O ficheiro fica disponível mesmo sem Git configurado.", 38);
+      blobId = await DB.putFile(file, { aiProjectId: projectId, source: "study-ai" });
+      var remoteFile = null;
+      if (Sync && Sync.getStatus().configured && navigator.onLine) {
+        try {
+          setAIProgress("A sincronizar uma cópia…", "A enviar o ficheiro para o repositório privado.", 48);
+          remoteFile = await Sync.uploadFile(file, {
+            id: projectId,
+            name: file.name,
+            onProgress: function (report) {
+              var progress = report.progress == null ? null : 48 + Math.round(report.progress * .42);
+              var detail = report.total ? formatBytes(report.loaded) + " de " + formatBytes(report.total) + " enviados" : "A enviar o ficheiro…";
+              setAIProgress("A sincronizar uma cópia…", detail, progress);
+            },
+            onUploadComplete: function () { setAIProgress("A confirmar no GitHub…", "A aguardar a confirmação do ficheiro.", 91); },
+            onReady: function (request) { aiTransferRequest = request; }
+          });
+        } catch (syncError) {
+          console.warn("AI source remote sync deferred:", syncError);
+          remoteFile = null;
+        }
+      }
       aiTransferRequest = null;
       var project = {
         id: projectId,
         semesterId: state.currentSemesterId,
         courseId: null,
         quizId: null,
-        title: String(extracted.fileName || file.name).replace(/\.pptx$/i, ""),
+        title: String(extracted.fileName || file.name).replace(/\.(?:pptx|pdf)$/i, ""),
         fileName: extracted.fileName || file.name,
         fileSize: extracted.fileSize || file.size,
         slideCount: extracted.slideCount,
         slides: extracted.slides,
+        blobId: blobId,
         remoteFile: remoteFile,
+        sourceType: /\.pdf$/i.test(file.name || "") ? "pdf" : "pptx",
         summary: "",
         notes: null,
         flashcards: [],
@@ -4941,26 +5204,27 @@
         questionCount: 10,
         modelMode: "",
         modelId: "",
-        status: "uploaded",
+        status: remoteFile ? "uploaded" : "local",
         createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString()
       };
       state.aiProjects.unshift(project);
       aiDraft = project;
-      setAIProgress("A guardar na Twenty…", "A sincronizar os metadados e o texto dos slides para os outros dispositivos.", 94);
+      setAIProgress("A guardar na Twenty…", remoteFile ? "O texto e a referência remota estão a ser guardados." : "O texto e o ficheiro local estão a ser guardados.", 94);
       await save(true);
-      try { await Sync.syncNow(state, defaultState()); } catch (syncError) { console.warn("PPT metadata sync queued:", syncError); }
+      if (remoteFile && Sync) { try { await Sync.syncNow(state, defaultState()); } catch (syncError) { console.warn("AI metadata sync queued:", syncError); } }
       aiDraft = aiProjectById(projectId) || project;
       aiBusy = false;
-      setAIProgress("PowerPoint sincronizado", "O ficheiro já pode aparecer nos teus outros dispositivos.", 100);
+      setAIProgress("Material pronto", extracted.slideCount + " página(s)/slide(s) preparados para a IA.", 100);
       setTimeout(function () { clearAIProgress(); render(); }, 520);
       render();
-      toast(extracted.slideCount + " slides enviados e sincronizados.");
+      toast(extracted.slideCount + " página(s)/slide(s) preparados.");
     } catch (error) {
+      if (blobId) { try { await DB.deleteFile(blobId); } catch (_) {} }
       aiBusy = false;
       clearAIProgress();
       render();
-      toast(error.message || "Não foi possível enviar o PowerPoint.", "error");
+      toast(error.message || "Não foi possível importar o material.", "error");
     } finally {
       aiTransferRequest = null;
       if (pptxInput) pptxInput.value = "";
@@ -4995,6 +5259,8 @@
       project.semesterId = state.currentSemesterId;
       project.courseId = courseId;
       project.remoteFile = sourceProject.remoteFile || null;
+      project.blobId = sourceProject.blobId || null;
+      project.sourceType = sourceProject.sourceType || (/\.pdf$/i.test(sourceProject.fileName || "") ? "pdf" : "pptx");
       project.createdAt = sourceProject.createdAt || project.createdAt;
       project.updatedAt = new Date().toISOString();
       project.status = "ready";
@@ -5036,12 +5302,13 @@
     var course = courseById(project.courseId);
     var notes = project.notes || null;
     var hasFile = !!(project.remoteFile && project.remoteFile.path);
-    var notesHtml = notes ? '<section class="ai-result-section"><div class="section-heading"><div><p class="card-label">Apontamentos</p><h3>' + esc(notes.title || project.title) + '</h3></div></div>' + (notes.overview ? '<p class="ai-overview">' + nl2br(notes.overview) + '</p>' : '') + asArray(notes.sections).map(function (section) { return '<article class="ai-note-section"><h4>' + esc(section.heading) + '</h4><p>' + nl2br(section.content) + '</p>' + aiSourceButtons(project, section.sourceSlides) + '</article>'; }).join("") + (asArray(notes.keyTakeaways).length ? '<div class="ai-takeaways"><p class="card-label">O essencial</p><ul>' + notes.keyTakeaways.map(function (item) { return '<li>' + esc(item) + '</li>'; }).join("") + '</ul></div>' : '') + '</section>' : (project.summary ? '<section class="ai-result-section"><p class="card-label">Resumo</p><p class="ai-overview">' + nl2br(project.summary) + '</p></section>' : '<section class="ai-result-section ai-awaiting-generation"><span class="metric-icon"><i data-lucide="sparkles"></i></span><div><p class="card-label">Pronto para gerar</p><h3>O PowerPoint já está sincronizado</h3><p class="card-subtitle">Podes gerar os apontamentos e o quiz neste dispositivo ou noutro com WebGPU.</p></div><button class="button button-dark" type="button" data-action="ai-use-project" data-id="' + attr(project.id) + '"><i data-lucide="sparkles"></i>Gerar material</button></section>');
-    var fileHtml = '<section class="ai-result-section ai-file-sync-section"><span class="ai-file-icon"><i data-lucide="presentation"></i></span><div><p class="card-label">PowerPoint original</p><h3>' + esc(project.fileName || "Apresentação") + '</h3><p class="card-subtitle">' + formatBytes(project.fileSize || project.remoteFile && project.remoteFile.size || 0) + ' · ' + Number(project.slideCount || 0) + ' slides · ' + (hasFile ? 'guardado em data/files' : 'apenas local') + '</p></div>' + (hasFile ? '<button class="button" type="button" data-action="ai-download-pptx" data-id="' + attr(project.id) + '"><i data-lucide="download"></i>Descarregar</button>' : '') + '</section>';
+    var hasOriginal = hasFile || !!project.blobId;
+    var notesHtml = notes ? '<section class="ai-result-section"><div class="section-heading"><div><p class="card-label">Apontamentos</p><h3>' + esc(notes.title || project.title) + '</h3></div></div>' + (notes.overview ? '<p class="ai-overview">' + nl2br(notes.overview) + '</p>' : '') + asArray(notes.sections).map(function (section) { return '<article class="ai-note-section"><h4>' + esc(section.heading) + '</h4><p>' + nl2br(section.content) + '</p>' + aiSourceButtons(project, section.sourceSlides) + '</article>'; }).join("") + (asArray(notes.keyTakeaways).length ? '<div class="ai-takeaways"><p class="card-label">O essencial</p><ul>' + notes.keyTakeaways.map(function (item) { return '<li>' + esc(item) + '</li>'; }).join("") + '</ul></div>' : '') + '</section>' : (project.summary ? '<section class="ai-result-section"><p class="card-label">Resumo</p><p class="ai-overview">' + nl2br(project.summary) + '</p></section>' : '<section class="ai-result-section ai-awaiting-generation"><span class="metric-icon"><i data-lucide="sparkles"></i></span><div><p class="card-label">Pronto para gerar</p><h3>O material já está preparado</h3><p class="card-subtitle">Podes gerar os apontamentos e o quiz neste dispositivo ou noutro com WebGPU.</p></div><button class="button button-dark" type="button" data-action="ai-use-project" data-id="' + attr(project.id) + '"><i data-lucide="sparkles"></i>Gerar material</button></section>');
+    var fileHtml = '<section class="ai-result-section ai-file-sync-section"><span class="ai-file-icon"><i data-lucide="presentation"></i></span><div><p class="card-label">Material original</p><h3>' + esc(project.fileName || "Apresentação") + '</h3><p class="card-subtitle">' + formatBytes(project.fileSize || project.remoteFile && project.remoteFile.size || 0) + ' · ' + Number(project.slideCount || 0) + ' páginas/slides · ' + (hasFile ? 'guardado em data/files' : 'apenas local') + '</p></div>' + (hasOriginal ? '<button class="button" type="button" data-action="ai-download-pptx" data-id="' + attr(project.id) + '"><i data-lucide="download"></i>Descarregar</button>' : '') + '</section>';
     var cardsHtml = asArray(project.flashcards).length ? '<section class="ai-result-section"><div class="section-heading"><div><p class="card-label">Flashcards</p><h3>' + project.flashcards.length + ' cartões</h3></div></div><div class="ai-flashcard-grid">' + project.flashcards.map(function (card, index) { return '<details class="ai-flashcard"><summary><span>' + (index + 1) + '</span>' + esc(card.front) + '</summary><div><p>' + nl2br(card.back) + '</p>' + aiSourceButtons(project, card.sourceSlides) + '</div></details>'; }).join("") + '</div></section>' : '';
     var quizHtml = asArray(project.quizQuestions).length ? '<section class="ai-result-section ai-quiz-summary"><div><p class="card-label">Quiz</p><h3>' + project.quizQuestions.length + ' perguntas prontas</h3><p class="card-subtitle">Dificuldade ' + esc(aiDifficultyLabel(project.difficulty).toLowerCase()) + ' · resposta e explicação incluídas.</p></div><button class="button button-dark" type="button" data-action="ai-start-quiz" data-id="' + attr(project.id) + '"><i data-lucide="play"></i>Começar quiz</button></section>' : '';
     var warning = project.warning ? '<div class="form-note"><strong>Compatibilidade:</strong> ' + esc(project.warning) + '</div>' : '';
-    var body = '<div class="ai-project-modal-head"><div><span class="badge ' + (hasFile ? 'badge-mint' : 'badge-yellow') + '">' + (hasFile ? 'PPT sincronizado' : 'PPT local') + '</span><h2>' + esc(project.title) + '</h2><p>' + esc(course ? course.name : "Sem cadeira") + ' · ' + Number(project.slideCount || 0) + ' slides' + (project.modelMode ? ' · ' + esc(project.modelMode === "quality" ? "modelo de qualidade" : "modelo rápido") : '') + '</p></div><span class="ai-file-icon"><i data-lucide="' + (notes || project.summary ? 'brain' : 'presentation') + '"></i></span></div>' + fileHtml + warning + notesHtml + cardsHtml + quizHtml;
+    var body = '<div class="ai-project-modal-head"><div><span class="badge ' + (hasFile ? 'badge-mint' : 'badge-yellow') + '">' + (hasFile ? 'Ficheiro sincronizado' : 'Ficheiro local') + '</span><h2>' + esc(project.title) + '</h2><p>' + esc(course ? course.name : "Sem cadeira") + ' · ' + Number(project.slideCount || 0) + ' slides' + (project.modelMode ? ' · ' + esc(project.modelMode === "quality" ? "modelo de qualidade" : "modelo rápido") : '') + '</p></div><span class="ai-file-icon"><i data-lucide="' + (notes || project.summary ? 'brain' : 'presentation') + '"></i></span></div>' + fileHtml + warning + notesHtml + cardsHtml + quizHtml;
     var footer = '<footer class="modal-foot"><button class="button button-danger" type="button" data-action="ai-delete-project" data-id="' + attr(project.id) + '"><i data-lucide="trash-2"></i>Apagar</button><button class="button" type="button" data-action="close-modal">Fechar</button></footer>';
     openModal("Projeto de IA", body, { className: "modal-wide ai-project-modal", footer: footer });
   }
@@ -5053,19 +5320,27 @@
     closeModal();
     setRoute("study", null, "ai");
     render();
-    toast("PowerPoint selecionado. Escolhe o que queres gerar.");
+    toast("Material selecionado. Escolhe o que queres gerar.");
   }
 
   async function downloadAIProjectFile(id) {
     var project = aiProjectById(id);
-    if (!project || !project.remoteFile || !project.remoteFile.path || !Sync) { toast("Este PowerPoint não está disponível no servidor.", "warning"); return; }
+    if (!project) return;
     closeModal();
-    setAIProgress("A descarregar o PowerPoint…", "A preparar o ficheiro guardado no repositório privado.", 4);
+    setAIProgress("A preparar o material…", project.blobId ? "A abrir a cópia guardada neste dispositivo." : "A preparar o ficheiro guardado no repositório privado.", 4);
     render();
     try {
-      var blob = await Sync.downloadFile(project.remoteFile, { onProgress: function (report) { var progress = report.progress == null ? null : 5 + Math.round(report.progress * 0.9); var detail = report.total ? formatBytes(report.loaded) + " de " + formatBytes(report.total) + " descarregados" : "A receber o ficheiro…"; setAIProgress("A descarregar o PowerPoint…", detail, progress); }, onReady: function (request) { aiTransferRequest = request; } });
+      var blob = null;
+      if (project.blobId) {
+        var localRecord = await DB.getFile(project.blobId);
+        blob = localRecord && localRecord.blob;
+      }
+      if (!blob && project.remoteFile && project.remoteFile.path && Sync) {
+        blob = await Sync.downloadFile(project.remoteFile, { onProgress: function (report) { var progress = report.progress == null ? null : 5 + Math.round(report.progress * 0.9); var detail = report.total ? formatBytes(report.loaded) + " de " + formatBytes(report.total) + " descarregados" : "A receber o ficheiro…"; setAIProgress("A descarregar o material…", detail, progress); }, onReady: function (request) { aiTransferRequest = request; } });
+      }
+      if (!blob) throw new Error("A cópia original deste material não está disponível neste dispositivo nem no Git.");
       aiTransferRequest = null;
-      setAIProgress("PowerPoint pronto", "A abrir o download neste dispositivo.", 100);
+      setAIProgress("Material pronto", "A abrir o download neste dispositivo.", 100);
       var url = URL.createObjectURL(blob);
       var link = document.createElement("a");
       link.href = url;
@@ -5078,7 +5353,7 @@
       aiTransferRequest = null;
       clearAIProgress();
       render();
-      toast(error.message || "Não foi possível descarregar o PowerPoint.", "error");
+      toast(error.message || "Não foi possível descarregar o material.", "error");
     }
   }
 
@@ -5095,7 +5370,7 @@
   function confirmDeleteAIProject(id) {
     var project = aiProjectById(id);
     if (!project) return;
-    var fileCopy = project.remoteFile && project.remoteFile.path ? " O PowerPoint sincronizado também será apagado de data/files." : "";
+    var fileCopy = project.remoteFile && project.remoteFile.path ? " O ficheiro sincronizado também será apagado de data/files." : "";
     openModal("Apagar projeto de IA?", '<p class="onboarding-copy" style="margin-top:0">Vais apagar os apontamentos, flashcards e o quiz de <strong>' + esc(project.title) + '</strong>.' + fileCopy + '</p>', { footer: '<footer class="modal-foot"><button class="button" type="button" data-action="ai-open-project" data-id="' + attr(project.id) + '">Cancelar</button><button class="button button-danger" type="button" data-action="confirm-ai-delete-project" data-id="' + attr(project.id) + '"><i data-lucide="trash-2"></i>Apagar</button></footer>' });
   }
 
@@ -5103,10 +5378,11 @@
     var project = aiProjectById(id);
     if (!project) return;
     closeModal();
-    setAIProgress("A apagar o projeto…", project.remoteFile && project.remoteFile.path ? "A remover o PowerPoint do repositório privado." : "A remover os dados da Twenty.", 18);
+    setAIProgress("A apagar o projeto…", project.remoteFile && project.remoteFile.path ? "A remover o ficheiro do repositório privado." : "A remover os dados da Twenty.", 18);
     render();
     try {
       if (project.remoteFile && project.remoteFile.path && Sync) { await Sync.deleteFile(project.remoteFile); setAIProgress("A atualizar a data…", "A remover apontamentos e quiz do estado sincronizado.", 72); }
+      if (project.blobId) { try { await DB.deleteFile(project.blobId); } catch (_) {} }
       state.aiProjects = state.aiProjects.filter(function (item) { return item.id !== id; });
       if (project.quizId) state.quizzes = state.quizzes.filter(function (quiz) { return quiz.id !== project.quizId; });
       if (aiDraft && aiDraft.id === id) aiDraft = null;
@@ -5115,7 +5391,7 @@
       setAIProgress("Projeto apagado", "A alteração já foi guardada.", 100);
       setTimeout(function () { clearAIProgress(); render(); }, 450);
       render();
-      toast("Projeto de IA e PowerPoint apagados.");
+      toast("Projeto de IA e material apagados.");
     } catch (error) {
       clearAIProgress();
       render();
@@ -5532,7 +5808,7 @@
     return '<div class="study-section-intro"><div><p class="card-label">Praticar</p><h2>Como queres testar a matéria?</h2><p>Escolhe uma atividade. A Twenty guarda os erros e agenda o que precisa de voltar.</p></div><button class="button button-dark" type="button" data-action="add-quiz"><i data-lucide="plus"></i>Novo quiz</button></div>'
       + '<div class="study-tool-grid"><button class="study-tool-card tool-diagnostic" type="button" data-route="study" data-tab="diagnostic"><span class="study-tool-icon"><i data-lucide="scan-search"></i></span><span><small>Antes de estudar muita matéria</small><strong>Diagnóstico rápido</strong><p>Descobre o que já dominas e revê apenas as lacunas.</p><b>' + diagnostics.length + ' realizados</b></span><i data-lucide="arrow-right"></i></button>'
       + '<button class="study-tool-card tool-flashcards" type="button" data-route="study" data-tab="flashcards"><span class="study-tool-icon"><i data-lucide="layers-3"></i></span><span><small>Recuperação curta</small><strong>Flashcards</strong><p>Cria cartões por cadeira e integra-os na revisão espaçada.</p><b>' + flashcards.length + ' cartões</b></span><i data-lucide="arrow-right"></i></button>'
-      + '<button class="study-tool-card tool-ai" type="button" data-route="study" data-tab="ai"><span class="study-tool-icon"><i data-lucide="brain"></i></span><span><small>A partir dos teus slides</small><strong>Criar com IA</strong><p>Gera apontamentos, quiz e flashcards editáveis localmente.</p><b>' + aiProjects.length + ' projetos</b></span><i data-lucide="arrow-right"></i></button></div>'
+      + '<button class="study-tool-card tool-ai" type="button" data-route="study" data-tab="ai"><span class="study-tool-icon"><i data-lucide="brain"></i></span><span><small>A partir dos teus páginas/slides</small><strong>Criar com IA</strong><p>Gera apontamentos, quiz e flashcards editáveis localmente.</p><b>' + aiProjects.length + ' projetos</b></span><i data-lucide="arrow-right"></i></button></div>'
       + '<section class="study-practice-list"><div class="section-heading"><div><h3>Quizzes disponíveis</h3><p>Começa diretamente sem passar por mais menus.</p></div><span class="badge badge-violet">' + quizzes.length + '</span></div><div class="list-stack">' + quizRows + '</div></section>';
   }
 
@@ -8339,7 +8615,7 @@
     } else if (type === "material") {
       title = "Carregar slides ou PDF";
       var materialCourse = preset.courseId || (activeCourses()[0] && activeCourses()[0].id) || "";
-      body = '<form id="entityForm" data-type="material"><div class="form-grid"><div class="field"><label>Cadeira</label><select name="courseId" required><option value="">Escolher…</option>' + courseOptions(materialCourse) + '</select></div><div class="field"><label>Aula associada</label><select name="lessonId"><option value="">Biblioteca geral</option>' + lessonOptions(null, preset.lessonId ? [preset.lessonId] : [], true) + '</select></div><div class="field field-full"><label>Título</label><input name="title" required placeholder="Ex.: Slides · Polimorfismo" value="' + attr(preset.title) + '"></div><div class="field"><label>Tipo</label><select name="kind"><option value="slides">Slides</option><option value="pdf">PDF / texto</option><option value="notes">Apontamentos</option><option value="worksheet">Ficha prática</option></select></div><div class="field"><label>Ano letivo</label><input name="academicYear" required placeholder="2024/25" value="' + attr(preset.academicYear || year) + '"><small>Se for o ano atual, a etiqueta fica oculta.</small></div><div class="field field-full"><label>Ficheiro no dispositivo</label><input name="file" type="file" accept="application/pdf,image/*,.pptx,.txt,.md"><small>O ficheiro é enviado para o repositório privado e fica também em cache neste dispositivo.</small></div><div class="field field-full"><label>Ou caminho / URL</label><input name="url" placeholder="assets/slides/aula-08.pdf ou https://…"><small>Ideal para PDFs colocados manualmente na pasta do projeto e referenciados no JSON.</small></div></div></form>';
+      body = '<form id="entityForm" data-type="material"><div class="form-grid"><div class="field"><label>Cadeira</label><select name="courseId" required><option value="">Escolher…</option>' + courseOptions(materialCourse) + '</select></div><div class="field"><label>Aula associada</label><select name="lessonId"><option value="">Biblioteca geral</option>' + lessonOptions(null, preset.lessonId ? [preset.lessonId] : [], true) + '</select></div><div class="field field-full"><label>Título</label><input name="title" required placeholder="Ex.: Slides · Polimorfismo" value="' + attr(preset.title) + '"></div><div class="field"><label>Tipo</label><select name="kind"><option value="slides">Slides</option><option value="pdf">PDF / texto</option><option value="notes">Apontamentos</option><option value="worksheet">Ficha prática</option></select></div><div class="field"><label>Ano letivo</label><input name="academicYear" required placeholder="2024/25" value="' + attr(preset.academicYear || year) + '"><small>Se for o ano atual, a etiqueta fica oculta.</small></div><div class="field field-full"><label>Ficheiro no dispositivo</label><input name="file" type="file" accept="application/pdf,image/*,.pptx,.txt,.md"><small>PDF e PowerPoint são guardados primeiro neste dispositivo; com Git configurado, a Twenty tenta sincronizar uma cópia.</small></div><div class="field field-full"><label>Ou caminho / URL</label><input name="url" placeholder="assets/slides/aula-08.pdf ou https://…"><small>Ideal para PDFs colocados manualmente na pasta do projeto e referenciados no JSON.</small></div></div></form>';
     } else if (type === "task") {
       title = "Nova tarefa";
       body = '<form id="entityForm" data-type="task"><div class="form-grid"><div class="field field-full"><label>Título</label><input name="title" required placeholder="Ex.: Rever aula 08"></div><div class="field"><label>Tipo</label><select name="taskType"><option value="homework">Trabalho de casa</option><option value="project">Projeto</option><option value="review" ' + (preset.type === "review" ? "selected" : "") + '>Rever aula</option><option value="reading">Leitura</option><option value="other">Outro</option></select></div><div class="field"><label>Cadeira</label><select name="courseId"><option value="">Pessoal / geral</option>' + courseOptions(preset.courseId || "") + '</select></div><div class="field"><label>Prazo</label><input name="dueDate" type="date" value="' + attr(preset.dueDate || todayISO()) + '"></div><div class="field"><label>Hora</label><input name="dueTime" type="time" value="' + attr(preset.dueTime || "18:00") + '"></div><div class="field"><label>Prioridade</label><select name="priority"><option value="normal">Normal</option><option value="high">Alta</option><option value="low">Baixa</option></select></div><div class="field"><label>Ligada à aula</label><select name="lessonId"><option value="">Nenhuma</option>' + lessonOptions(null, preset.lessonId ? [preset.lessonId] : [], true) + '</select></div></div></form>';
@@ -8792,7 +9068,7 @@
         var lessonFile = data.get("file");
         if (lessonFile && lessonFile.size) {
           var uploadedLessonFile = await uploadMaterialFile(lessonFile, { courseId: course.id, lessonId: lessonData.id });
-          state.materials.push({ id: uploadedLessonFile.id, semesterId: course.semesterId, courseId: course.id, lessonId: lessonData.id, title: "Slides · " + lessonData.title, academicYear: String(data.get("materialYear") || (semesterById(course.semesterId) || {}).academicYear || ""), kind: "slides", source: "remote", blobId: uploadedLessonFile.blobId, remoteFile: uploadedLessonFile.remoteFile, slides: uploadedLessonFile.slides, slideCount: uploadedLessonFile.slideCount, fileName: lessonFile.name, mimeType: lessonFile.type, uploadedAt: new Date().toISOString() });
+          state.materials.push({ id: uploadedLessonFile.id, semesterId: course.semesterId, courseId: course.id, lessonId: lessonData.id, title: "Slides · " + lessonData.title, academicYear: String(data.get("materialYear") || (semesterById(course.semesterId) || {}).academicYear || ""), kind: /\.pdf$/i.test(lessonFile.name || "") ? "pdf" : "slides", source: uploadedLessonFile.remoteFile ? "remote" : "local", blobId: uploadedLessonFile.blobId, remoteFile: uploadedLessonFile.remoteFile, slides: uploadedLessonFile.slides, slideCount: uploadedLessonFile.slideCount, extractionError: uploadedLessonFile.extractionError || "", fileName: lessonFile.name, mimeType: lessonFile.type, uploadStatus: uploadedLessonFile.remoteFile ? "ready" : "local", uploadedAt: new Date().toISOString() });
         }
       } else if (type === "material") {
         var linkedLesson = lessonById(data.get("lessonId"));
@@ -8806,9 +9082,9 @@
           id: uploadedMaterial ? uploadedMaterial.id : uid("material"), semesterId: materialCourse.semesterId, courseId: materialCourse.id,
           lessonId: linkedLesson ? linkedLesson.id : null, title: String(data.get("title") || "").trim(),
           academicYear: String(data.get("academicYear") || "").trim(), kind: data.get("kind") || "slides",
-          source: uploadedMaterial ? "remote" : "url", blobId: uploadedMaterial ? uploadedMaterial.blobId : null,
-          remoteFile: uploadedMaterial ? uploadedMaterial.remoteFile : null, slides: uploadedMaterial ? uploadedMaterial.slides : [], slideCount: uploadedMaterial ? uploadedMaterial.slideCount : 0,
-          url: uploadedMaterial ? "" : url, fileName: uploadedMaterial ? file.name : url.split("/").pop(), mimeType: uploadedMaterial ? file.type : "", uploadedAt: new Date().toISOString()
+          source: uploadedMaterial ? (uploadedMaterial.remoteFile ? "remote" : "local") : "url", blobId: uploadedMaterial ? uploadedMaterial.blobId : null,
+          remoteFile: uploadedMaterial ? uploadedMaterial.remoteFile : null, slides: uploadedMaterial ? uploadedMaterial.slides : [], slideCount: uploadedMaterial ? uploadedMaterial.slideCount : 0, extractionError: uploadedMaterial ? uploadedMaterial.extractionError || "" : "",
+          url: uploadedMaterial ? "" : url, fileName: uploadedMaterial ? file.name : url.split("/").pop(), mimeType: uploadedMaterial ? file.type : "", uploadStatus: uploadedMaterial ? (uploadedMaterial.remoteFile ? "ready" : "local") : "ready", uploadedAt: new Date().toISOString()
         });
       } else if (type === "task") {
         var taskLessonId = data.get("lessonId") || null;
@@ -9323,7 +9599,7 @@
     if (!src) { toast("Este material ainda não tem uma cópia sincronizada disponível.", "error"); return; }
     var isOffice = /powerpoint|presentation/i.test(mime) || /\.pptx?(?:$|\?)/i.test(material.fileName || src);
     var body = isOffice
-      ? '<div class="empty-state"><span class="empty-icon"><i data-lucide="presentation"></i></span><h3>PowerPoint pronto</h3><p>O navegador não o pré-visualiza diretamente. Abre ou guarda o ficheiro original.</p><a class="button button-dark" href="' + attr(src) + '" target="_blank" rel="noopener" download="' + attr(material.fileName || "apresentacao.pptx") + '"><i data-lucide="download"></i>Abrir ficheiro</a></div>'
+      ? '<div class="empty-state"><span class="empty-icon"><i data-lucide="presentation"></i></span><h3>Material pronto</h3><p>O navegador não o pré-visualiza diretamente. Abre ou guarda o ficheiro original.</p><a class="button button-dark" href="' + attr(src) + '" target="_blank" rel="noopener" download="' + attr(material.fileName || "apresentacao.pptx") + '"><i data-lucide="download"></i>Abrir ficheiro</a></div>'
       : '<iframe class="pdf-frame" src="' + attr(src) + '#view=FitH" title="' + attr(material.title) + '"></iframe><div class="list-actions" style="margin-top:12px"><a class="button button-small" href="' + attr(src) + '" target="_blank" rel="noopener"><i data-lucide="external-link"></i>Abrir noutra janela</a></div>';
     openModal(material.title, body, { className: "modal-pdf" });
     if (newObjectUrl) activeObjectUrl = newObjectUrl;
@@ -9761,6 +10037,17 @@
     if (ENTITY_ARRAYS.indexOf(kind) < 0) return;
     var item = state[kind].find(function (entry) { return entry.id === id; });
     if (!item) return;
+    if (kind === "quizzes") {
+      var linkedLesson = lessonById(item.lessonId);
+      if (linkedLesson && lessonQuizCompleted(item, linkedLesson)) {
+        toast("Este Quiz-Aula já foi concluído e fica apenas em visualização.", "warning");
+        return;
+      }
+    }
+    if (kind === "tasks" && (item.type === "homework" || item.type === "tpc") && lessonHomeworkCompleted(item)) {
+      toast("Este TPC já foi concluído ou entregue e fica apenas em visualização.", "warning");
+      return;
+    }
     if (kind === "schedule" && state.lessons.some(function (lesson) { return lesson.scheduleId === item.id || (!lesson.scheduleId && lessonMatchesSchedule(lesson, item)); })) {
       toast("Este bloco já tem aulas preparadas. Edita essas aulas antes de o removeres.", "warning");
       return;
@@ -10104,15 +10391,68 @@
     } else if (action === "configure-lesson-content") {
       if (modalRoot.querySelector("#notebookForm")) await saveNotebook({ close: false, render: false, silent: true });
       openLessonBuilder(button.dataset.lesson || route.id, button.dataset.kind || "quiz");
+    } else if (action === "builder-select-pages") {
+      var sourceForm = modalRoot.querySelector("#lessonBuilderForm");
+      if (sourceForm) {
+        sourceForm.querySelectorAll('[name="sourceSlides"][data-material="' + CSS.escape(button.dataset.material || "") + '"]').forEach(function (input) { input.checked = button.dataset.mode !== "none"; });
+        lessonBuilderSelectionCount(sourceForm);
+      }
     } else if (action === "copy-lesson-builder-prompt") {
-      var promptArea = modalRoot.querySelector("#lessonBuilderPrompt");
-      if (promptArea) { await copyText(promptArea.value); toast("Prompt copiado."); }
+      var builderForm = modalRoot.querySelector("#lessonBuilderForm");
+      if (!builderForm || builderForm.dataset.step !== "sources") return;
+      var builderLesson = lessonById(builderForm.dataset.lesson);
+      var sourceKeys = lessonBuilderSelectedKeys(builderForm);
+      if (!builderLesson || !sourceKeys.length) { toast("Seleciona pelo menos uma página ou slide.", "warning"); return; }
+      var includePast = !!(builderForm.elements.includePast && builderForm.elements.includePast.checked);
+      var builderKind = builderForm.dataset.kind || "notes";
+      var hiddenPrompt = buildLessonAIPrompt(builderLesson, builderKind, sourceKeys, includePast);
+      lessonBuilderDraft = { lessonId: builderLesson.id, kind: builderKind, sourceKeys: sourceKeys, includePast: includePast, prompt: hiddenPrompt };
+      await copyText(hiddenPrompt);
+      toast("Prompt copiado. Agora cola a resposta da IA.");
+      openLessonBuilderPasteStep();
+    } else if (action === "lesson-builder-back") {
+      var previousDraft = lessonBuilderDraft && Object.assign({}, lessonBuilderDraft);
+      if (!previousDraft) return;
+      openLessonBuilder(previousDraft.lessonId, previousDraft.kind);
+      var backForm = modalRoot.querySelector("#lessonBuilderForm");
+      if (backForm) {
+        backForm.querySelectorAll('[name="sourceSlides"]').forEach(function (input) { input.checked = previousDraft.sourceKeys.indexOf(input.value) >= 0; });
+        if (backForm.elements.includePast) backForm.elements.includePast.checked = previousDraft.includePast;
+        lessonBuilderDraft = previousDraft;
+        lessonBuilderSelectionCount(backForm);
+      }
     } else if (action === "import-lesson-builder") {
       await importLessonBuilder();
     } else if (action === "view-lesson-quiz") {
       viewLessonQuiz(button.dataset.lesson || route.id);
+    } else if (action === "edit-lesson-quiz") {
+      openLessonQuizEditor(button.dataset.lesson || route.id);
+    } else if (action === "save-lesson-quiz") {
+      await saveLessonQuizEditor();
+    } else if (action === "lesson-quiz-add-question") {
+      var quizList = modalRoot.querySelector("#lessonQuizEditor .quiz-edit-list");
+      if (quizList) {
+        quizList.insertAdjacentHTML("beforeend", lessonQuizQuestionEditorCard({}, quizList.querySelectorAll(".quiz-edit-question").length));
+        updateQuizEditorQuestionTypes(quizList.lastElementChild);
+        refreshIcons(quizList.lastElementChild);
+      }
+    } else if (action === "lesson-quiz-remove-question") {
+      var questionCard = button.closest(".quiz-edit-question");
+      var questionList = questionCard && questionCard.parentElement;
+      if (questionCard && questionList && questionList.querySelectorAll(".quiz-edit-question").length > 1) {
+        questionCard.remove();
+        questionList.querySelectorAll(".quiz-edit-question").forEach(function (card, index) {
+          card.dataset.questionIndex = index;
+          var label = card.querySelector("header b");
+          if (label) label.textContent = "Pergunta " + (index + 1);
+        });
+      } else toast("O quiz precisa de pelo menos uma pergunta.", "warning");
     } else if (action === "view-lesson-homework") {
       viewLessonHomework(button.dataset.id);
+    } else if (action === "edit-lesson-homework") {
+      openLessonHomeworkEditor(button.dataset.id);
+    } else if (action === "save-lesson-homework") {
+      await saveLessonHomeworkEditor();
     } else if (action === "open-notebook-editor") {
       openNotebookEditor(button.dataset.lesson || route.id);
     } else if (action === "save-notebook") {
@@ -10847,7 +11187,7 @@
       }, 60000);
       if (!state.profile.onboardingComplete || !state.currentSemesterId || !activeCourses().length) startOnboarding(state.semesters.length ? "new-semester" : "first");
       if ("serviceWorker" in navigator && location.protocol !== "file:") {
-        navigator.serviceWorker.register("sw.js?v=33.3-interface-architecture", { updateViaCache: "none" }).then(function () {
+        navigator.serviceWorker.register("sw.js?v=33.4-source-selection", { updateViaCache: "none" }).then(function () {
           if (Sync && Sync.getStatus().configured) Sync.startAutoSync();
         }).catch(function () {
           if (Sync && Sync.getStatus().configured) Sync.startAutoSync();
@@ -10940,6 +11280,16 @@
     }
     if (event.target.closest && event.target.closest("#personalSettingsForm")) {
       markPersonalSettingsDirty(event.target.closest("#personalSettingsForm"));
+      return;
+    }
+    if (event.target.matches('[name="sourceSlides"], #lessonBuilderForm [name="includePast"]')) {
+      var sourceSelectionForm = event.target.closest("#lessonBuilderForm");
+      if (sourceSelectionForm) lessonBuilderSelectionCount(sourceSelectionForm);
+      return;
+    }
+    if (event.target.matches("[data-quiz-edit-type]")) {
+      var editorCard = event.target.closest(".quiz-edit-question");
+      if (editorCard) updateQuizEditorQuestionTypes(editorCard);
       return;
     }
     if (event.target === pptxInput) {
